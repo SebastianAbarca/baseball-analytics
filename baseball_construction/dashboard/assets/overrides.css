@@ -1,0 +1,57 @@
+/* ── Dash dcc.Dropdown — dark theme ────────────────────────────────────── */
+
+/* Control box */
+.Select-control {
+    background-color: #1f2937 !important;
+    border-color: #374151 !important;
+}
+
+/* Selected value text */
+.Select-value-label,
+.Select--single > .Select-control .Select-value,
+.Select--single > .Select-control .Select-value .Select-value-label {
+    color: #f9fafb !important;
+}
+
+/* Placeholder text */
+.Select-placeholder {
+    color: #6b7280 !important;
+}
+
+/* Text input inside dropdown */
+.Select-input > input {
+    color: #f9fafb !important;
+}
+
+/* Arrow */
+.Select-arrow {
+    border-top-color: #9ca3af !important;
+}
+
+/* Dropdown menu panel */
+.Select-menu-outer {
+    background-color: #1f2937 !important;
+    border-color: #374151 !important;
+    z-index: 9999 !important;
+}
+
+/* Options */
+.Select-option {
+    background-color: #1f2937 !important;
+    color: #f9fafb !important;
+}
+
+.Select-option.is-focused {
+    background-color: #374151 !important;
+    color: #ffffff !important;
+}
+
+.Select-option.is-selected {
+    background-color: #1a56db !important;
+    color: #ffffff !important;
+}
+
+/* Prevent Bootstrap overriding text color inside the control */
+.Select .Select-control * {
+    color: #f9fafb !important;
+}

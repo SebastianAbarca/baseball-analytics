@@ -1,0 +1,16 @@
+# Credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data files (large, re-pullable)
+baseball_construction/data/raw/*.parquet
+baseball_construction/data/processed/*.csv
+baseball_construction/data/reference/*.csv
+
+# OS
+.DS_Store
