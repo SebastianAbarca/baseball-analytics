@@ -1,0 +1,43 @@
+name: Seed Database
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # every Monday 8am UTC
+  workflow_dispatch:        # manual trigger from GitHub UI
+    inputs:
+      seasons:
+        description: 'Space-separated seasons to seed (e.g. "2025 2026")'
+        required: false
+        default: '2026'
+      force:
+        description: 'Force re-seed even if data exists'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pybaseball supabase python-dotenv pandas numpy
+
+      - name: Run seed
+        run: |
+          SEASONS="${{ github.event.inputs.seasons || '2026' }}"
+          FORCE="${{ github.event.inputs.force || 'false' }}"
+          FORCE_FLAG=""
+          if [ "$FORCE" = "true" ]; then FORCE_FLAG="--force"; fi
+          python3 baseball_construction/seed.py --season $SEASONS $FORCE_FLAG
