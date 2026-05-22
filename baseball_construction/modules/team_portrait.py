@@ -54,6 +54,7 @@ from ingest import (
     normalize_percentile,
     PROCESSED_DIR,
 )
+from database import query_batting, query_pitching, season_batting_seeded
 from spin_efficiency import build_pitcher_spin_profile
 from tunneling import build_tunnel_profile
 from park_effects import build_park_profile
@@ -152,19 +153,33 @@ BATTING_COL_MAP: dict[str, str] = {
     "brl_percent":      "Barrel_pct",
     "xba":              "xBA",
     "xslg":             "xSLG",
-    "xiso":             "ISO",       # Savant-only fallback (dropped when BRef available)
-    "xobp":             "OBP",       # Savant-only fallback
-    "ba":               "AVG",       # Savant-only fallback
+    "xiso":             "ISO",
+    "xobp":             "OBP",
+    "ba":               "AVG",
     "pa":               "PA",
     "exit_velocity":    "EV_avg",
-    # BRef-computed raw rates (renamed to _rate to avoid _pct suffix collision)
-    "K_rate":           "K_pct",   # BRef SO/PA → maps to internal K_pct for normalization
-    "BB_rate":          "BB_pct",  # BRef BB/PA → maps to internal BB_pct
-    # BRef direct columns (identity maps for normalization loop)
+    # BRef-computed raw rates
+    "K_rate":           "K_pct",
+    "BB_rate":          "BB_pct",
+    # BRef direct columns (identity maps)
     "ISO":              "ISO",
     "OBP":              "OBP",
     "AVG":              "AVG",
     "PA":               "PA",
+    "SB":               "SB",
+    "CS":               "CS",
+    # Supabase DB column names (lowercase snake_case)
+    "k_rate":           "K_pct",
+    "bb_rate":          "BB_pct",
+    "hard_hit_pct":     "HardHit_pct",
+    "barrel_pct":       "Barrel_pct",
+    "whiff_pct":        "SwStr_pct",
+    "chase_pct":        "OSwing_pct",
+    "avg":              "AVG",
+    "obp":              "OBP",
+    "iso":              "ISO",
+    "sb":               "SB",
+    "cs":               "CS",
 }
 
 PITCHING_COL_MAP: dict[str, str] = {
@@ -177,11 +192,21 @@ PITCHING_COL_MAP: dict[str, str] = {
     "whiff_percent":    "SwStr_pct_pitch",
     "brl_percent":      "Barrel_allowed",
     "fb_velocity":      "avg_velo",
-    # BRef-computed raw rates (renamed to _rate to avoid naming collision)
-    "K_rate_pitch":     "K_pct_pitch",   # BRef SO/BF
-    "BB_rate_pitch":    "BB_pct_pitch",  # BRef BB/BF
+    # BRef-computed raw rates
+    "K_rate_pitch":     "K_pct_pitch",
+    "BB_rate_pitch":    "BB_pct_pitch",
     # BRef direct columns
     "BF":               "BF",
+    # Supabase DB column names (lowercase snake_case)
+    "k_rate":           "K_pct_pitch",
+    "bb_rate":          "BB_pct_pitch",
+    "hard_hit_pct":     "HardHit_allowed",
+    "barrel_pct":       "Barrel_allowed",
+    "whiff_pct":        "SwStr_pct_pitch",
+    "xwoba_allowed":    "xwOBA_allowed",
+    "fb_velocity":      "avg_velo",
+    "gs":               "GS",
+    "bf":               "BF",
 }
 
 # Internal normalized key → pitcher_archetypes.py expected key
@@ -782,11 +807,19 @@ def build_team_portrait(
     hitter_ids, pitcher_ids = _extract_team_players(statcast, team)
 
     # ── 3. Load and normalize player aggregates ───────────────────────────
-    batting_full  = pull_fg_batting(season)
-    pitching_full = pull_fg_pitching(season)
+    # Fast path: read from Supabase (pre-seeded full 30-team pool)
+    # Fallback: pull from BRef/Savant API if season not seeded
+    if season_batting_seeded(season):
+        log.info("Loading season %d from Supabase", season)
+        batting_full  = query_batting(season)
+        pitching_full = query_pitching(season)
+    else:
+        log.info("Season %d not in Supabase — pulling from BRef/Savant", season)
+        batting_full  = pull_fg_batting(season)
+        pitching_full = pull_fg_pitching(season)
 
-    # Savant uses player_id column; rename to key_mlbam
-    for df_name, df_obj in [("batting", batting_full), ("pitching", pitching_full)]:
+    # Ensure key_mlbam column exists (Savant fallback uses player_id)
+    for df_obj in [batting_full, pitching_full]:
         if "key_mlbam" not in df_obj.columns and "player_id" in df_obj.columns:
             df_obj.rename(columns={"player_id": "key_mlbam"}, inplace=True)
 
