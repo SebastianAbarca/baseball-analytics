@@ -51,13 +51,23 @@ def get_client() -> Client:
 # Upsert helpers
 # ---------------------------------------------------------------------------
 
+def _clean(record: dict) -> dict:
+    """Replace NaN/inf with None so records are JSON-serializable."""
+    import math
+    return {
+        k: (None if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
+        for k, v in record.items()
+    }
+
+
 def _upsert(table: str, records: list[dict]) -> None:
     if not records:
         return
     client = get_client()
+    clean_records = [_clean(r) for r in records]
     # Batch in chunks of 500 to stay within Supabase request limits
-    for i in range(0, len(records), 500):
-        chunk = records[i : i + 500]
+    for i in range(0, len(clean_records), 500):
+        chunk = clean_records[i : i + 500]
         client.table(table).upsert(chunk).execute()
     log.info("Upserted %d rows into %s", len(records), table)
 
