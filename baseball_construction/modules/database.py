@@ -79,6 +79,8 @@ def upsert_batting(df: pd.DataFrame) -> None:
         "xwoba", "xba", "hard_hit_pct", "barrel_pct",
         "whiff_pct", "chase_pct", "sprint_speed", "exit_velocity",
         "join_source",
+        "gb_pct", "fps_pct", "pitches_per_pa", "war",
+        "zone_swing_pct", "contact_pct",
     ]
     present = [c for c in cols if c in df.columns]
     records = df[present].where(df[present].notna(), other=None).to_dict("records")
@@ -91,6 +93,8 @@ def upsert_pitching(df: pd.DataFrame) -> None:
         "gs", "bf", "k_rate", "bb_rate",
         "xwoba_allowed", "hard_hit_pct", "barrel_pct",
         "whiff_pct", "fb_velocity", "join_source",
+        "gb_pct", "zone_pct", "csw_pct", "pitches_per_bf", "war", "fip",
+        "avg_spin_rate", "arsenal_diversity",
     ]
     present = [c for c in cols if c in df.columns]
     records = df[present].where(df[present].notna(), other=None).to_dict("records")

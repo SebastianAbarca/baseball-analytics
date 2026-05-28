@@ -137,22 +137,12 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
     # ── DIMENSION C — ROSTER CONSTRUCTION ───────────────────────────────
 
     "C1": {
-        "name":      "Star and Support",
+        "name":      "bWAR Distribution",
         "dimension": "roster",
         "weights": {
-            "WAR_concentration_pct":    0.40,
-            "Payroll_concentration_pct":0.35,
-            "ReplacementExposure_pct":  0.25,
-        },
-    },
-
-    "C2": {
-        "name":      "Roster Balance",
-        "dimension": "roster",
-        "weights": {
-            "WAR_variance_inv_pct": 0.35,   # low variance (caller inverts)
-            "RosterFloor_pct":      0.35,   # % players WAR > 0.5
-            "PayrollGini_inv_pct":  0.30,   # low Gini (caller inverts)
+            "WAR_concentration_pct": 0.35,   # top-3 share of total bWAR
+            "WAR_variance_inv_pct":  0.35,   # spread of bWAR across roster (inverted)
+            "RosterFloor_pct":       0.30,   # fraction of players with positive bWAR
         },
     },
 
@@ -183,7 +173,7 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
 DIMENSIONS: dict[str, list[str]] = {
     "offense": ["A1", "A2", "A3", "A4"],
     "pitching": ["B1", "B2", "B3", "B4"],
-    "roster":   ["C1", "C2", "C3", "C4"],
+    "roster":   ["C1", "C3", "C4"],
 }
 
 

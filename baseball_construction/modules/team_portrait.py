@@ -48,6 +48,7 @@ from ingest import (
     pull_statcast_season,
     pull_fg_batting,
     pull_fg_pitching,
+    pull_bwar,
     load_chadwick,
     compute_reliability,
     apply_reliability_weight,
@@ -177,9 +178,17 @@ BATTING_COL_MAP: dict[str, str] = {
     "chase_pct":        "OSwing_pct",
     "avg":              "AVG",
     "obp":              "OBP",
+    "slg":              "SLG",
     "iso":              "ISO",
     "sb":               "SB",
     "cs":               "CS",
+    # New statcast-derived columns
+    "gb_pct":           "BatGB_pct",
+    "fps_pct":          "FPS_pct",
+    "pitches_per_pa":   "PitchesPerPA",
+    "war":              "WAR_bat",
+    "zone_swing_pct":   "ZSwing_pct",
+    "contact_pct":      "Contact_pct",
 }
 
 PITCHING_COL_MAP: dict[str, str] = {
@@ -207,6 +216,15 @@ PITCHING_COL_MAP: dict[str, str] = {
     "fb_velocity":      "avg_velo",
     "gs":               "GS",
     "bf":               "BF",
+    # New statcast-derived + BRef columns
+    "gb_pct":           "GB_pct_pitch",
+    "zone_pct":         "Zone_pct",
+    "csw_pct":          "CSW_pct",
+    "pitches_per_bf":   "PitchesPerBF",
+    "war":              "WAR_pitch",
+    "fip":              "FIP",
+    "avg_spin_rate":    "AvgSpinRate",
+    "arsenal_diversity":"ArsenalDiversity",
 }
 
 # Internal normalized key → pitcher_archetypes.py expected key
@@ -254,6 +272,107 @@ def _extract_team_players(
         team, len(hitter_ids), len(pitcher_ids),
     )
     return hitter_ids, pitcher_ids
+
+
+# ---------------------------------------------------------------------------
+# Step 1b — All-team hitter mapping + cross-team spread metrics
+# ---------------------------------------------------------------------------
+
+def _all_team_hitter_ids(statcast: pd.DataFrame) -> dict[str, set[int]]:
+    """Return {team_abbr: set_of_batter_mlbam_ids} for every team in the dataset."""
+    all_teams = (
+        set(statcast["home_team"].dropna().unique())
+        | set(statcast["away_team"].dropna().unique())
+    )
+    result: dict[str, set[int]] = {}
+    for team in all_teams:
+        bat_home = statcast[(statcast["inning_topbot"] == "Bot") & (statcast["home_team"] == team)]
+        bat_away = statcast[(statcast["inning_topbot"] == "Top") & (statcast["away_team"] == team)]
+        ids = set(
+            pd.concat([bat_home, bat_away])["batter"].dropna().astype(int).unique()
+        )
+        result[team] = ids
+    return result
+
+
+def _compute_cross_team_metrics(
+    statcast: pd.DataFrame,
+    batting_full: pd.DataFrame,
+    target_team: str,
+) -> dict[str, float]:
+    """
+    Compute spread/concentration metrics for all 30 teams then return the
+    target team's percentile rank in each metric.
+
+    Metrics produced:
+      ISO_spread_pct, PA_concentration_pct, WAR_concentration_pct,
+      WAR_variance_inv_pct, RosterFloor_pct, AvgAge_inv_pct
+    """
+    all_team_ids = _all_team_hitter_ids(statcast)
+    rows = []
+    for team, ids in all_team_ids.items():
+        tb = batting_full[batting_full["key_mlbam"].isin(ids)].rename(columns=BATTING_COL_MAP)
+
+        iso   = pd.to_numeric(tb.get("ISO",     pd.Series(dtype=float)), errors="coerce")
+        xwoba = pd.to_numeric(tb.get("xwOBA",   pd.Series(dtype=float)), errors="coerce")
+        pa    = pd.to_numeric(tb.get("PA",      pd.Series(dtype=float)), errors="coerce").fillna(1)
+        war   = pd.to_numeric(tb.get("WAR_bat", pd.Series(dtype=float)), errors="coerce")
+        age   = pd.to_numeric(tb.get("age",     pd.Series(dtype=float)), errors="coerce")
+        total_pa = float(pa.sum())
+
+        # WAR concentration: top-3 WAR share; fall back to ISO×PA proxy when WAR unavailable
+        if war.notna().sum() >= 3:
+            war_clipped = war.fillna(0).clip(lower=0)
+            total_war = float(war_clipped.sum())
+            war_concentration = float(war_clipped.nlargest(3).sum() / total_war) if total_war > 0 else np.nan
+            roster_floor = float((war > 0).mean()) if war.notna().sum() > 0 else np.nan
+            war_weighted_age = float((age * war_clipped).sum() / total_war) if total_war > 0 and age.notna().any() else np.nan
+        else:
+            prod = (iso.fillna(0) * pa).clip(lower=0)
+            total_prod = float(prod.sum())
+            war_concentration = float(prod.nlargest(3).sum() / total_prod) if total_prod > 0 else np.nan
+            roster_floor = float((iso.fillna(0) > 0.050).mean()) if iso.notna().sum() > 0 else np.nan
+            war_weighted_age = float((age * pa).sum() / total_pa) if total_pa > 0 and age.notna().any() else np.nan
+
+        # HR/FB from Statcast pitch data for this team's batters
+        team_sc  = statcast[statcast["batter"].isin(ids)]
+        hr_count = int((team_sc["events"] == "home_run").sum())
+        fb_count = int((team_sc["bb_type"] == "fly_ball").sum())
+
+        war_variance = float(war.std()) if war.notna().sum() > 1 else np.nan
+
+        rows.append({
+            "team":             team,
+            "iso_spread":       float(iso.std())                            if iso.notna().sum() > 1   else np.nan,
+            "xwoba_spread":     float(xwoba.std())                         if xwoba.notna().sum() > 1 else np.nan,
+            "pa_concentration": float(pa.nlargest(2).sum() / total_pa)     if total_pa > 0            else np.nan,
+            "war_concentration":war_concentration,
+            "war_variance":     war_variance,
+            "roster_floor":     roster_floor,
+            "avg_age":          war_weighted_age,
+            "hr_fb":            float(hr_count / fb_count)                 if fb_count > 0            else np.nan,
+        })
+
+    cross = pd.DataFrame(rows).set_index("team")
+    out: dict[str, float] = {}
+    for col, key, invert in [
+        ("iso_spread",        "ISO_spread_pct",        False),
+        ("xwoba_spread",      "wRCplus_spread_pct",    False),
+        ("pa_concentration",  "PA_concentration_pct",  False),
+        ("war_concentration", "WAR_concentration_pct", False),
+        ("war_variance",      "WAR_variance_inv_pct",  True),   # C2: lower variance = more even depth
+        ("roster_floor",      "RosterFloor_pct",       False),
+        ("avg_age",           "AvgAge_inv_pct",        True),   # C3: younger = better
+        ("avg_age",           "AvgAge_pct",            False),  # C4: older = more experienced
+        ("hr_fb",             "HR_FB_pct",             False),
+    ]:
+        series = cross[col] if col in cross.columns else pd.Series(dtype=float)
+        if series.notna().sum() > 1 and target_team in series.index:
+            pcts = normalize_percentile(series, invert=invert)
+            out[key] = float(pcts.loc[target_team])
+
+    log.info("Cross-team metrics — %d populated for %s", len(out), target_team)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +435,13 @@ def _normalize_batting(batting_full: pd.DataFrame, team_bat: pd.DataFrame) -> pd
     full = batting_full.rename(columns=BATTING_COL_MAP)
     team = team_bat.rename(columns=BATTING_COL_MAP)
 
+    # Derive OBP–SLG gap per player (patience/contact signal vs. raw power)
+    if "OBP" in full.columns and "SLG" in full.columns:
+        full["OBP_SLG_gap"] = (
+            pd.to_numeric(full["OBP"], errors="coerce")
+            - pd.to_numeric(full["SLG"], errors="coerce")
+        )
+
     metric_invert: dict[str, bool] = {
         "K_pct":  True,   # lower K = better contact → invert
     }
@@ -329,6 +455,17 @@ def _normalize_batting(batting_full: pd.DataFrame, team_bat: pd.DataFrame) -> pd
         col_name = f"{metric}_pct"
         full[col_name] = pct_series
         pct_cols[metric] = col_name
+
+    # OBP–SLG gap percentile (derived, not in BATTING_COL_MAP)
+    if "OBP_SLG_gap" in full.columns:
+        full["OBP_SLG_gap_pct"] = normalize_percentile(full["OBP_SLG_gap"])
+        pct_cols["OBP_SLG_gap"] = "OBP_SLG_gap_pct"
+
+    # K_pct_raw_pct: non-inverted K% percentile for TTO classifier
+    # (K_pct_pct is inverted for display; TTO needs raw strikeout rate)
+    if "K_pct" in full.columns:
+        full["K_pct_raw_pct"] = normalize_percentile(full["K_pct"], invert=False)
+        pct_cols["K_pct_raw"] = "K_pct_raw_pct"
 
     # Attach pct columns to the team subset (by key_mlbam)
     pct_col_list = list(pct_cols.values())
@@ -359,6 +496,7 @@ def _normalize_pitching(pitching_full: pd.DataFrame, team_pit: pd.DataFrame) -> 
         "HardHit_allowed": True,
         "xwOBA_allowed":   True,
         "Barrel_allowed":  True,
+        "FIP":             True,   # lower FIP = better
     }
 
     pct_cols: dict[str, str] = {}
@@ -519,6 +657,8 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
         profile["name"] = info.get("name")
         profile["age"]  = info.get("age")
         profile["pa"]   = int(row.get("PA") or row.get("pa") or 0)
+        war_raw = row.get("WAR_bat")
+        profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
         profiles.append(profile)
 
     return profiles
@@ -607,6 +747,8 @@ def _classify_pitchers(
             profile["name"] = info.get("name")
             profile["age"]  = info.get("age")
             profile["bf"]   = bf
+            war_raw = row.get("WAR_pitch")
+            profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
             starters.append(profile)
         else:
             bullpen_metrics_acc.append(metrics)
@@ -650,6 +792,11 @@ def _build_philosophy_metrics(
     park: Optional[dict],
     spin_team: Optional[dict],
     tunneling_team: Optional[dict],
+    cross_team_metrics: Optional[dict] = None,
+    oaa_val: Optional[float] = None,
+    opener_val: Optional[float] = None,
+    platoon_val: Optional[float] = None,
+    turnover_val: Optional[float] = None,
 ) -> dict[str, float]:
     """
     Merge aggregated team metrics into the flat dict expected by philosophy.py.
@@ -695,6 +842,12 @@ def _build_philosophy_metrics(
         if raw in metrics and phil not in metrics:
             metrics[phil] = metrics[raw]
 
+    # Pitcher GB% — used in B2 (GB_pct_pct) and B4 (GB_pitch_pct)
+    pitcher_gb = metrics.get("GB_pct_pitch_pct")
+    if pitcher_gb is not None:
+        metrics.setdefault("GB_pct_pct",  pitcher_gb)
+        metrics.setdefault("GB_pitch_pct", pitcher_gb)
+
     # Inverted pitching keys
     metrics["BB_pitch_inv_pct"] = _inv("BB_pct_pitch_pct")
 
@@ -706,9 +859,31 @@ def _build_philosophy_metrics(
     if spin_team and "weighted_spin_efficiency_pct" in spin_team:
         metrics["SpinEfficiency_pct"] = spin_team["weighted_spin_efficiency_pct"]
 
-    # ── CSW (called strike + whiff) — approximate from SwStr if CSW absent ─
+    # ── CSW% — prefer Statcast-derived; fall back to SwStr approximation ──
     if "CSW_pct_pct" not in metrics and "SwStr_pct_pct" in metrics:
         metrics["CSW_pct_pct"] = metrics["SwStr_pct_pct"]
+
+    # ── Cross-team spread/concentration metrics ───────────────────────────
+    if cross_team_metrics:
+        for k, v in cross_team_metrics.items():
+            metrics.setdefault(k, v)
+
+    # ── OAA — primary source for B4 OAA, B2 TeamDefense, and B4 DRS ─────
+    if oaa_val is not None:
+        metrics["OAA_pct"]         = oaa_val
+        metrics.setdefault("TeamDefense_pct", oaa_val)  # B2 proxy
+        metrics.setdefault("DRS_pct",         oaa_val)  # B4 proxy (OAA superior)
+
+    if opener_val is not None:
+        metrics["OpenerUsage_pct"] = opener_val
+
+    if platoon_val is not None:
+        metrics["PlatoonOptimization_pct"] = platoon_val
+
+    if turnover_val is not None:
+        metrics["Turnover_pct"] = turnover_val
+        # CoreRetention is the inverse of Turnover (100 - turnover percentile)
+        metrics.setdefault("CoreRetention_pct", 100.0 - turnover_val)
 
     # Remove None values; keep only floats
     clean: dict[str, float] = {
@@ -744,6 +919,44 @@ def _team_temporal(
 
     mode = determine_mode(team_pa, games_played)
     return {"mode": mode, "pa": team_pa, "games": games_played}
+
+
+# ---------------------------------------------------------------------------
+# Step 8b — Roster turnover (season-over-season player set delta)
+# ---------------------------------------------------------------------------
+
+def _compute_turnover(statcast: pd.DataFrame, season: int) -> dict[str, float]:
+    """
+    For each team, fraction of current-season hitters who were NOT on the
+    team the prior season.  Requires prior-season Statcast parquet in cache.
+
+    Returns {team: turnover_rate} for all teams where prior-season data exists.
+    """
+    from ingest import PROCESSED_DIR
+    raw_dir = PROCESSED_DIR.parent / "raw"
+    prev_parquet = raw_dir / f"statcast_{season - 1}.parquet"
+    if not prev_parquet.exists():
+        log.info("No prior-season Statcast cache for %d — skipping turnover", season - 1)
+        return {}
+
+    # Load only the columns we need (fast — subset of 139 cols)
+    prev_sc = pd.read_parquet(
+        str(prev_parquet),
+        columns=["batter", "home_team", "away_team", "inning_topbot"],
+    )
+
+    cur_team_ids  = _all_team_hitter_ids(statcast)
+    prev_team_ids = _all_team_hitter_ids(prev_sc)
+
+    rates: dict[str, float] = {}
+    for team, cur_ids in cur_team_ids.items():
+        prev_ids = prev_team_ids.get(team, set())
+        if cur_ids:
+            new_players = cur_ids - prev_ids
+            rates[team] = len(new_players) / len(cur_ids)
+
+    log.info("Turnover computed — %d teams (season %d vs %d)", len(rates), season, season - 1)
+    return rates
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +1039,24 @@ def build_team_portrait(
     batting_full["key_mlbam"]  = pd.to_numeric(batting_full.get("key_mlbam"),  errors="coerce")
     pitching_full["key_mlbam"] = pd.to_numeric(pitching_full.get("key_mlbam"), errors="coerce")
 
+    # Merge bWAR into batting_full / pitching_full — overrides the empty DB war column
+    try:
+        bwar_bat, bwar_pitch = pull_bwar(season)
+        if not bwar_bat.empty:
+            bwar_bat["key_mlbam"] = pd.to_numeric(bwar_bat["key_mlbam"], errors="coerce")
+            batting_full = batting_full.drop(columns=["war"], errors="ignore").merge(
+                bwar_bat.rename(columns={"war": "war"}), on="key_mlbam", how="left"
+            )
+            log.info("bWAR merged into batting_full — %d players have WAR", batting_full["war"].notna().sum())
+        if not bwar_pitch.empty:
+            bwar_pitch["key_mlbam"] = pd.to_numeric(bwar_pitch["key_mlbam"], errors="coerce")
+            pitching_full = pitching_full.drop(columns=["war"], errors="ignore").merge(
+                bwar_pitch.rename(columns={"war": "war"}), on="key_mlbam", how="left"
+            )
+            log.info("bWAR merged into pitching_full — %d pitchers have WAR", pitching_full["war"].notna().sum())
+    except Exception as exc:
+        log.warning("bWAR merge failed: %s", exc)
+
     team_bat_raw = batting_full[batting_full["key_mlbam"].isin(hitter_ids)].copy()
     team_pit_raw = pitching_full[pitching_full["key_mlbam"].isin(pitcher_ids)].copy()
 
@@ -872,17 +1103,93 @@ def build_team_portrait(
     # ── 9. Spin efficiency team summary ──────────────────────────────────
     spin_team_summary: Optional[dict] = None
     if spin_pitcher_level is not None and not spin_pitcher_level.empty:
-        se_col = "weighted_spin_efficiency"
+        se_col = "spin_efficiency_weighted"
         if se_col in spin_pitcher_level.columns:
             valid = spin_pitcher_level[se_col].dropna()
             if len(valid) > 0:
+                team_mean_se = float(valid.mean())
+
+                # Compute league-wide team spin efficiency to get a proper percentile.
+                # For each pitching team in Statcast, compute mean spin_rate as a proxy
+                # (full spin-efficiency model is too slow for all 30 teams; raw spin_rate
+                # correlates tightly and is available directly in the Statcast parquet).
+                se_rows = []
+                sc_spin = statcast[["pitcher", "release_spin_rate",
+                                    "inning_topbot", "home_team", "away_team"]].copy()
+                sc_spin["pitching_team"] = np.where(
+                    sc_spin["inning_topbot"] == "Top",
+                    sc_spin["home_team"], sc_spin["away_team"],
+                )
+                sc_spin["_spin"] = pd.to_numeric(sc_spin["release_spin_rate"], errors="coerce")
+                league_team_spin = (
+                    sc_spin.dropna(subset=["_spin", "pitching_team"])
+                    .groupby("pitching_team")["_spin"]
+                    .mean()
+                )
+                if team in league_team_spin.index and league_team_spin.notna().sum() > 1:
+                    se_pct = float(normalize_percentile(league_team_spin).loc[team])
+                else:
+                    se_pct = 50.0
+
                 spin_team_summary = {
-                    "mean_spin_efficiency":            float(valid.mean()),
-                    "weighted_spin_efficiency_pct":    float(
-                        normalize_percentile(valid).mean()
-                    ),
-                    "pitcher_count":                   len(valid),
+                    "mean_spin_efficiency":         team_mean_se,
+                    "weighted_spin_efficiency_pct": se_pct,
+                    "pitcher_count":                len(valid),
                 }
+
+    # ── 10a. Cross-team spread/concentration metrics ──────────────────────
+    cross_team = {}
+    try:
+        cross_team = _compute_cross_team_metrics(statcast, batting_full, team)
+    except Exception as exc:
+        log.warning("Cross-team metrics failed: %s", exc)
+
+    # ── 10b. OAA (team-level, all positions) ─────────────────────────────
+    oaa_val: Optional[float] = None
+    try:
+        from ingest import pull_fielding_oaa
+        oaa_df = pull_fielding_oaa(season)
+        if not oaa_df.empty and "oaa_total" in oaa_df.columns:
+            oaa_series = oaa_df.set_index("team")["oaa_total"]
+            oaa_pcts   = normalize_percentile(oaa_series)
+            if team in oaa_pcts.index:
+                oaa_val = float(oaa_pcts.loc[team])
+    except Exception as exc:
+        log.warning("OAA failed: %s", exc)
+
+    # ── 10c. Opener usage (all 30 teams from Statcast) ────────────────────
+    opener_val: Optional[float] = None
+    try:
+        from pitch_aggregates import compute_opener_usage
+        opener_series = compute_opener_usage(statcast)
+        opener_pcts   = normalize_percentile(opener_series)
+        if team in opener_pcts.index:
+            opener_val = float(opener_pcts.loc[team])
+    except Exception as exc:
+        log.warning("Opener usage failed: %s", exc)
+
+    # ── 10d. Platoon optimization (all 30 teams from Statcast) ────────────
+    platoon_val: Optional[float] = None
+    try:
+        from pitch_aggregates import compute_platoon_optimization
+        platoon_series = compute_platoon_optimization(statcast)
+        platoon_pcts   = normalize_percentile(platoon_series)
+        if team in platoon_pcts.index:
+            platoon_val = float(platoon_pcts.loc[team])
+    except Exception as exc:
+        log.warning("Platoon optimization failed: %s", exc)
+
+    # ── 10e. Roster turnover vs. prior season ─────────────────────────────
+    turnover_val: Optional[float] = None
+    try:
+        turnover_rates = _compute_turnover(statcast, season)
+        if turnover_rates:
+            turnover_series = pd.Series(turnover_rates)
+            turnover_pcts   = normalize_percentile(turnover_series)
+            if team in turnover_pcts.index:
+                turnover_val = float(turnover_pcts.loc[team])
+    except Exception as exc:
+        log.warning("Turnover failed: %s", exc)
 
     # ── 10. Philosophy metrics assembly ───────────────────────────────────
     philosophy_metrics = _build_philosophy_metrics(
@@ -891,6 +1198,11 @@ def build_team_portrait(
         park_result,
         spin_team_summary,
         None,   # tunneling team summary not yet aggregated
+        cross_team_metrics=cross_team,
+        oaa_val=oaa_val,
+        opener_val=opener_val,
+        platoon_val=platoon_val,
+        turnover_val=turnover_val,
     )
 
     # ── 11. Philosophy scoring ────────────────────────────────────────────
@@ -920,8 +1232,9 @@ def build_team_portrait(
             "pitching": team_pitching_agg,
         },
         "park":        park_result,
-        "philosophy":  philosophy,
-        "temporal":    temporal_info,
+        "philosophy":         philosophy,
+        "philosophy_metrics": philosophy_metrics,
+        "temporal":           temporal_info,
         "spin":        spin_team_summary,
         "tunneling":   {
             "pitcher_level": (

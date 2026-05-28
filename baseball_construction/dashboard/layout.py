@@ -16,6 +16,21 @@ from dash import dcc, html
 CARD_STYLE  = {"backgroundColor": "#1f2937", "border": "1px solid #374151", "borderRadius": "8px"}
 BADGE_STYLE = {"fontSize": "0.75rem", "fontWeight": "600", "letterSpacing": "0.05em"}
 
+# Full names used in philosophy collapse buttons (layout-local copy to avoid import cycle)
+_PHIL_FULL: dict[str, str] = {
+    "A1": "Three True Outcomes",
+    "A2": "Contact / Speed",
+    "A3": "Aggressive Approach",
+    "A4": "Power Concentration",
+    "B1": "Stuff Dominance",
+    "B2": "Command & Defense",
+    "B3": "Pitch Design",
+    "B4": "Defensive Infrastructure",
+    "C1": "bWAR Distribution",
+    "C3": "Age Curve",
+    "C4": "Prospect Pipeline",
+}
+
 MODE_COLORS = {
     "historical": "secondary",
     "early":      "warning",
@@ -191,6 +206,10 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
+        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
+                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
+                       "textTransform": "uppercase"}),
+        *[_philosophy_collapse(c) for c in ["A1", "A2", "A3", "A4"]],
     ])
 
 
@@ -200,6 +219,10 @@ def pitching_tab() -> dbc.Tab:
             dbc.Col(_card("Pitching Philosophy Radar", "radar-pitching", height=380), md=5),
             dbc.Col(_card("Starter Roster Detail", "starter-bars", height=420), md=7),
         ]),
+        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
+                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
+                       "textTransform": "uppercase"}),
+        *[_philosophy_collapse(c) for c in ["B1", "B2", "B3", "B4"]],
     ])
 
 
@@ -219,8 +242,8 @@ def roster_tab() -> dbc.Tab:
                             [
                                 html.Strong("Roster construction (C1–C4) requires external data sources:"),
                                 html.Ul([
-                                    html.Li("WAR data — FanGraphs CSV (GAP 1)"),
                                     html.Li("Payroll — Spotrac CSV (GAP 4)"),
+                                    html.Li("Service time — not publicly available (GAP 6)"),
                                     html.Li("Prospect pipeline — MLB Pipeline CSV (GAP 5)"),
                                 ], className="mt-2 mb-0"),
                             ],
@@ -232,14 +255,55 @@ def roster_tab() -> dbc.Tab:
                 md=6,
             ),
         ]),
+        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
+                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
+                       "textTransform": "uppercase"}),
+        *[_philosophy_collapse(c) for c in ["C1", "C3", "C4"]],
     ])
+
+
+def _philosophy_collapse(code: str) -> html.Div:
+    """Collapsible row for one philosophy dimension with click-to-expand breakdown."""
+    label = _PHIL_FULL.get(code, code)
+    return html.Div([
+        dbc.Button(
+            [
+                html.Span(f"{code} — {label}", className="fw-semibold me-2",
+                          style={"fontSize": "0.85rem"}),
+                html.Small("▼ show breakdown", className="text-secondary",
+                           style={"fontSize": "0.72rem"}),
+            ],
+            id={"type": "phil-btn", "code": code},
+            color="link",
+            className="text-white text-start p-2 w-100",
+            style={
+                "textDecoration": "none",
+                "backgroundColor": "#1a2233",
+                "border": "1px solid #374151",
+                "borderRadius": "6px",
+            },
+        ),
+        dbc.Collapse(
+            html.Div(
+                id={"type": "phil-collapse-content", "code": code},
+                style={
+                    "backgroundColor": "#1a2233",
+                    "border": "1px solid #374151",
+                    "borderTop": "none",
+                    "borderRadius": "0 0 6px 6px",
+                },
+            ),
+            id={"type": "phil-collapse", "code": code},
+            is_open=False,
+        ),
+    ], className="mb-2")
 
 
 def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
         active_tab="tab-overview",
-        children=[overview_tab(), offense_tab(), pitching_tab(), roster_tab()],
+        children=[overview_tab(), offense_tab(), pitching_tab()],
         className="mb-3",
     )
 

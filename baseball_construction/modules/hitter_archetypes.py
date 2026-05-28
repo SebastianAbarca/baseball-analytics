@@ -40,9 +40,9 @@ COMPLETE_THRESHOLDS: dict[str, float] = {
 }
 
 TTO_THRESHOLDS: dict[str, float] = {
-    "K_pct":  50.0,   # at or above average K rate
-    "BB_pct": 65.0,   # clearly above average walks
-    "ISO":    65.0,   # clearly above average power
+    "K_pct_raw": 55.0,   # above average K rate (non-inverted pct — higher = more Ks)
+    "BB_pct":    65.0,   # clearly above average walks
+    "ISO":       65.0,   # clearly above average power
 }
 
 FREE_SWINGER_THRESHOLDS: dict[str, float] = {
@@ -183,11 +183,10 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
 
     Returns None if required metrics are unavailable.
     """
-    power_keys   = ["ISO_pct", "HR_FB_pct", "Barrel_pct", "EV_90_pct"]
-    contact_keys = ["Contact_pct", "K_pct", "AVG_pct", "OBP_ISO_gap_pct"]
-
     power_weights   = {"ISO_pct": 0.30, "HR_FB_pct": 0.25, "Barrel_pct": 0.25, "EV_90_pct": 0.20}
-    contact_weights = {"Contact_pct": 0.25, "K_pct": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
+    # K_pct_raw is the non-inverted K% percentile (higher = more strikeouts).
+    # The spectrum code inverts it below (100 - val) so higher raw K% → lower contact score.
+    contact_weights = {"Contact_pct": 0.25, "K_pct_raw": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
 
     # Power score: weighted sum of power metrics (missing → 0 weight)
     power_sum = power_w = 0.0
@@ -197,13 +196,13 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
             power_sum += float(v) * w
             power_w   += w
 
-    # Contact score: K_pct is inverted (lower K = more contact)
+    # Contact score: K_pct_raw is inverted here (lower raw K% = more contact)
     contact_sum = contact_w = 0.0
     for k, w in contact_weights.items():
         v = metrics.get(k)
         if v is None or np.isnan(float(v)):
             continue
-        val = (100.0 - float(v)) if k == "K_pct" else float(v)
+        val = (100.0 - float(v)) if k == "K_pct_raw" else float(v)
         contact_sum += val * w
         contact_w   += w
 

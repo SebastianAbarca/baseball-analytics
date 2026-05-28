@@ -1,16 +1,22 @@
 """
-charts.py — Pure Plotly figure builders.
+charts.py — Plotly figure builders and Dash component helpers.
 
-Each function takes a portrait dict (or subset) and returns a plotly Figure.
-No Dash imports. No side effects. Easy to test in isolation.
+Most functions return a plotly Figure; philosophy_breakdown_card returns a
+Dash html.Div component tree (for use in collapsible breakdown panels).
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Optional
 
 import plotly.graph_objects as go
 import plotly.express as px
+from dash import html
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent / "modules"))
 
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
@@ -72,8 +78,7 @@ PHIL_LABELS = {
     "B2": "Command+Contact Mgmt",
     "B3": "Pitch Design",
     "B4": "Defensive Infra",
-    "C1": "Star+Support",
-    "C2": "Roster Balance",
+    "C1": "bWAR Distribution",
     "C3": "Youth+Dev",
     "C4": "Veteran Experience",
 }
@@ -81,7 +86,7 @@ PHIL_LABELS = {
 DIM_CODES = {
     "offense":  ["A1", "A2", "A3", "A4"],
     "pitching": ["B1", "B2", "B3", "B4"],
-    "roster":   ["C1", "C2", "C3", "C4"],
+    "roster":   ["C1", "C3", "C4"],
 }
 
 
@@ -175,75 +180,69 @@ def philosophy_radar(portrait: dict, dimension: str = "all") -> go.Figure:
 
 def dimension_confidence_bars(portrait: dict) -> go.Figure:
     """
-    Horizontal bar chart: one bar per philosophy dimension showing
-    top score and primary philosophy label.
+    Horizontal bar chart showing every philosophy dimension score (0–100).
+    Grouped by offense / pitching / roster with dimension accent colors.
+    League average reference line at 50.
     """
-    confidences = portrait.get("philosophy", {}).get("confidences", {})
-    scores_data  = portrait.get("philosophy", {}).get("scores", {})
+    scores_data = portrait.get("philosophy", {}).get("scores", {})
 
-    dims   = ["offense", "pitching", "roster"]
-    labels = []
-    top_scores   = []
-    sec_scores   = []
-    confs        = []
-    primary_names = []
-    bar_colors   = []
+    # All dimensions in display order
+    all_codes = ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C3", "C4"]
+    dim_color_map = {
+        "offense":  COLORS["offense"],
+        "pitching": COLORS["pitching"],
+        "roster":   COLORS["roster"],
+    }
 
-    for dim in dims:
-        conf  = confidences.get(dim, {})
-        primary_code  = conf.get("primary")
-        secondary_code = conf.get("secondary")
+    labels, values, colors, hover = [], [], [], []
+    for code in all_codes:
+        s = scores_data.get(code, {})
+        score = s.get("score")
+        name  = s.get("name") or PHIL_LABELS.get(code, code)
+        dim   = s.get("dimension", "offense")
+        cov   = s.get("coverage", 0)
+        if score is None:
+            continue
+        labels.append(f"{code}")
+        values.append(float(score))
+        colors.append(dim_color_map.get(dim, COLORS["primary"]))
+        hover.append(f"<b>{name}</b><br>Score: {score:.1f}<br>Data coverage: {cov:.0%}")
 
-        top_s = conf.get("top_score") or 0.0
-        sec_s = conf.get("second_score") or 0.0
-        disp  = conf.get("display_confidence") or 0
+    if not labels:
+        return empty_figure("No philosophy scores available")
 
-        pname = scores_data.get(primary_code, {}).get("name", primary_code or "—")
-
-        labels.append(dim.title())
-        top_scores.append(top_s)
-        sec_scores.append(sec_s)
-        confs.append(disp)
-        primary_names.append(pname)
-        bar_colors.append(COLORS.get(dim, COLORS["primary"]))
-
-    fig = go.Figure()
-
-    # Secondary score (lighter, behind)
-    fig.add_trace(go.Bar(
-        x=sec_scores,
+    fig = go.Figure(go.Bar(
+        x=values,
         y=labels,
         orientation="h",
-        name="2nd philosophy",
-        marker_color=[_hex_to_rgba(c, 0.33) for c in bar_colors],
-        hovertemplate="%{x:.1f} (secondary)<extra></extra>",
-    ))
-
-    # Primary score
-    fig.add_trace(go.Bar(
-        x=top_scores,
-        y=labels,
-        orientation="h",
-        name="Top philosophy",
-        marker_color=bar_colors,
-        text=[f"{n} ({c}%)" for n, c in zip(primary_names, confs)],
-        textposition="inside",
-        insidetextanchor="start",
+        marker_color=colors,
+        text=[f"{v:.0f}" for v in values],
+        textposition="outside",
         textfont=dict(size=11, color=COLORS["text"]),
-        hovertemplate="%{x:.1f} | conf %{text}<extra></extra>",
+        hovertemplate="%{customdata}<extra></extra>",
+        customdata=hover,
     ))
 
+    # League average reference
+    fig.add_shape(
+        type="line", x0=50, x1=50, y0=-0.5, y1=len(labels) - 0.5,
+        line=dict(color=COLORS["subtext"], width=1, dash="dash"),
+    )
+    fig.add_annotation(
+        x=50, y=len(labels) - 0.3, text="Avg",
+        showarrow=False, font=dict(color=COLORS["subtext"], size=9),
+    )
+
+    layout = {**_DARK_LAYOUT}
+    layout["margin"] = dict(l=40, r=40, t=40, b=24)
     fig.update_layout(
-        **_DARK_LAYOUT,
-        barmode="overlay",
-        xaxis=dict(range=[0, 100], gridcolor=COLORS["border"], title="Score"),
-        yaxis=dict(gridcolor=COLORS["border"]),
-        legend=dict(
-            orientation="h", y=-0.15,
-            font=dict(color=COLORS["subtext"], size=10),
-        ),
+        **layout,
+        xaxis=dict(range=[0, 115], gridcolor=COLORS["border"],
+                   title="Score (0–100, league percentile)"),
+        yaxis=dict(gridcolor=COLORS["border"], autorange="reversed"),
+        showlegend=False,
         title=dict(
-            text="Primary Philosophy by Dimension",
+            text="Philosophy Scores by Dimension",
             font=dict(size=14, color=COLORS["text"]),
             x=0.5,
         ),
@@ -318,47 +317,44 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         fig.update_layout(**_DARK_LAYOUT)
         return fig
 
-    names, ages, pas, types, spectrums, modifiers_col = [], [], [], [], [], []
+    names, ages, pas, wars, types, spectrums = [], [], [], [], [], []
 
     for h in sorted(hitters, key=lambda x: -(x.get("pa") or 0)):
         pri  = h.get("primary", {})
-        mods = h.get("modifiers", {})
+        name = (h.get("name") or "").strip() or f"ID {h.get('player_id', '?')}"
+        war  = h.get("war")
 
-        names.append(h.get("name") or f"ID {h.get('player_id','?')}")
+        names.append(name)
         ages.append(str(h.get("age")) if h.get("age") else "—")
         pas.append(str(h.get("pa") or "—"))
-        types.append(pri.get("type", "—"))
+        wars.append(f"{war:.1f}" if war is not None else "—")
+        types.append(pri.get("type") or "—")
         sp = pri.get("spectrum_score")
         spectrums.append(f"{sp:.1f}" if sp is not None else "—")
 
-        mod_parts = []
-        if mods.get("free_swinger"):
-            mod_parts.append("FS")
-        if mods.get("speed"):
-            mod_parts.append("SPD")
-        disrupt = mods.get("disruptiveness", {}) or {}
-        if disrupt.get("modifier"):
-            mod_parts.append(disrupt["modifier"][:3].upper())
-        modifiers_col.append(", ".join(mod_parts) or "—")
-
     fig = go.Figure(go.Table(
+        columnwidth=[3, 1, 1, 1, 2, 1],
         header=dict(
-            values=["Player", "Age", "PA", "Archetype", "Spectrum", "Modifiers"],
+            values=["<b>Player</b>", "<b>Age</b>", "<b>PA</b>",
+                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Spectrum</b>"],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align="left",
+            align=["left", "center", "center", "center", "left", "center"],
             line_color=COLORS["border"],
+            height=32,
         ),
         cells=dict(
-            values=[names, ages, pas, types, spectrums, modifiers_col],
+            values=[names, ages, pas, wars, types, spectrums],
             fill_color=COLORS["background"],
             font=dict(color=COLORS["text"], size=11),
-            align="left",
+            align=["left", "center", "center", "center", "left", "center"],
             line_color=COLORS["border"],
+            height=28,
         ),
     ))
+    tbl_layout = {**_DARK_LAYOUT, "margin": dict(l=0, r=0, t=40, b=0)}
     fig.update_layout(
-        **_DARK_LAYOUT,
+        **tbl_layout,
         title=dict(
             text="Hitter Roster Detail",
             font=dict(size=14, color=COLORS["text"]),
@@ -386,35 +382,43 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
         "P3": "GB Craftsman", "P4": "Stuff-to-Contact", "U0": "Unclassified",
     }
 
-    names, ages, bfs, archetypes, commands = [], [], [], [], []
+    names, ages, bfs, wars, archetypes, commands = [], [], [], [], [], []
 
     for s in sorted(starters, key=lambda x: -(x.get("bf") or 0)):
-        pri = s.get("primary", {})
+        pri  = s.get("primary", {})
         code = pri.get("type_code", "U0")
-        names.append(s.get("name") or f"ID {s.get('player_id','?')}")
+        name = (s.get("name") or "").strip() or f"ID {s.get('player_id', '?')}"
+        war  = s.get("war")
+        names.append(name)
         ages.append(str(s.get("age")) if s.get("age") else "—")
         bfs.append(str(s.get("bf") or "—"))
+        wars.append(f"{war:.1f}" if war is not None else "—")
         archetypes.append(CODE_NAMES.get(code, code))
         commands.append(s.get("modifiers", {}).get("command") or "—")
 
     fig = go.Figure(go.Table(
+        columnwidth=[3, 1, 1, 1, 2, 1],
         header=dict(
-            values=["Pitcher", "Age", "BF", "Archetype", "Command"],
+            values=["<b>Pitcher</b>", "<b>Age</b>", "<b>BF</b>",
+                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Command</b>"],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align="left",
+            align=["left", "center", "center", "center", "left", "center"],
             line_color=COLORS["border"],
+            height=32,
         ),
         cells=dict(
-            values=[names, ages, bfs, archetypes, commands],
+            values=[names, ages, bfs, wars, archetypes, commands],
             fill_color=COLORS["background"],
             font=dict(color=COLORS["text"], size=11),
-            align="left",
+            align=["left", "center", "center", "center", "left", "center"],
             line_color=COLORS["border"],
+            height=28,
         ),
     ))
+    tbl_layout = {**_DARK_LAYOUT, "margin": dict(l=0, r=0, t=40, b=0)}
     fig.update_layout(
-        **_DARK_LAYOUT,
+        **tbl_layout,
         title=dict(
             text="Starter Roster Detail",
             font=dict(size=14, color=COLORS["text"]),
@@ -589,6 +593,161 @@ def spin_efficiency_bar(portrait: dict) -> go.Figure:
         ),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# 9. Philosophy metric breakdown (Dash component, not Plotly figure)
+# ---------------------------------------------------------------------------
+
+METRIC_LABELS: dict[str, str] = {
+    # A1
+    "ISO_pct":               "Isolated Power",
+    "BB_pct_pct":            "Walk Rate",
+    "K_pct_pct":             "Strikeout Rate",
+    "HR_FB_pct":             "HR/FB Ratio",
+    "Sprint_inv_pct":        "Sprint Speed (low = TTO)",
+    # A2
+    "K_inv_pct":             "Contact Rate (inv. K%)",
+    "OBP_SLG_gap_pct":       "OBP–SLG Gap",
+    "PitchesPerPA_pct":      "Pitches per PA",
+    "SprintSpeed_pct":       "Sprint Speed",
+    "Contact_pct_pct":       "Contact Rate",
+    # A3
+    "FPS_pct_pct":           "First-Pitch Strike Swing%",
+    "PitchesPerPA_inv_pct":  "Pitches per PA (inv.)",
+    "ZSwing_pct_pct":        "Zone Swing%",
+    "BB_inv_pct":            "Low Walk Rate (inv. BB%)",
+    # A4
+    "WAR_concentration_pct": "bWAR Concentration",
+    "wRCplus_spread_pct":    "wRC+ Spread",
+    "ISO_spread_pct":        "ISO Spread",
+    "PA_concentration_pct":  "PA Concentration",
+    # B1
+    "TeamK_pct_pct":         "Team Strikeout Rate",
+    "AvgVelo_pct":           "Avg Fastball Velocity",
+    "SwStr_pct_pct":         "Swinging Strike Rate",
+    "AvgSpinRate_pct":       "Avg Spin Rate",
+    # B2
+    "BB_pitch_inv_pct":      "Walk Rate (inv.)",
+    "Zone_pct_pct":          "Zone Rate",
+    "GB_pct_pct":            "Ground Ball Rate",
+    "TeamDefense_pct":       "Team Defense (OAA proxy)",
+    # B3
+    "SpinEfficiency_pct":    "Spin Efficiency",
+    "ArsenalDiversity_pct":  "Arsenal Diversity",
+    "PlatoonOptimization_pct": "Platoon Optimization",
+    "OpenerUsage_pct":       "Opener Usage",
+    "CSW_pct_pct":           "Called Strike + Whiff%",
+    # B4
+    "OAA_pct":               "Outs Above Average",
+    "DRS_pct":               "Def. Runs Saved (OAA proxy)",
+    "GB_pitch_pct":          "Ground Ball Rate (pitch.)",
+    "ParkPitcherFriendly_pct": "Park Pitcher-Friendliness",
+    # C1
+    "WAR_concentration_pct": "bWAR Concentration",
+    "WAR_variance_inv_pct":  "bWAR Variance (inv.)",
+    "RosterFloor_pct":       "Roster Floor (bWAR > 0)",
+    # C3
+    "AvgAge_inv_pct":        "Average Age (inv.)",
+    "PreArb_share_pct":      "Pre-Arb Share",
+    "Turnover_pct":          "Roster Turnover",
+    "Pipeline_pct":          "Prospect Pipeline",
+    # C4
+    "AvgAge_pct":            "Average Age (veteran proxy)",
+    "PostArb_share_pct":     "Post-Arb Share",
+    "CoreRetention_pct":     "Core Player Retention",
+    "AvgTenure_pct":         "Average Roster Tenure",
+}
+
+METRIC_MISSING_REASON: dict[str, str] = {
+    # C3
+    "PreArb_share_pct":  "Requires service time data (not publicly available)",
+    "Pipeline_pct":      "Requires MLB Pipeline prospect rankings (not publicly available)",
+    # C4
+    "PostArb_share_pct": "Requires service time data (not publicly available)",
+    "AvgTenure_pct":     "Requires service time data (not publicly available)",
+}
+
+
+def philosophy_breakdown_card(portrait: dict, code: str) -> html.Div:
+    """
+    Dash component tree for one philosophy dimension's metric breakdown table.
+    Shows each metric's percentile, weight, and whether it is present or missing.
+    """
+    from philosophy import PHILOSOPHY_DEFS
+
+    defn     = PHILOSOPHY_DEFS.get(code, {})
+    weights  = defn.get("weights", {})
+    metrics  = portrait.get("philosophy_metrics", {})
+    score_data = portrait.get("philosophy", {}).get("scores", {}).get(code, {})
+    score    = score_data.get("score")
+    coverage = score_data.get("coverage", 0)
+    score_str = f"{score:.0f}" if score is not None else "N/A"
+
+    rows = []
+    for metric_key, weight in weights.items():
+        label = METRIC_LABELS.get(metric_key, metric_key)
+        value = metrics.get(metric_key)
+
+        if value is None:
+            reason   = METRIC_MISSING_REASON.get(metric_key, "Data not available")
+            pct_cell = html.Td("—", className="text-secondary text-center",
+                               style={"fontSize": "0.85rem"})
+            status_cell = html.Td(
+                html.Small(reason, className="text-warning"),
+                style={"fontSize": "0.75rem"},
+            )
+        else:
+            bar_w = f"{max(0, min(100, int(value)))}%"
+            pct_cell = html.Td(
+                html.Div([
+                    html.Span(f"{value:.0f}", className="me-2 fw-semibold",
+                              style={"minWidth": "28px", "display": "inline-block",
+                                     "textAlign": "right"}),
+                    html.Div(
+                        html.Div(style={"width": bar_w, "height": "6px",
+                                        "backgroundColor": COLORS["primary"],
+                                        "borderRadius": "3px"}),
+                        style={"width": "72px", "backgroundColor": COLORS["border"],
+                               "borderRadius": "3px", "display": "inline-block",
+                               "verticalAlign": "middle"},
+                    ),
+                ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
+            )
+            status_cell = html.Td(
+                html.Small("Present", className="text-success"),
+                style={"fontSize": "0.75rem"},
+            )
+
+        rows.append(html.Tr([
+            html.Td(label, className="text-white", style={"fontSize": "0.85rem"}),
+            pct_cell,
+            html.Td(f"{weight:.0%}", className="text-secondary text-center",
+                    style={"fontSize": "0.85rem"}),
+            status_cell,
+        ]))
+
+    header_style = {"color": COLORS["subtext"], "fontSize": "0.72rem",
+                    "textTransform": "uppercase", "letterSpacing": "0.06em",
+                    "fontWeight": "600"}
+    return html.Div([
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th("Metric",     style={**header_style, "width": "38%"}),
+                html.Th("Percentile", style={**header_style, "width": "30%"}),
+                html.Th("Weight",     style={**header_style, "width": "10%",
+                                             "textAlign": "center"}),
+                html.Th("Status",     style={**header_style, "width": "22%"}),
+            ])),
+            html.Tbody(rows),
+        ], className="table table-dark table-sm mb-0",
+           style={"borderCollapse": "collapse"}),
+        html.Small(
+            f"Composite score: {score_str} · Data coverage: {coverage:.0%}",
+            className="text-secondary mt-2 d-block",
+            style={"fontSize": "0.75rem", "padding": "4px 0 8px 4px"},
+        ),
+    ], style={"padding": "12px 16px"})
 
 
 # ---------------------------------------------------------------------------

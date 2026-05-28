@@ -79,6 +79,13 @@ BATTING_COL_MAP = {
     "sprint_speed":     "sprint_speed",
     "exit_velocity":    "exit_velocity",
     "join_source":      "join_source",
+    # Statcast pitch aggregates + BRef WAR
+    "gb_pct":           "gb_pct",
+    "fps_pct":          "fps_pct",
+    "pitches_per_pa":   "pitches_per_pa",
+    "WAR":              "war",
+    "zone_swing_pct":   "zone_swing_pct",
+    "contact_pct":      "contact_pct",
 }
 
 PITCHING_COL_MAP = {
@@ -95,6 +102,15 @@ PITCHING_COL_MAP = {
     "whiff_percent":    "whiff_pct",
     "fb_velocity":      "fb_velocity",
     "join_source":      "join_source",
+    # Statcast pitch aggregates + BRef WAR/FIP
+    "gb_pct":           "gb_pct",
+    "zone_pct":         "zone_pct",
+    "csw_pct":          "csw_pct",
+    "pitches_per_bf":   "pitches_per_bf",
+    "WAR":              "war",
+    "fip":              "fip",
+    "avg_spin_rate":    "avg_spin_rate",
+    "arsenal_diversity":"arsenal_diversity",
 }
 
 

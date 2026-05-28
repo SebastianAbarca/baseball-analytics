@@ -59,6 +59,10 @@ STABILIZATION: dict[str, int] = {
     "FPS_pct":        150,
     "OSwing_pct":     100,
     "PitchesPerPA":   150,
+    # Statcast pitch-aggregate hitter metrics
+    "BatGB_pct":      200,
+    "FPS_pct_agg":    150,
+    "pitches_per_pa": 150,
     # Pitcher metrics
     "spin_rate":      200,
     "spin_efficiency":200,
@@ -69,6 +73,12 @@ STABILIZATION: dict[str, int] = {
     "HardHit_allowed":200,
     "Barrel_allowed": 200,
     "FIP":            150,
+    # Statcast pitch-aggregate pitcher metrics
+    "GB_pct_pitch":   200,
+    "Zone_pct":       150,
+    "CSW_pct":        150,
+    "pitches_per_bf": 150,
+    "WAR":            162,
     # Catcher
     "framing":       1000,
     # Movement
@@ -288,6 +298,17 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
 
     df = bref.merge(savant, on="key_mlbam", how="left")
     df["join_source"] = "bref_savant"
+
+    # Merge Statcast pitch aggregates (gb_pct, fps_pct, pitches_per_pa)
+    try:
+        from pitch_aggregates import compute_pitch_aggregates
+        batter_agg, _ = compute_pitch_aggregates(season)
+        df = df.merge(batter_agg, on="key_mlbam", how="left")
+        log.info("Pitch agg (batting) merged — %d / %d rows have gb_pct",
+                 df["gb_pct"].notna().sum(), len(df))
+    except Exception as exc:
+        log.warning("Pitch aggregates (batting) unavailable: %s", exc)
+
     log.info("BRef+Savant batting %d — %d rows after merge", season, len(df))
     return df
 
@@ -310,6 +331,22 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30) -> pd.DataFrame:
     bref["K_rate_pitch"]  = bref["SO"] / bf_safe
     bref["BB_rate_pitch"] = bref["BB"] / bf_safe
 
+    # FIP from BRef component stats
+    FIP_CONSTANTS: dict[int, float] = {
+        2015: 3.134, 2016: 3.147, 2017: 3.158, 2018: 3.161,
+        2019: 3.214, 2020: 3.191, 2021: 3.170, 2022: 3.098,
+        2023: 3.188, 2024: 3.145, 2025: 3.15,  2026: 3.15,
+    }
+    if all(c in bref.columns for c in ["HR", "BB", "SO", "IP"]):
+        ip_safe = pd.to_numeric(bref["IP"], errors="coerce").replace(0, np.nan)
+        hbp = pd.to_numeric(bref["HBP"], errors="coerce").fillna(0) if "HBP" in bref.columns else 0
+        bref["fip"] = (
+            (13 * pd.to_numeric(bref["HR"], errors="coerce")
+             + 3 * (pd.to_numeric(bref["BB"], errors="coerce") + hbp)
+             - 2 * pd.to_numeric(bref["SO"], errors="coerce"))
+            / ip_safe
+        ) + FIP_CONSTANTS.get(season, 3.15)
+
     log.info("BRef pitching %d — %d qualifying rows", season, len(bref))
 
     savant = _savant_pitching_aggregate(season, min_pa=min_pa)
@@ -322,6 +359,17 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30) -> pd.DataFrame:
 
     df = bref.merge(savant, on="key_mlbam", how="left")
     df["join_source"] = "bref_savant"
+
+    # Merge Statcast pitch aggregates (gb_pct, zone_pct, csw_pct, pitches_per_bf)
+    try:
+        from pitch_aggregates import compute_pitch_aggregates
+        _, pitcher_agg = compute_pitch_aggregates(season)
+        df = df.merge(pitcher_agg, on="key_mlbam", how="left")
+        log.info("Pitch agg (pitching) merged — %d / %d rows have zone_pct",
+                 df["zone_pct"].notna().sum(), len(df))
+    except Exception as exc:
+        log.warning("Pitch aggregates (pitching) unavailable: %s", exc)
+
     log.info("BRef+Savant pitching %d — %d rows after merge", season, len(df))
     return df
 
@@ -398,6 +446,124 @@ def pull_fg_pitching(season: int, qual: int = 30) -> pd.DataFrame:
     df.to_csv(cache, index=False)
     log.info("Saved %d rows to %s", len(df), cache)
     return df
+
+
+# ---------------------------------------------------------------------------
+# Fielding OAA (team-level)
+# ---------------------------------------------------------------------------
+
+_FIELDING_OAA_POSITIONS = [3, 4, 5, 6, 7, 8, 9]  # 1B–RF (catchers unsupported by API)
+
+# MLBAM team_id → our internal abbreviation (matches Statcast home_team/away_team)
+_OAA_TEAM_ID_MAP: dict[int, str] = {
+    108: "LAA", 109: "AZ",  110: "BAL", 111: "BOS", 112: "CHC",
+    113: "CIN", 114: "CLE", 115: "COL", 116: "DET", 117: "HOU",
+    118: "KC",  119: "LAD", 120: "WSH", 121: "NYM", 133: "OAK",
+    134: "PIT", 135: "SD",  136: "SEA", 137: "SF",  138: "STL",
+    139: "TB",  140: "TEX", 141: "TOR", 142: "MIN", 143: "PHI",
+    144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY", 158: "MIL",
+}
+
+
+def pull_fielding_oaa(season: int) -> pd.DataFrame:
+    """
+    Team-level Outs Above Average summed across fielding positions 1B–RF.
+    Cached at data/processed/fielding_oaa_{season}.csv.
+    Returns DataFrame with columns: team, oaa_total.
+    """
+    cache = PROCESSED_DIR / f"fielding_oaa_{season}.csv"
+    if cache.exists():
+        log.info("Loading fielding_oaa_%d from cache", season)
+        return pd.read_csv(cache)
+
+    try:
+        from pybaseball import statcast_outs_above_average
+    except ImportError:
+        log.warning("pybaseball statcast_outs_above_average not available")
+        return pd.DataFrame(columns=["team", "oaa_total"])
+
+    frames = []
+    for pos in _FIELDING_OAA_POSITIONS:
+        try:
+            df = statcast_outs_above_average(season, pos, view="Fielding_Team")
+            if df is not None and not df.empty and "outs_above_average" in df.columns:
+                if "team_id" in df.columns:
+                    df = df[["team_id", "outs_above_average"]].copy()
+                    df["team"] = df["team_id"].map(_OAA_TEAM_ID_MAP)
+                    df = df.dropna(subset=["team"])
+                    frames.append(df[["team", "outs_above_average"]])
+        except Exception as exc:
+            log.warning("OAA pos %d season %d failed: %s", pos, season, exc)
+
+    if not frames:
+        log.warning("No OAA data retrieved for season %d", season)
+        return pd.DataFrame(columns=["team", "oaa_total"])
+
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        .groupby("team", as_index=False)["outs_above_average"]
+        .sum()
+        .rename(columns={"outs_above_average": "oaa_total"})
+    )
+    combined.to_csv(cache, index=False)
+    log.info("OAA %d — %d teams saved to cache", season, len(combined))
+    return combined
+
+
+# ---------------------------------------------------------------------------
+# Baseball Reference WAR (bWAR) via pybaseball
+# ---------------------------------------------------------------------------
+
+def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Return (bat_war, pitch_war) DataFrames for the given season.
+
+    Both have columns: key_mlbam (int), war (float).
+    Data comes from Baseball Reference via pybaseball.bwar_bat / bwar_pitch.
+    Cached at data/processed/bwar_bat_{season}.csv and bwar_pitch_{season}.csv.
+    """
+    bat_cache   = PROCESSED_DIR / f"bwar_bat_{season}.csv"
+    pitch_cache = PROCESSED_DIR / f"bwar_pitch_{season}.csv"
+
+    if bat_cache.exists() and pitch_cache.exists():
+        log.info("Loading bWAR %d from cache", season)
+        bat_war   = pd.read_csv(bat_cache)
+        pitch_war = pd.read_csv(pitch_cache)
+        return bat_war, pitch_war
+
+    try:
+        raw_bat = pybaseball.bwar_bat(return_all=False)
+        bat = (
+            raw_bat[raw_bat["year_ID"] == season]
+            [["mlb_ID", "WAR"]]
+            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
+            .dropna(subset=["key_mlbam", "war"])
+        )
+        bat["key_mlbam"] = bat["key_mlbam"].astype(int)
+        bat = bat.groupby("key_mlbam", as_index=False)["war"].sum()
+        bat.to_csv(bat_cache, index=False)
+        log.info("bWAR batting %d — %d players", season, len(bat))
+    except Exception as exc:
+        log.warning("bwar_bat failed for season %d: %s", season, exc)
+        bat = pd.DataFrame(columns=["key_mlbam", "war"])
+
+    try:
+        raw_pitch = pybaseball.bwar_pitch(return_all=False)
+        pitch = (
+            raw_pitch[raw_pitch["year_ID"] == season]
+            [["mlb_ID", "WAR"]]
+            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
+            .dropna(subset=["key_mlbam", "war"])
+        )
+        pitch["key_mlbam"] = pitch["key_mlbam"].astype(int)
+        pitch = pitch.groupby("key_mlbam", as_index=False)["war"].sum()
+        pitch.to_csv(pitch_cache, index=False)
+        log.info("bWAR pitching %d — %d pitchers", season, len(pitch))
+    except Exception as exc:
+        log.warning("bwar_pitch failed for season %d: %s", season, exc)
+        pitch = pd.DataFrame(columns=["key_mlbam", "war"])
+
+    return bat, pitch
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +703,7 @@ def normalize_percentile(series: pd.Series, invert: bool = False) -> pd.Series:
 INVERT_METRICS: set[str] = {
     "K_pct", "BB_pct_pitch", "HardHit_allowed", "Barrel_allowed",
     "Chase_pct", "BB_pct_allowed",
+    "fip",   # lower FIP = better pitcher
 }
 
 

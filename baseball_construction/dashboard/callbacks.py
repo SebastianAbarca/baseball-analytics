@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dash import Input, Output, State, callback, no_update
+from dash import Input, Output, State, callback, no_update, MATCH
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
@@ -210,3 +210,38 @@ def hitter_table(data):
 def starter_bars(data):
     p = _deserialize(data)
     return charts.starter_archetype_bars(p) if p else charts.empty_figure()
+
+
+# ---------------------------------------------------------------------------
+# Callback 11 — Toggle philosophy collapse open/closed
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output({"type": "phil-collapse", "code": MATCH}, "is_open"),
+    Input({"type": "phil-btn", "code": MATCH}, "n_clicks"),
+    State({"type": "phil-collapse", "code": MATCH}, "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_philosophy_collapse(n_clicks, is_open):
+    return not is_open
+
+
+# ---------------------------------------------------------------------------
+# Callback 12 — Populate breakdown content when a collapse opens
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output({"type": "phil-collapse-content", "code": MATCH}, "children"),
+    Input({"type": "phil-collapse", "code": MATCH}, "is_open"),
+    State("portrait-store", "data"),
+    State({"type": "phil-collapse-content", "code": MATCH}, "id"),
+    prevent_initial_call=True,
+)
+def populate_philosophy_breakdown(is_open, portrait_json, component_id):
+    if not is_open or not portrait_json:
+        return no_update
+    portrait = _deserialize(portrait_json)
+    if not portrait:
+        return no_update
+    code = component_id["code"]
+    return charts.philosophy_breakdown_card(portrait, code)
