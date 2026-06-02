@@ -21,14 +21,15 @@ _PHIL_FULL: dict[str, str] = {
     "A1": "Three True Outcomes",
     "A2": "Contact / Speed",
     "A3": "Aggressive Approach",
-    "A4": "Power Concentration",
+    "A4": "Lineup Power",
     "B1": "Stuff Dominance",
     "B2": "Command & Defense",
     "B3": "Pitch Design",
     "B4": "Defensive Infrastructure",
     "C1": "bWAR Distribution",
-    "C3": "Age Curve",
-    "C4": "Prospect Pipeline",
+    "C2": "Roster Continuity",
+    "C3": "Youth and Development",
+    "C4": "Veteran Experience",
 }
 
 MODE_COLORS = {
@@ -206,6 +207,59 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Hitter Archetype Affinity", className="text-secondary fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                dcc.Graph(
+                    id="hitter-heatmap",
+                    config={"displayModeBar": False},
+                    style={"minHeight": "300px"},
+                ),
+                style={"padding": "8px"},
+            ),
+        ], style=CARD_STYLE, className="mb-3"),
+        # ── Player comparison section ───────────────────────────────────────
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Player Metrics Comparison", className="text-secondary fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody([
+                html.Label("Select players to compare", className="text-secondary small mb-1"),
+                dcc.Dropdown(
+                    id="player-select-dropdown",
+                    options=[],
+                    value=[],
+                    multi=True,
+                    placeholder="Select one or more hitters…",
+                    style={"backgroundColor": "#1f2937", "color": "#111827"},
+                    className="mb-3",
+                ),
+                dbc.Row([
+                    dbc.Col(
+                        dcc.Graph(
+                            id="player-radar-chart",
+                            config={"displayModeBar": False},
+                            style={"height": "420px"},
+                        ),
+                        md=6,
+                    ),
+                    dbc.Col(
+                        dcc.Graph(
+                            id="player-bars-chart",
+                            config={"displayModeBar": False},
+                            style={"height": "420px"},
+                        ),
+                        md=6,
+                    ),
+                ]),
+            ], style={"padding": "12px"}),
+        ], style=CARD_STYLE, className="mb-3"),
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),
@@ -219,6 +273,10 @@ def pitching_tab() -> dbc.Tab:
             dbc.Col(_card("Pitching Philosophy Radar", "radar-pitching", height=380), md=5),
             dbc.Col(_card("Starter Roster Detail", "starter-bars", height=420), md=7),
         ]),
+        dbc.Row([
+            dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=320), md=5),
+            dbc.Col(_card("Bullpen Roster Detail", "bullpen-table", height=420), md=7),
+        ], className="mt-3"),
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),

@@ -449,6 +449,83 @@ def pull_fg_pitching(season: int, qual: int = 30) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Multi-season historical pools (for cross-year percentile normalization)
+# ---------------------------------------------------------------------------
+
+def pull_batting_history(seasons: list[int]) -> pd.DataFrame:
+    """
+    Load batting aggregates for all specified seasons and concatenate into
+    one DataFrame.  Used as the normalization pool for player-level metrics
+    so that percentile ranks are stable across years.
+
+    Caches to data/processed/batting_history_{min}_{max}.csv.
+    """
+    if not seasons:
+        return pd.DataFrame()
+
+    s_min, s_max = min(seasons), max(seasons)
+    cache = PROCESSED_DIR / f"batting_history_{s_min}_{s_max}.csv"
+    if cache.exists():
+        log.info("Loading batting history %d–%d from cache", s_min, s_max)
+        return pd.read_csv(cache, low_memory=False)
+
+    frames = []
+    for s in seasons:
+        try:
+            df = pull_fg_batting(s)
+            if not df.empty:
+                df = df.copy()
+                df["_history_season"] = s
+                frames.append(df)
+        except Exception as exc:
+            log.warning("pull_batting_history: season %d failed: %s", s, exc)
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined.to_csv(cache, index=False)
+    log.info("Batting history %d–%d — %d rows across %d seasons",
+             s_min, s_max, len(combined), len(frames))
+    return combined
+
+
+def pull_pitching_history(seasons: list[int]) -> pd.DataFrame:
+    """
+    Load pitching aggregates for all specified seasons and concatenate.
+    Same pattern as pull_batting_history.
+    """
+    if not seasons:
+        return pd.DataFrame()
+
+    s_min, s_max = min(seasons), max(seasons)
+    cache = PROCESSED_DIR / f"pitching_history_{s_min}_{s_max}.csv"
+    if cache.exists():
+        log.info("Loading pitching history %d–%d from cache", s_min, s_max)
+        return pd.read_csv(cache, low_memory=False)
+
+    frames = []
+    for s in seasons:
+        try:
+            df = pull_fg_pitching(s)
+            if not df.empty:
+                df = df.copy()
+                df["_history_season"] = s
+                frames.append(df)
+        except Exception as exc:
+            log.warning("pull_pitching_history: season %d failed: %s", s, exc)
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined.to_csv(cache, index=False)
+    log.info("Pitching history %d–%d — %d rows across %d seasons",
+             s_min, s_max, len(combined), len(frames))
+    return combined
+
+
+# ---------------------------------------------------------------------------
 # Fielding OAA (team-level)
 # ---------------------------------------------------------------------------
 
@@ -564,6 +641,54 @@ def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
         pitch = pd.DataFrame(columns=["key_mlbam", "war"])
 
     return bat, pitch
+
+
+# ---------------------------------------------------------------------------
+# Baseball Reference defensive runs (bWAR component)
+# ---------------------------------------------------------------------------
+
+# BRef team abbreviations → our internal abbreviations (Statcast style)
+_BREF_TEAM_MAP: dict[str, str] = {
+    "WSN": "WSH", "ARI": "AZ",  "TBR": "TB",  "CHW": "CWS",
+    "SFG": "SF",  "KCR": "KC",  "SDN": "SD",  "OAK": "ATH",
+    # Most others match directly; pass through unchanged
+}
+
+
+def pull_def_runs(season: int) -> pd.DataFrame:
+    """
+    Team-level defensive runs above average from Baseball Reference (bWAR component).
+    Sums ``runs_above_avg_def`` for all position players (pitcher == 'N') per team.
+
+    Returns DataFrame with columns: team, def_runs_total.
+    Cached at data/processed/def_runs_{season}.csv.
+    """
+    cache = PROCESSED_DIR / f"def_runs_{season}.csv"
+    if cache.exists():
+        log.info("Loading def_runs_%d from cache", season)
+        return pd.read_csv(cache)
+
+    try:
+        raw = pybaseball.bwar_bat(return_all=False)
+    except Exception as exc:
+        log.warning("bwar_bat (def_runs) failed for season %d: %s", season, exc)
+        return pd.DataFrame(columns=["team", "def_runs_total"])
+
+    df = raw[
+        (raw["year_ID"] == season) &
+        (raw["pitcher"] == "N")
+    ][["team_ID", "runs_above_avg_def"]].copy()
+
+    df = df.dropna(subset=["runs_above_avg_def"])
+    df["team"] = df["team_ID"].apply(lambda t: _BREF_TEAM_MAP.get(t, t))
+    result = (
+        df.groupby("team", as_index=False)["runs_above_avg_def"]
+        .sum()
+        .rename(columns={"runs_above_avg_def": "def_runs_total"})
+    )
+    result.to_csv(cache, index=False)
+    log.info("def_runs %d — %d teams", season, len(result))
+    return result
 
 
 # ---------------------------------------------------------------------------

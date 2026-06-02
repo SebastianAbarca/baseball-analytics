@@ -90,7 +90,7 @@ def upsert_batting(df: pd.DataFrame) -> None:
 def upsert_pitching(df: pd.DataFrame) -> None:
     cols = [
         "key_mlbam", "season", "name", "age",
-        "gs", "bf", "k_rate", "bb_rate",
+        "g", "gs", "bf", "k_rate", "bb_rate",
         "xwoba_allowed", "hard_hit_pct", "barrel_pct",
         "whiff_pct", "fb_velocity", "join_source",
         "gb_pct", "zone_pct", "csw_pct", "pitches_per_bf", "war", "fip",
@@ -162,6 +162,16 @@ def season_batting_seeded(season: int) -> bool:
     return len(result.data) > 0
 
 
+def query_seeded_seasons() -> list[int]:
+    """Return sorted list of seasons that have data in player_batting."""
+    client = get_client()
+    result = client.table("player_batting").select("season").execute()
+    df = pd.DataFrame(result.data)
+    if df.empty:
+        return []
+    return sorted(df["season"].dropna().unique().astype(int).tolist())
+
+
 def season_pitching_seeded(season: int) -> bool:
     client = get_client()
     result = (
@@ -172,3 +182,57 @@ def season_pitching_seeded(season: int) -> bool:
         .execute()
     )
     return len(result.data) > 0
+
+
+def query_debut_seasons() -> dict[int, int]:
+    """
+    Return {key_mlbam: debut_season} — the earliest season each player
+    appears in player_batting.  Used to compute MLB tenure without
+    needing service-time data.
+
+    Fetches in pages of 2000 rows to handle the full multi-season table.
+    Result is cached to data/processed/debut_seasons.csv and refreshed
+    whenever this function is called with force=False (uses cache if it
+    exists and is younger than 24 h).
+    """
+    from pathlib import Path
+    import time
+
+    cache = Path(__file__).resolve().parents[1] / "data" / "processed" / "debut_seasons.csv"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+
+    # Use cache if fresh (< 24 h)
+    if cache.exists() and (time.time() - cache.stat().st_mtime) < 86400:
+        df = pd.read_csv(cache)
+        return dict(zip(df["key_mlbam"].astype(int), df["debut_season"].astype(int)))
+
+    client  = get_client()
+    page    = 0
+    page_sz = 2000
+    frames  = []
+    while True:
+        result = (
+            client.table("player_batting")
+            .select("key_mlbam,season")
+            .range(page * page_sz, (page + 1) * page_sz - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        frames.append(pd.DataFrame(result.data))
+        if len(result.data) < page_sz:
+            break
+        page += 1
+
+    if not frames:
+        return {}
+
+    df = pd.concat(frames, ignore_index=True)
+    df["key_mlbam"] = pd.to_numeric(df["key_mlbam"], errors="coerce")
+    df["season"]    = pd.to_numeric(df["season"],    errors="coerce")
+    df = df.dropna()
+    debut = df.groupby("key_mlbam")["season"].min().reset_index()
+    debut.columns = ["key_mlbam", "debut_season"]
+    debut.to_csv(cache, index=False)
+    log.info("query_debut_seasons: %d unique players cached", len(debut))
+    return dict(zip(debut["key_mlbam"].astype(int), debut["debut_season"].astype(int)))
