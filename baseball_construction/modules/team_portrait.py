@@ -1322,7 +1322,7 @@ def build_team_portrait(
     cross_team = {}
     try:
         debut_seasons = query_debut_seasons()
-        cross_team = _compute_cross_team_metrics(statcast, batting_pool, team, season, debut_seasons)
+        cross_team = _compute_cross_team_metrics(statcast, batting_full, team, season, debut_seasons)
     except Exception as exc:
         log.warning("Cross-team metrics failed: %s", exc)
 
