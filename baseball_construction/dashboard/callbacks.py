@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dash import Input, Output, State, callback, no_update, MATCH
+from dash import Input, Output, State, callback, no_update, MATCH, ctx
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
@@ -70,6 +70,22 @@ def _deserialize(data: str | None) -> dict | None:
     Input("load-btn",        "n_clicks"),
     State("team-dropdown",   "value"),
     State("season-dropdown", "value"),
+    running=[
+        (Output("load-btn", "disabled"), True, False),
+        (Output("status-banner", "children"),
+         __import__("dash_bootstrap_components").Alert(
+             [
+                 __import__("dash").html.Span(
+                     className="spinner-border spinner-border-sm me-2",
+                     style={"width": "14px", "height": "14px"},
+                     **{"role": "status"},
+                 ),
+                 "Building portrait… this takes 10–30 seconds",
+             ],
+             color="primary", className="py-1 mb-0 d-flex align-items-center",
+         ),
+         no_update),
+    ],
     prevent_initial_call=True,
 )
 def build_portrait(n_clicks, team: str, season: int):
@@ -210,6 +226,71 @@ def hitter_table(data):
 def starter_bars(data):
     p = _deserialize(data)
     return charts.starter_archetype_bars(p) if p else charts.empty_figure()
+
+
+# ---------------------------------------------------------------------------
+# Callback 10a — Bullpen charts
+# ---------------------------------------------------------------------------
+
+@callback(Output("bullpen-dims", "figure"), Input("portrait-store", "data"))
+def bullpen_dims(data):
+    p = _deserialize(data)
+    return charts.bullpen_dimension_bars(p) if p else charts.empty_figure()
+
+
+@callback(Output("bullpen-table", "figure"), Input("portrait-store", "data"))
+def bullpen_table(data):
+    p = _deserialize(data)
+    return charts.bullpen_detail_table(p) if p else charts.empty_figure()
+
+
+# ---------------------------------------------------------------------------
+# Callback 9b — Hitter archetype affinity heatmap
+# ---------------------------------------------------------------------------
+
+@callback(Output("hitter-heatmap", "figure"), Input("portrait-store", "data"))
+def hitter_heatmap(data):
+    p = _deserialize(data)
+    return charts.hitter_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see hitter affinities")
+
+
+# ---------------------------------------------------------------------------
+# Callback 10b — Populate player dropdown options from portrait
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("player-select-dropdown", "options"),
+    Output("player-select-dropdown", "value"),
+    Input("portrait-store", "data"),
+)
+def populate_player_dropdown(data):
+    portrait = _deserialize(data)
+    if not portrait:
+        return [], []
+    options = charts.player_options_from_portrait(portrait)
+    # Default: pre-select top-3 by PA
+    default = [o["value"] for o in options[:3]]
+    return options, default
+
+
+# ---------------------------------------------------------------------------
+# Callback 10c — Render player comparison charts from dropdown selection
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("player-radar-chart", "figure"),
+    Output("player-bars-chart",  "figure"),
+    Input("player-select-dropdown", "value"),
+    State("portrait-store", "data"),
+)
+def update_player_comparison(selected_ids, data):
+    portrait = _deserialize(data)
+    if not portrait or not selected_ids:
+        empty = charts.empty_figure("Select players from the dropdown above")
+        return empty, empty
+    radar = charts.player_metrics_radar(portrait, selected_ids)
+    bars  = charts.player_metrics_bars(portrait, selected_ids)
+    return radar, bars
 
 
 # ---------------------------------------------------------------------------

@@ -48,12 +48,14 @@ P2_MIN     = {"K_pct_pct": 55.0, "SwStr_pct_pct": 55.0}
 P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 
 # P3 — Ground Ball Craftsman: min thresholds + K% CEILING
-P3_MIN          = {"GB_pct_pct": 50.0}
-P3_HARD_CEILING = 50.0   # HardHit_allowed_pct must be AT OR BELOW
-P3_K_CEILING    = 60.0   # K_pct_pct must be AT OR BELOW
+# GB floor of 40 confirms ground-ball style.
+# HardHit_allowed_pct is already Statcast-inverted (higher = better suppressor);
+# it drives the score rather than a binary ceiling gate.
+P3_MIN      = {"GB_pct_pct": 40.0}
+P3_K_CEILING = 65.0   # K_pct_pct must be AT OR BELOW — GB craftsmen are not K pitchers
 
 # P4 — Stuff to Contact: min thresholds + K% CEILING
-P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pct": 45.0}
+P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pct": 38.0}
 P4_K_CEILING = 65.0      # K_pct_pct must be AT OR BELOW
 
 # Platoon vulnerability threshold (raw wOBA difference, not percentile)
@@ -130,11 +132,11 @@ def _below_ceiling(
 
 def _score_p1(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "stuff_composite_pct": 0.30,  # pre-computed: (velo + spin + spin_eff) blend
-        "K_pct_pct":           0.25,
-        "SwStr_pct_pct":       0.20,
-        "CSW_pct_pct":         0.15,
-        "HardHit_inv_pct":     0.10,  # (100 - HardHit_allowed_pct)
+        "stuff_composite_pct":  0.30,  # pre-computed: (velo + spin + spin_eff) blend
+        "K_pct_pct":            0.25,
+        "SwStr_pct_pct":        0.20,
+        "CSW_pct_pct":          0.15,
+        "HardHit_allowed_pct":  0.10,  # Statcast rank: higher = better at preventing hard contact
     }
     score, _ = _weighted_score(metrics, weights)
     return score
@@ -210,11 +212,11 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p3(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "GB_pct_pct":              0.35,
-        "HardHit_inv_pct":         0.25,  # (100 - HardHit_allowed_pct)
-        "Barrel_allowed_inv_pct":  0.20,  # (100 - Barrel_allowed_pct)
-        "BB_pitch_inv_pct":        0.10,  # (100 - BB_pct_pitch)
-        "K_inv_pct":               0.10,  # (100 - K_pct_pct) — low K confirms GB type
+        "GB_pct_pct":          0.35,
+        "HardHit_allowed_pct": 0.25,  # Statcast rank: higher = better at preventing hard contact
+        "Barrel_allowed_pct":  0.20,  # Statcast rank: higher = better at preventing barrels
+        "BB_pct_pct":          0.10,  # (already inverted: higher = fewer walks)
+        "K_inv_pct":           0.10,  # (100 - K_pct_pct) — low K confirms GB type
     }
     score, _ = _weighted_score(metrics, weights)
     return score
@@ -222,14 +224,14 @@ def _score_p3(metrics: dict[str, float]) -> Optional[float]:
 
 def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
     """
-    Ground Ball Craftsman — GB% >= 50th, HardHit_allowed <= 50th, K% <= 60th.
-    """
-    # K% ceiling
-    if not _below_ceiling(metrics, "K_pct_pct", P3_K_CEILING):
-        return None
+    Ground Ball Craftsman — GB% >= 40th, K% <= 65th.
 
-    # Hard hit ceiling (suppressing hard contact is a requirement)
-    if not _below_ceiling(metrics, "HardHit_allowed_pct", P3_HARD_CEILING):
+    HardHit_allowed_pct is Statcast's already-inverted rank (higher = better at
+    preventing hard contact).  We use it directly in scoring rather than gating
+    on a ceiling — the scoring naturally rewards strong contact suppression.
+    """
+    # K% ceiling — ground-ball craftsmen are not high-strikeout pitchers
+    if not _below_ceiling(metrics, "K_pct_pct", P3_K_CEILING):
         return None
 
     passes, margin = _meets_thresholds(metrics, P3_MIN)
@@ -255,11 +257,11 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p4(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "avg_velo_pct":           0.25,
-        "GB_pct_pct":             0.25,
-        "HardHit_inv_pct":        0.25,  # (100 - HardHit_allowed_pct)
-        "K_pct_pct":              0.15,  # moderate — not a strikeout pitcher
-        "Barrel_allowed_inv_pct": 0.10,
+        "avg_velo_pct":        0.25,
+        "GB_pct_pct":          0.25,
+        "HardHit_allowed_pct": 0.25,  # Statcast rank: higher = better at preventing hard contact
+        "K_pct_pct":           0.15,  # moderate — not a strikeout pitcher
+        "Barrel_allowed_pct":  0.10,  # Statcast rank: higher = better at preventing barrels
     }
     score, _ = _weighted_score(metrics, weights)
     return score
@@ -371,15 +373,17 @@ def compute_command_profile(metrics: dict[str, float]) -> str:
     """
     Command profile: 'Elite' | 'Poor' | 'Average'.
 
-    Elite: BB_pct < 20th AND Zone_pct > 65th
-    Poor:  BB_pct > 65th
+    BB_pct_pct is INVERTED: higher = fewer walks = better command.
+
+    Elite: BB_pct_pct > 80th (very few walks) AND Zone_pct > 65th
+    Poor:  BB_pct_pct < 35th (lots of walks)
     """
     bb  = metrics.get("BB_pct_pct")
     zn  = metrics.get("Zone_pct_pct")
 
-    if bb is not None and bb < 20 and zn is not None and zn > 65:
+    if bb is not None and bb > 80 and zn is not None and zn > 65:
         return "Elite"
-    if bb is not None and bb > 65:
+    if bb is not None and bb < 35:
         return "Poor"
     return "Average"
 
@@ -510,14 +514,15 @@ def build_bullpen_profile(
         leverage_structure  — 'One-arm dominant' | 'Committee'
     """
     dimension_weights = {
-        "velocity":           {"velocity_pct":       1.0},
-        "attack_philosophy":  {"attack_pct":         1.0},
-        "damage_prevention":  {"HardHit_inv_pct": 0.50, "Barrel_inv_pct": 0.50},
-        "platoon_balance":    {"Platoon_bal_pct":    1.0},
-        "leverage_structure": {"LevWPA_conc_pct":   1.0},
+        "velocity":           {"avg_velo_pct":        1.0},
+        "attack_philosophy":  {"Zone_pct_pct":        1.0},
+        # HardHit_allowed_pct / Barrel_allowed_pct are Statcast ranks: higher = better suppressor
+        "damage_prevention":  {"HardHit_allowed_pct": 0.50, "Barrel_allowed_pct": 0.50},
+        "platoon_balance":    {"Platoon_bal_pct":      1.0},
+        "leverage_structure": {"LevWPA_conc_pct":      1.0},
         # out_mechanism scored separately (K vs GB comparison)
-        "K_out_mechanism":    {"K_pct_pct":          1.0},
-        "GB_out_mechanism":   {"GB_pct_pct":         1.0},
+        "K_out_mechanism":    {"K_pct_pct":            1.0},
+        "GB_out_mechanism":   {"GB_pct_pct":           1.0},
     }
 
     scores: dict[str, Optional[float]] = {}

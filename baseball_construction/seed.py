@@ -92,6 +92,7 @@ PITCHING_COL_MAP = {
     "key_mlbam":        "key_mlbam",
     "Name":             "name",
     "Age":              "age",
+    "G":                "g",
     "GS":               "gs",
     "BF":               "bf",
     "K_rate_pitch":     "k_rate",

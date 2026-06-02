@@ -77,13 +77,13 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
     },
 
     "A4": {
-        "name":      "Power Concentration",
+        "name":      "Lineup Power",
         "dimension": "offense",
         "weights": {
-            "WAR_concentration_pct": 0.35,  # top-2 WAR / total WAR
-            "wRCplus_spread_pct":    0.30,  # std dev of wRC+ across lineup
-            "ISO_spread_pct":        0.20,
-            "PA_concentration_pct":  0.15,
+            "TeamHR_pct":            0.30,  # team HR total rank vs all 30 teams
+            "TeamSLG_pct":           0.25,  # PA-weighted team SLG rank
+            "PowerContributors_pct": 0.25,  # fraction of PA from above-median-ISO batters
+            "TeamBarrel_pct":        0.20,  # PA-weighted team barrel rate rank
         },
     },
 
@@ -146,14 +146,20 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         },
     },
 
+    "C2": {
+        "name":      "Roster Continuity",
+        "dimension": "roster",
+        "weights": {
+            "CoreRetention_pct": 1.0,   # fraction of prior-year players retained
+        },
+    },
+
     "C3": {
         "name":      "Youth and Development",
         "dimension": "roster",
         "weights": {
-            "AvgAge_inv_pct":  0.30,   # low avg age (caller inverts)
-            "PreArb_share_pct":0.30,
-            "Turnover_pct":    0.20,
-            "Pipeline_pct":    0.20,
+            "AvgTenure_inv_pct":  0.50,  # PA-weighted avg MLB tenure, inverted (lower = more developmental)
+            "NewPlayerShare_pct": 0.50,  # share of players with <= 2 years in MLB
         },
     },
 
@@ -161,10 +167,8 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Veteran Experience",
         "dimension": "roster",
         "weights": {
-            "AvgAge_pct":          0.30,
-            "PostArb_share_pct":   0.30,
-            "CoreRetention_pct":   0.25,
-            "AvgTenure_pct":       0.15,
+            "AvgTenure_pct":   0.50,  # PA-weighted avg MLB tenure (higher = more experienced)
+            "VeteranShare_pct":0.50,  # share of players with >= 5 years in MLB
         },
     },
 }
@@ -173,7 +177,7 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
 DIMENSIONS: dict[str, list[str]] = {
     "offense": ["A1", "A2", "A3", "A4"],
     "pitching": ["B1", "B2", "B3", "B4"],
-    "roster":   ["C1", "C3", "C4"],
+    "roster":   ["C1", "C2", "C3", "C4"],
 }
 
 
@@ -217,6 +221,21 @@ def score_philosophy(
     return score, coverage
 
 
+def dimension_label(score: float | None) -> str:
+    """
+    Convert a 0–100 dimension score into a descriptive identity label.
+
+    Thresholds are calibrated to the multi-year historical pool so that
+    "Strong" means genuinely above the Statcast-era league average.
+    """
+    if score is None:  return "No Data"
+    if score >= 85:    return "Defining"
+    if score >= 70:    return "Strong"
+    if score >= 55:    return "Notable"
+    if score >= 35:    return "Moderate"
+    return "Low"
+
+
 def compute_all_philosophies(
     metrics: dict[str, float],
 ) -> dict[str, dict]:
@@ -231,6 +250,7 @@ def compute_all_philosophies(
         score       — 0–100 (None if no data)
         coverage    — 0.0–1.0 (fraction of weights populated)
         name        — philosophy label
+        label       — Defining | Strong | Notable | Moderate | Low | No Data
         dimension   — offense | pitching | roster
     """
     results = {}
@@ -240,12 +260,13 @@ def compute_all_philosophies(
             "score":     score,
             "coverage":  coverage,
             "name":      defn["name"],
+            "label":     dimension_label(score),
             "dimension": defn["dimension"],
         }
         if score is not None:
             log.debug(
-                "%s (%s): score=%.1f  coverage=%.0f%%",
-                code, defn["name"], score, coverage * 100,
+                "%s (%s): score=%.1f  coverage=%.0f%%  label=%s",
+                code, defn["name"], score, coverage * 100, results[code]["label"],
             )
         else:
             log.debug("%s (%s): no data", code, defn["name"])
