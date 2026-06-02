@@ -1075,9 +1075,18 @@ def _compute_turnover(statcast: pd.DataFrame, season: int) -> dict[str, float]:
     For each team, fraction of current-season hitters who were NOT on the
     team the prior season.  Requires prior-season Statcast parquet in cache.
 
+    Results are cached to data/processed/team_turnover_{season}.csv so
+    subsequent portrait builds skip the prior-year parquet load.
+
     Returns {team: turnover_rate} for all teams where prior-season data exists.
     """
     from ingest import PROCESSED_DIR
+    cache = PROCESSED_DIR / f"team_turnover_{season}.csv"
+    if cache.exists():
+        df = pd.read_csv(cache)
+        log.info("Loading team_turnover_%d from cache", season)
+        return dict(zip(df["team"], df["turnover_rate"]))
+
     raw_dir = PROCESSED_DIR.parent / "raw"
     prev_parquet = raw_dir / f"statcast_{season - 1}.parquet"
     if not prev_parquet.exists():
@@ -1100,6 +1109,10 @@ def _compute_turnover(statcast: pd.DataFrame, season: int) -> dict[str, float]:
             new_players = cur_ids - prev_ids
             rates[team] = len(new_players) / len(cur_ids)
 
+    # Persist so future builds skip the parquet load
+    pd.DataFrame({"team": list(rates), "turnover_rate": list(rates.values())}).to_csv(
+        cache, index=False
+    )
     log.info("Turnover computed — %d teams (season %d vs %d)", len(rates), season, season - 1)
     return rates
 

@@ -21,7 +21,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "modules"))
 
-from ingest import _bref_savant_batting_merge, _bref_savant_pitching_merge
+from ingest import _bref_savant_batting_merge, _bref_savant_pitching_merge, PROCESSED_DIR
 from database import (
     season_batting_seeded,
     season_pitching_seeded,
@@ -179,6 +179,45 @@ def seed_pitching(season: int) -> None:
     log.info("Pitching seed complete for %d", season)
 
 
+def seed_team_metrics(season: int) -> None:
+    """
+    Pre-populate team-level metric CSV caches for a season:
+      - team_turnover_{season}.csv   — roster turnover rate per team vs prior season
+      - def_runs_{season}.csv        — already handled by pull_def_runs (BRef)
+      - fielding_oaa_{season}.csv    — already handled by pull_fielding_oaa (Statcast)
+
+    Turnover requires the Statcast parquet for `season` AND `season-1` to exist.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "modules"))
+    from team_portrait import _compute_turnover, _all_team_hitter_ids
+
+    cache = PROCESSED_DIR / f"team_turnover_{season}.csv"
+    if cache.exists():
+        log.info("team_turnover_%d already cached — skipping", season)
+        return
+
+    raw_dir = PROCESSED_DIR.parent / "raw"
+    parquet  = raw_dir / f"statcast_{season}.parquet"
+    prev_parquet = raw_dir / f"statcast_{season - 1}.parquet"
+
+    if not parquet.exists():
+        log.warning("No Statcast parquet for %d — cannot compute turnover", season)
+        return
+    if not prev_parquet.exists():
+        log.info("No prior-season Statcast parquet for %d — skipping turnover", season - 1)
+        return
+
+    log.info("Computing roster turnover for %d vs %d...", season, season - 1)
+    sc = pd.read_parquet(
+        str(parquet),
+        columns=["batter", "home_team", "away_team", "inning_topbot"],
+    )
+    # _compute_turnover will write the cache itself
+    rates = _compute_turnover(sc, season)
+    log.info("Turnover seeded for %d — %d teams", season, len(rates))
+
+
 def seed_season(season: int, force: bool = False) -> None:
     log.info("=== Seeding season %d ===", season)
 
@@ -209,7 +248,15 @@ if __name__ == "__main__":
         "--force", action="store_true",
         help="Re-seed even if data already exists",
     )
+    parser.add_argument(
+        "--seed-team-metrics", action="store_true",
+        help="Pre-populate team-level metric caches (turnover) instead of player stats",
+    )
     args = parser.parse_args()
 
-    for season in args.season:
-        seed_season(season, force=args.force)
+    if args.seed_team_metrics:
+        for season in args.season:
+            seed_team_metrics(season)
+    else:
+        for season in args.season:
+            seed_season(season, force=args.force)
