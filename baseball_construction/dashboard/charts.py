@@ -55,6 +55,8 @@ COLORS = {
     "P2": "#8b5cf6",
     "P3": "#10b981",
     "P4": "#f59e0b",
+    "P5": "#06b6d4",   # cyan — Power Sinker (distinct from P3 green and P4 amber)
+    "P6": "#ec4899",   # pink — Finesse Control (command/location-based)
     "Unclassified": "#6b7280",
 }
 
@@ -749,7 +751,8 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
 
     CODE_NAMES = {
         "P1": "Power Ace", "P2": "Craft Strikeout",
-        "P3": "GB Craftsman", "P4": "Stuff-to-Contact", "U0": "Unclassified",
+        "P3": "GB Craftsman", "P4": "Stuff-to-Contact",
+        "P5": "Power Sinker", "P6": "Finesse Control", "U0": "Unclassified",
     }
 
     names, ages, bfs, wars, archetypes, commands = [], [], [], [], [], []

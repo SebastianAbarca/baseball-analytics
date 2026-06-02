@@ -12,8 +12,9 @@ Velocity routing rules (applied before scoring):
 Classification:
   P1 — Power Ace          (high stuff + miss bats)
   P2 — Craft Strikeout    (miss bats through deception, not velocity)
-  P3 — Ground Ball Craftsman (weak contact, command-driven)
+  P3 — Ground Ball Craftsman (weak contact, command-driven, low K)
   P4 — Stuff to Contact   (above-avg stuff → ground balls, not Ks)
+  P5 — Power Sinker       (elite GB% + above-avg velo + above-avg K; Framber Valdez type)
 
 Bullpen:
   Collective profile scored 0–100 on 7 dimensions vs league bullpens.
@@ -41,22 +42,41 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # P1 — Power Ace: minimum thresholds
-P1_MIN = {"avg_velo_pct": 60.0, "K_pct_pct": 65.0, "SwStr_pct_pct": 65.0}
+# SwStr is used in scoring but NOT a hard gate — K% already confirms miss-bat ability.
+# K gate lowered to 58 (above-average) to capture developing power pitchers with above-avg velo;
+# the scoring function still heavily rewards elite K% and SwStr, keeping true aces at the top.
+P1_MIN = {"avg_velo_pct": 60.0, "K_pct_pct": 58.0}
 
 # P2 — Craft Strikeout: min thresholds + velocity CEILING
-P2_MIN     = {"K_pct_pct": 55.0, "SwStr_pct_pct": 55.0}
+# SwStr_pct is scored but NOT a hard gate (it can be missing from DB).
+# K_pct is the primary gate; if K% is very high (>=65) SwStr absence is excused.
+P2_MIN          = {"K_pct_pct": 55.0}   # SwStr removed from hard gate
+P2_SWSTR_MIN    = 55.0                   # soft floor: if present, must be >= this OR K% >= 65
 P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 
 # P3 — Ground Ball Craftsman: min thresholds + K% CEILING
-# GB floor of 40 confirms ground-ball style.
+# GB floor lowered to 35 to capture command-based contact managers (finesse types)
+# who have below-average-but-not-extreme ground-ball rates.
 # HardHit_allowed_pct is already Statcast-inverted (higher = better suppressor);
 # it drives the score rather than a binary ceiling gate.
-P3_MIN      = {"GB_pct_pct": 40.0}
+P3_MIN      = {"GB_pct_pct": 35.0}
 P3_K_CEILING = 65.0   # K_pct_pct must be AT OR BELOW — GB craftsmen are not K pitchers
 
 # P4 — Stuff to Contact: min thresholds + K% CEILING
 P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pct": 38.0}
 P4_K_CEILING = 65.0      # K_pct_pct must be AT OR BELOW
+
+# P5 — Power Sinker: elite GB% + above-avg velo + above-avg K (Framber Valdez type)
+# These pitchers get Ks alongside extreme ground balls — not a "craftsman" per se.
+# Higher GB floor (65th) distinguishes from P4; no K ceiling unlike P3/P4.
+P5_MIN = {"avg_velo_pct": 55.0, "GB_pct_pct": 65.0, "K_pct_pct": 55.0}
+
+# P6 — Finesse Control: exceptional command + low K + below-avg velo (Kyle Hendricks type)
+# Pitchers who survive through precision location, not stuff or groundballs.
+# The single hard gate is command (BB_pct_pct is inverted: higher = fewer walks = better).
+P6_MIN         = {"BB_pct_pct": 70.0}   # must have excellent command (top-30% low-walk rate)
+P6_K_CEILING   = 50.0                   # below-average K rate (not a strikeout pitcher)
+P6_VELO_CEILING = 60.0                  # below-average velocity (not a power pitcher)
 
 # Platoon vulnerability threshold (raw wOBA difference, not percentile)
 PLATOON_VULN_THRESHOLD = 0.040
@@ -182,16 +202,24 @@ def _score_p2(metrics: dict[str, float]) -> Optional[float]:
 
 def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
     """
-    Craft Strikeout — meets K%/SwStr% thresholds AND velo <= 65th pct.
-    High-velo pitchers (>65th) route to P1 instead.
+    Craft Strikeout — K% >= 55th AND velo <= 65th.
+    SwStr% is scored but not a hard gate (can be missing from DB).
+    If SwStr% IS present, it must be >= 55 UNLESS K% >= 65 (high-K excuses low/missing SwStr).
     """
     # Velocity ceiling check
     if not _below_ceiling(metrics, "avg_velo_pct", P2_VELO_CEILING):
         return None
 
+    # K% hard gate
     passes, margin = _meets_thresholds(metrics, P2_MIN)
     if not passes:
         return None
+
+    # Soft SwStr check: if present, must be >= 55 unless K% >= 65
+    swstr_val = metrics.get("SwStr_pct_pct")
+    if swstr_val is not None and not (isinstance(swstr_val, float) and np.isnan(swstr_val)):
+        if swstr_val < P2_SWSTR_MIN and metrics.get("K_pct_pct", 0) < 65.0:
+            return None  # Both SwStr and K% are below threshold
 
     score = _score_p2(metrics)
     if score is None:
@@ -292,6 +320,91 @@ def classify_p4(metrics: dict[str, float]) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# P5 — Power Sinker
+# ---------------------------------------------------------------------------
+
+def _score_p5(metrics: dict[str, float]) -> Optional[float]:
+    weights = {
+        "GB_pct_pct":          0.35,  # defining trait — elite ground-ball rate
+        "avg_velo_pct":        0.25,  # velocity powers the sinker
+        "K_pct_pct":           0.20,  # above-avg Ks distinguish from P3 craftsmen
+        "HardHit_allowed_pct": 0.20,  # quality of contact suppressed
+    }
+    score, _ = _weighted_score(metrics, weights)
+    return score
+
+
+def classify_p5(metrics: dict[str, float]) -> Optional[dict]:
+    """
+    Power Sinker — elite GB% (>=65th) + above-avg velo + above-avg K%.
+    Captures sinker-ballers like Framber Valdez who get Ks alongside
+    extreme ground balls.  No K% ceiling (unlike P3/P4).
+    """
+    passes, margin = _meets_thresholds(metrics, P5_MIN)
+    if not passes:
+        return None
+
+    score = _score_p5(metrics)
+    if score is None:
+        return None
+
+    return {
+        "type":               "Power Sinker",
+        "type_code":          "P5",
+        "score":              score,
+        "raw_confidence":     margin,
+        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+    }
+
+
+# ---------------------------------------------------------------------------
+# P6 — Finesse Control
+# ---------------------------------------------------------------------------
+
+def _score_p6(metrics: dict[str, float]) -> Optional[float]:
+    weights = {
+        "BB_pct_pct":          0.40,  # command is the defining trait (inverted: high = few walks)
+        "Zone_pct_pct":        0.25,  # zone rate as secondary command signal
+        "HardHit_allowed_pct": 0.20,  # suppresses hard contact without Ks
+        "K_inv_pct":           0.15,  # low K confirms the style (K_inv = 100 - K_pct_pct)
+    }
+    score, _ = _weighted_score(metrics, weights)
+    return score
+
+
+def classify_p6(metrics: dict[str, float]) -> Optional[dict]:
+    """
+    Finesse Control — exceptional command (BB_pct_pct >= 70) + low K + below-avg velo.
+    Captures Kyle Hendricks / Tommy Milone types who survive through precision location.
+    Not eligible if K or velo are above-average (those pitchers fit P1–P5 better).
+    """
+    # Velocity ceiling — power pitchers are not P6
+    if not _below_ceiling(metrics, "avg_velo_pct", P6_VELO_CEILING):
+        return None
+
+    # K ceiling — strikeout pitchers are not P6
+    if not _below_ceiling(metrics, "K_pct_pct", P6_K_CEILING):
+        return None
+
+    # Command hard gate — must have truly excellent walk avoidance
+    passes, margin = _meets_thresholds(metrics, P6_MIN)
+    if not passes:
+        return None
+
+    score = _score_p6(metrics)
+    if score is None:
+        return None
+
+    return {
+        "type":               "Finesse Control",
+        "type_code":          "P6",
+        "score":              score,
+        "raw_confidence":     margin,
+        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Primary classification
 # ---------------------------------------------------------------------------
 
@@ -327,6 +440,14 @@ def classify_starter(metrics: dict[str, float]) -> dict:
     p4 = classify_p4(metrics)
     if p4:
         candidates["P4"] = p4
+
+    p5 = classify_p5(metrics)
+    if p5:
+        candidates["P5"] = p5
+
+    p6 = classify_p6(metrics)
+    if p6:
+        candidates["P6"] = p6
 
     if not candidates:
         return {
@@ -374,16 +495,22 @@ def compute_command_profile(metrics: dict[str, float]) -> str:
     Command profile: 'Elite' | 'Poor' | 'Average'.
 
     BB_pct_pct is INVERTED: higher = fewer walks = better command.
+    Zone_pct_pct used as a secondary signal but NOT required for elite —
+    power pitchers (Cole, Verlander) have low BB% without high zone%.
 
-    Elite: BB_pct_pct > 80th (very few walks) AND Zone_pct > 65th
-    Poor:  BB_pct_pct < 35th (lots of walks)
+    Elite: BB_pct_pct ≥ 80th  (very few walks — top 20% historically)
+    Good:  BB_pct_pct ≥ 65th  (above-average command)
+    Poor:  BB_pct_pct < 30th  (lots of walks)
     """
-    bb  = metrics.get("BB_pct_pct")
-    zn  = metrics.get("Zone_pct_pct")
+    bb = metrics.get("BB_pct_pct")
 
-    if bb is not None and bb > 80 and zn is not None and zn > 65:
+    if bb is None:
+        return "Average"
+    if bb >= 80:
         return "Elite"
-    if bb is not None and bb < 35:
+    if bb >= 65:
+        return "Good"
+    if bb < 30:
         return "Poor"
     return "Average"
 

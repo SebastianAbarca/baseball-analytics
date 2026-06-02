@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dash import Input, Output, State, callback, no_update, MATCH, ctx
+from dash import Input, Output, State, callback, no_update, MATCH, ctx, clientside_callback
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
@@ -326,3 +326,40 @@ def populate_philosophy_breakdown(is_open, portrait_json, component_id):
         return no_update
     code = component_id["code"]
     return charts.philosophy_breakdown_card(portrait, code)
+
+
+# ---------------------------------------------------------------------------
+# Clientside callback — force Plotly repaint after portrait loads
+# Fixes a GPU-compositing bug where Plotly Table text doesn't paint on the
+# first render after transitioning from an empty figure to real data.
+# ---------------------------------------------------------------------------
+
+clientside_callback(
+    """
+    function(data, activeTab) {
+        // Fire multiple repaints to catch Plotly tables before and after
+        // they finish rendering into previously-hidden tab containers.
+        // Use Plotly.redraw() for table traces (resize() doesn't repaint text).
+        function repaint() {
+            window.dispatchEvent(new Event('resize'));
+            var graphs = document.querySelectorAll('.js-plotly-plot');
+            graphs.forEach(function(g) {
+                try {
+                    var d = g._fullData || g.data;
+                    if (d && d[0] && d[0].type === 'table') {
+                        Plotly.redraw(g);
+                    } else {
+                        Plotly.Plots.resize(g);
+                    }
+                } catch(e) {}
+            });
+        }
+        setTimeout(repaint, 200);
+        setTimeout(repaint, 700);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("status-banner", "id"),   # dummy stable output (id never changes)
+    Input("portrait-store", "data"),
+    Input("main-tabs", "active_tab"),
+)

@@ -740,7 +740,9 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
         )
         info = _get_player_info_map().get(int(player_id), {})
         profile["name"] = info.get("name")
-        profile["age"]  = info.get("age")
+        # Prefer DB age (BRef season-specific) over Chadwick today-computed age
+        db_age = row.get("age") or row.get("Age")
+        profile["age"]  = (int(db_age) if db_age is not None and not pd.isna(db_age) else None) or info.get("age")
         profile["pa"]   = int(row.get("PA") or row.get("pa") or 0)
         war_raw = row.get("WAR_bat")
         profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
@@ -867,7 +869,9 @@ def _classify_pitchers(
             # Prefer Chadwick name; fall back to DB name column if available
             db_name = row.get("name")
             profile["name"] = info.get("name") or (str(db_name).strip() if db_name else None)
-            profile["age"]  = info.get("age") or row.get("age")
+            # Prefer DB age (BRef season-specific) over Chadwick today-computed age
+            _db_age = row.get("age")
+            profile["age"]  = (int(_db_age) if _db_age is not None and not pd.isna(_db_age) else None) or info.get("age")
             profile["bf"]   = bf
             war_raw = row.get("WAR_pitch")
             profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
@@ -881,7 +885,7 @@ def _classify_pitchers(
             bullpen_arms.append({
                 "player_id": player_id,
                 "name":      info.get("name") or (str(db_name_rel).strip() if db_name_rel else None),
-                "age":       info.get("age") or row.get("age"),
+                "age":       (int(row.get("age")) if row.get("age") is not None and not pd.isna(row.get("age")) else None) or info.get("age"),
                 "bf":        bf,
                 "war":       float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None,
                 "metrics_pct": {
