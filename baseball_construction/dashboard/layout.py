@@ -662,11 +662,120 @@ def compare_tab() -> dbc.Tab:
     ])
 
 
+def scout_tab() -> dbc.Tab:
+    """
+    Player profile search — find players matching archetype + modifier criteria
+    across all seeded seasons. Independent of any team portrait.
+    """
+    ARCHETYPES = ["Any", "Complete Hitter", "Three True Outcomes",
+                  "Contact", "Balanced", "Power"]
+
+    MODIFIERS = [
+        "Aggressive", "Gap Hitter", "Plus Power", "Table Setter",
+        "Elite Discipline", "Disciplined", "Free Swinger",
+        "Plus Contact", "Weak Contact",
+        "Lucky", "Unlucky",
+        "Elite", "Fast", "Slow",
+        "Disruptive", "Chaotic",
+    ]
+
+    return dbc.Tab(label="Scout", tab_id="tab-scout", children=[
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Player Profile Search", className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Archetype", className="text-secondary small mb-1"),
+                        dbc.Select(
+                            id="scout-archetype",
+                            options=[{"label": a, "value": a} for a in ARCHETYPES],
+                            value="Any",
+                        ),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label("Season range", className="text-secondary small mb-1"),
+                        dbc.Row([
+                            dbc.Col(dbc.Select(
+                                id="scout-season-min",
+                                options=[{"label": str(s), "value": s} for s in SEASONS],
+                                value=2021,
+                            ), width=6),
+                            dbc.Col(dbc.Select(
+                                id="scout-season-max",
+                                options=[{"label": str(s), "value": s} for s in SEASONS],
+                                value=2026,
+                            ), width=6),
+                        ], className="g-1"),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label("Min PA", className="text-secondary small mb-1"),
+                        dbc.Input(id="scout-min-pa", type="number",
+                                  value=200, min=50, max=700, step=50,
+                                  style={"backgroundColor": "#1f2937",
+                                         "color": "#f9fafb", "border": "1px solid #374151"}),
+                    ], md=1),
+                    dbc.Col([
+                        html.Label("Show", className="text-secondary small mb-1"),
+                        dbc.Select(
+                            id="scout-mode",
+                            options=[
+                                {"label": "Most recent season", "value": "recent"},
+                                {"label": "All seasons",        "value": "all"},
+                                {"label": "Best season (xwOBA)", "value": "best"},
+                            ],
+                            value="recent",
+                        ),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label(" ", className="text-secondary small mb-1 d-block"),
+                        dbc.Button("Search", id="scout-btn", color="primary",
+                                   className="w-100"),
+                    ], md=1),
+                ], className="mb-3 align-items-end"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Modifiers (must have ALL selected)",
+                                   className="text-secondary small mb-1"),
+                        dcc.Dropdown(
+                            id="scout-modifiers",
+                            options=[{"label": m, "value": m} for m in MODIFIERS],
+                            value=[],
+                            multi=True,
+                            placeholder="Any modifiers…",
+                            style={"backgroundColor": "#1f2937", "color": "#111827"},
+                        ),
+                    ]),
+                ], className="mb-3"),
+                html.Div(id="scout-status", className="mb-2"),
+            ], style={"padding": "12px"}),
+        ], style=CARD_STYLE, className="mb-3"),
+
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Results", className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                dcc.Graph(id="scout-results", config={"displayModeBar": False},
+                          style={"minHeight": "400px"}),
+                style={"padding": "8px"},
+            ),
+        ], style=CARD_STYLE),
+    ])
+
+
 def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
         active_tab="tab-overview",
-        children=[overview_tab(), offense_tab(), pitching_tab(), compare_tab()],
+        children=[overview_tab(), offense_tab(), pitching_tab(), compare_tab(), scout_tab()],
         className="mb-3",
     )
 
