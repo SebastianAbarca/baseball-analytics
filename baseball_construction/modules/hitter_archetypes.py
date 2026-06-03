@@ -4,8 +4,8 @@ hitter_archetypes.py — Classify hitters into primary archetypes with modifiers
 Classification order (most restrictive first):
   1. Complete Hitter  — all 5 thresholds met
   2. Three True Outcomes — all 3 thresholds met; if display_confidence < 30 → spectrum
-  3. Spectrum → Pure Contact (< 50) or Pure Power (> 50)
-     Grey zone 45–55 → low confidence flag
+  3. Spectrum → Contact (< 45) | Balanced (45–55) | Power (> 55)
+     Balanced confidence = proximity to 50 (closer = more balanced = higher)
 
 Modifiers (independent of primary type):
   • Free Swinger  — all 3 conditions met
@@ -32,11 +32,12 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 COMPLETE_THRESHOLDS: dict[str, float] = {
-    "wRC_plus":    75.0,
-    "OBP":         70.0,
-    "ISO":         70.0,
-    "BB_pct":      65.0,
-    "ZContact_pct":55.0,   # the Schwarber gate
+    "xwOBA":       70.0,   # overall expected offensive quality (replaces wRC+)
+    "OBP":         70.0,   # on-base ability
+    "ISO":         70.0,   # real power
+    "BB_pct":      65.0,   # plate discipline
+    "Barrel_pct":  65.0,   # consistent hard contact (replaces ZContact%)
+    "Contact_pct": 55.0,   # ability to make contact (the Schwarber gate)
 }
 
 TTO_THRESHOLDS: dict[str, float] = {
@@ -219,7 +220,10 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
 
 def classify_spectrum(metrics: dict[str, float]) -> dict:
     """
-    Types 3 (Pure Contact) and 4 (Pure Power) via spectrum score.
+    Types 3 (Contact), 4 (Balanced), and 5 (Power) via spectrum score.
+
+    Grey zone (45–55) → Balanced, with confidence = proximity to 50.
+    Outside grey zone → Contact (< 45) or Power (> 55).
 
     Always returns a result — this is the fallback classification.
     """
@@ -238,15 +242,31 @@ def classify_spectrum(metrics: dict[str, float]) -> dict:
 
     grey_zone = GREY_ZONE_LOW <= spectrum <= GREY_ZONE_HIGH
 
-    if spectrum < 50:
-        archetype = "Pure Contact"
+    if grey_zone:
+        # Balanced: confidence = proximity to 50 (closer = more balanced = higher confidence)
+        raw_conf  = 1.0 - abs(spectrum - 50.0) / (GREY_ZONE_HIGH - 50.0)
+        disp_conf = display_confidence(raw_conf, ceiling=SPECTRUM_CONFIDENCE_CEILING)
+        return {
+            "type":               "Balanced",
+            "type_code":          "T4",
+            "raw_confidence":     raw_conf,
+            "display_confidence": disp_conf,
+            "spectrum_score":     spectrum,
+            "grey_zone":          True,
+            "margins":            {},
+        }
+
+    if spectrum < GREY_ZONE_LOW:
+        archetype = "Contact"
         type_code = "T3"
     else:
-        archetype = "Pure Power"
-        type_code = "T4"
+        archetype = "Power"
+        type_code = "T5"
 
-    # Confidence = distance from the 50-point boundary
-    raw_conf  = abs(spectrum - 50.0) / 50.0
+    # Confidence = distance from the grey zone boundary
+    boundary = GREY_ZONE_LOW if spectrum < GREY_ZONE_LOW else GREY_ZONE_HIGH
+    raw_conf  = abs(spectrum - boundary) / (50.0 - (GREY_ZONE_HIGH - 50.0))
+    raw_conf  = min(raw_conf, 1.0)
     disp_conf = display_confidence(raw_conf, ceiling=SPECTRUM_CONFIDENCE_CEILING)
 
     return {
@@ -255,7 +275,7 @@ def classify_spectrum(metrics: dict[str, float]) -> dict:
         "raw_confidence":     raw_conf,
         "display_confidence": disp_conf,
         "spectrum_score":     spectrum,
-        "grey_zone":          grey_zone,
+        "grey_zone":          False,
         "margins":            {},
     }
 

@@ -47,8 +47,9 @@ COLORS = {
     # Archetype colors
     "Complete Hitter":      "#6366f1",
     "Three True Outcomes":  "#ef4444",
-    "Pure Power":           "#f97316",
-    "Pure Contact":         "#22c55e",
+    "Power":                "#f97316",
+    "Contact":              "#22c55e",
+    "Balanced":             "#06b6d4",   # cyan — no strong lean, modifiers define identity
     "Undetermined":         "#6b7280",
     # Pitcher type colors
     "P1": "#ef4444",
