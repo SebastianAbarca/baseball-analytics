@@ -1631,12 +1631,21 @@ def build_team_portrait(
             HP_Y - team_bip["hc_y"].astype(float),
         ))
         n_bip = len(team_bip)
-        rh_mask = (team_bip.get("stand", pd.Series("R", index=team_bip.index)) == "R")
-        lh_mask = ~rh_mask
-        true_pull_mask = (rh_mask & (team_bip["_angle"] >  50)) | (lh_mask & (team_bip["_angle"] < -50))
-        true_oppo_mask = (rh_mask & (team_bip["_angle"] < -50)) | (lh_mask & (team_bip["_angle"] >  50))
-        gap_mask    = team_bip["_angle"].abs().between(20, 50)
-        center_mask = team_bip["_angle"].abs() < 20
+        rh = (team_bip.get("stand", pd.Series("R", index=team_bip.index)) == "R")
+        lh = ~rh
+        a  = team_bip["_angle"]
+
+        # 5 field-location zones — Pull/Oppo flip by handedness,
+        # LC Gap / Center / RC Gap are absolute field locations.
+        # Boundary: 45° separates extreme pull/oppo from the gap zones.
+        pull_mask   = (rh & (a >  45)) | (lh & (a < -45))   # pull side (RF for RHH, LF for LHH)
+        rc_gap_mask = a.between(20, 45)                        # right-center gap (absolute)
+        center_mask = a.abs() < 20                             # up the middle
+        lc_gap_mask = a.between(-45, -20)                      # left-center gap (absolute)
+        oppo_mask   = (rh & (a < -45)) | (lh & (a >  45))   # oppo side (LF for RHH, RF for LHH)
+
+        def _zone_pct(mask):
+            return float(mask.sum() / n_bip) if n_bip else 0.0
 
         # League-wide directional averages (all batters this season)
         lg_bip = statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()].copy()
@@ -1648,12 +1657,14 @@ def build_team_portrait(
             ))
             lg_rh = (lg_bip.get("stand", pd.Series("R", index=lg_bip.index)) == "R")
             lg_lh = ~lg_rh
-            lg_pull   = float(((lg_rh & (lg_bip["_angle"] >  50)) | (lg_lh & (lg_bip["_angle"] < -50))).sum() / lg_n)
-            lg_gap    = float(lg_bip["_angle"].abs().between(20, 50).sum() / lg_n)
-            lg_center = float((lg_bip["_angle"].abs() < 20).sum() / lg_n)
-            lg_oppo   = float(((lg_rh & (lg_bip["_angle"] < -50)) | (lg_lh & (lg_bip["_angle"] >  50))).sum() / lg_n)
+            la    = lg_bip["_angle"]
+            lg_pull   = float(((lg_rh & (la >  45)) | (lg_lh & (la < -45))).sum() / lg_n)
+            lg_rc_gap = float(la.between(20, 45).sum() / lg_n)
+            lg_center = float((la.abs() < 20).sum() / lg_n)
+            lg_lc_gap = float(la.between(-45, -20).sum() / lg_n)
+            lg_oppo   = float(((lg_rh & (la < -45)) | (lg_lh & (la >  45))).sum() / lg_n)
         else:
-            lg_pull = lg_gap = lg_center = lg_oppo = 0.25
+            lg_pull = lg_rc_gap = lg_center = lg_lc_gap = lg_oppo = 0.20
 
         hr_n     = int((team_bip["_bucket"] == "hr").sum())
         double_n = int((team_bip["_bucket"] == "double").sum())
@@ -1668,14 +1679,16 @@ def build_team_portrait(
             "hc_y":       [float(y) for y in team_bip["hc_y"].tolist()[:5000]],
             "event_type": team_bip["_bucket"].tolist()[:5000],
             "stand":      (team_bip["stand"].tolist()[:5000] if "stand" in team_bip.columns else []),
-            "pull_pct":   float(true_pull_mask.sum() / n_bip) if n_bip else 0,
-            "gap_pct":    float(gap_mask.sum()        / n_bip) if n_bip else 0,
-            "center_pct": float(center_mask.sum()     / n_bip) if n_bip else 0,
-            "oppo_pct":   float(true_oppo_mask.sum()  / n_bip) if n_bip else 0,
-            "lg_pull_pct":   lg_pull,
-            "lg_gap_pct":    lg_gap,
-            "lg_center_pct": lg_center,
-            "lg_oppo_pct":   lg_oppo,
+            "pull_pct":    _zone_pct(pull_mask),
+            "rc_gap_pct":  _zone_pct(rc_gap_mask),
+            "center_pct":  _zone_pct(center_mask),
+            "lc_gap_pct":  _zone_pct(lc_gap_mask),
+            "oppo_pct":    _zone_pct(oppo_mask),
+            "lg_pull_pct":    lg_pull,
+            "lg_rc_gap_pct":  lg_rc_gap,
+            "lg_center_pct":  lg_center,
+            "lg_lc_gap_pct":  lg_lc_gap,
+            "lg_oppo_pct":    lg_oppo,
             "hr_count":     hr_n,
             "xbh_count":    xbh_n,
             "double_count": double_n,

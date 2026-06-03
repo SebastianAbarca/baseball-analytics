@@ -1489,10 +1489,18 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         hoverinfo="skip", showlegend=False,
     ), row=1, col=1)
 
-    # ── Directional split bars ────────────────────────────────────────────────
-    dirs      = ["Pull", "Gap", "Center", "Oppo"]
-    team_vals = [spray.get(f"{d.lower()}_pct", 0) * 100 for d in dirs]
-    lg_vals   = [spray.get(f"lg_{d.lower()}_pct", 0) * 100 for d in dirs]
+    # ── Directional split bars (5 field-location zones) ──────────────────────
+    # Pull/Oppo are handedness-aware; LC Gap, Center, RC Gap are absolute field locations.
+    DIRS = [
+        ("Pull",    "pull"),
+        ("RC Gap",  "rc_gap"),
+        ("Center",  "center"),
+        ("LC Gap",  "lc_gap"),
+        ("Oppo",    "oppo"),
+    ]
+    dirs      = [label for label, _ in DIRS]
+    team_vals = [spray.get(f"{key}_pct", 0) * 100 for _, key in DIRS]
+    lg_vals   = [spray.get(f"lg_{key}_pct", 0) * 100 for _, key in DIRS]
 
     fig.add_trace(go.Bar(
         x=dirs, y=team_vals, name="Team",
