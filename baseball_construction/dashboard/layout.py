@@ -182,6 +182,221 @@ def _card(title: str, graph_id: str, height: int = 380) -> dbc.Card:
     ], style=CARD_STYLE, className="mb-3")
 
 
+def _archetype_guide_card() -> dbc.Card:
+    """
+    Static reference card — archetype definitions + modifier explanations.
+    No callbacks needed; content never changes with portrait load.
+    """
+    # ── Primary archetypes ────────────────────────────────────────────────────
+    ARCHETYPES = [
+        {
+            "code": "T1", "color": "#6366f1", "name": "Complete Hitter",
+            "desc": (
+                "Excels across every offensive dimension — on-base ability, power, patience, "
+                "and contact quality. The rarest archetype (~2% of regulars), reserved for "
+                "players who genuinely do everything well."
+            ),
+            "gates": [
+                "xwOBA ≥ 70th pct — overall expected offensive quality",
+                "OBP ≥ 70th pct — elite on-base ability",
+                "ISO ≥ 70th pct — real power threat",
+                "BB% ≥ 65th pct — draws walks consistently",
+                "Barrel% ≥ 65th pct — makes elite contact quality",
+                "Contact% ≥ 55th pct — can actually put the ball in play",
+            ],
+            "examples": "Juan Soto, Freddie Freeman, Yordan Álvarez, Kyle Tucker 2023",
+        },
+        {
+            "code": "T2", "color": "#ef4444", "name": "Three True Outcomes",
+            "desc": (
+                "Defined by strikeouts, walks, and home runs. Rarely puts the ball in play, "
+                "but commands the strike zone and makes pitchers work. High-variance, "
+                "high-upside approach that swings the stat line dramatically."
+            ),
+            "gates": [
+                "K% ≥ 55th pct — above-average strikeout rate",
+                "BB% ≥ 65th pct — clearly above-average walk rate",
+                "ISO ≥ 65th pct — clearly above-average power",
+            ],
+            "examples": "Joey Gallo, Kyle Schwarber, Aaron Judge, Shohei Ohtani",
+        },
+        {
+            "code": "T3", "color": "#22c55e", "name": "Contact",
+            "desc": (
+                "Makes contact as the primary offensive weapon. Leans toward putting the "
+                "ball in play, reaching base via singles, and applying constant pressure "
+                "through volume and bat control. Pairs naturally with speed."
+            ),
+            "gates": ["Spectrum score < 45 (contact-leaning batted ball profile)"],
+            "examples": "Luis Arraez, Alex Bregman, Jeff McNeil, Nico Hoerner",
+        },
+        {
+            "code": "T4", "color": "#06b6d4", "name": "Balanced",
+            "desc": (
+                "No strong lean toward contact or power — sits in the middle of the spectrum. "
+                "Modifiers do the heavy lifting here: look at speed tier, discipline grade, "
+                "and baserunning tags to understand this hitter's real identity."
+            ),
+            "gates": ["Spectrum score 45–55 (no strong directional lean)"],
+            "examples": "José Abreu, Gleyber Torres, Ketel Marte (select seasons)",
+        },
+        {
+            "code": "T5", "color": "#f97316", "name": "Power",
+            "desc": (
+                "Swings for damage. Extra-base hits are the primary contribution — may carry "
+                "a higher strikeout rate but produces serious run value when they connect. "
+                "Barrel and hard-hit rates are the identity markers here."
+            ),
+            "gates": ["Spectrum score > 55 (power-leaning batted ball profile)"],
+            "examples": "Chas McCormick, Teoscar Hernández, Spencer Torkelson",
+        },
+    ]
+
+    # ── Modifiers ────────────────────────────────────────────────────────────
+    MODIFIERS = [
+        {
+            "tag": "Elite / Fast / Slow", "color": "#a78bfa",
+            "desc": (
+                "Sprint speed tier based on raw ft/sec from Statcast. "
+                "Elite ≥ 29.0 ft/s (top ~10%) — Fast ≥ 28.0 ft/s (top ~35%) — "
+                "Average 26.5–28.0 (no tag) — Slow < 26.5 ft/s (bottom ~25%)."
+            ),
+            "examples": "Elite: Bobby Witt Jr., Elly De La Cruz · Fast: Tommy Edman, Mauricio Dubón",
+        },
+        {
+            "tag": "Lucky / Unlucky", "color": "#fbbf24",
+            "desc": (
+                "Compares actual wOBA to expected wOBA (xwOBA) via the luck delta. "
+                "Lucky = actual results significantly beat expected contact quality — "
+                "potential regression risk. Unlucky = hitting the ball better than "
+                "stats show — positive regression candidate."
+            ),
+            "examples": "Lucky: Acuña 2023, Torres 2023 · Unlucky: Semien 2023, Olson 2023, Carroll 2023",
+        },
+        {
+            "tag": "Plus Contact / Weak Contact", "color": "#34d399",
+            "desc": (
+                "Batted ball quality tier — composite of Barrel% and Hard Hit% percentile ranks. "
+                "Plus Contact = top 30% of Statcast-tracked hitters. "
+                "Weak Contact = bottom 30%. Requires sufficient batted ball sample."
+            ),
+            "examples": "Plus Contact: Yordan Álvarez, Juan Soto · Weak Contact: low-exit-velo slap hitters",
+        },
+        {
+            "tag": "Elite Discipline / Disciplined / Hacker", "color": "#60a5fa",
+            "desc": (
+                "Plate approach grade — weighted composite of walk rate (60%) and "
+                "inverted chase rate (40%). Elite Discipline = top 25%, "
+                "Disciplined = top 45%, Hacker = bottom 35% of the composite."
+            ),
+            "examples": "Elite Discipline: Juan Soto, Bryce Harper · Hacker: Lane Thomas, Jazz Chisholm Jr.",
+        },
+        {
+            "tag": "Table Setter", "color": "#10b981",
+            "desc": (
+                "Leadoff-type modifier: above-average on-base ability (OBP ≥ 65th pct) + "
+                "Fast or Elite speed + limited power output (ISO ≤ 45th pct). "
+                "These players live to get on base and create chaos on the basepaths."
+            ),
+            "examples": "Steven Kwan, Nico Hoerner, Myles Straw, Tommy Edman, Ha-Seong Kim",
+        },
+        {
+            "tag": "Aggressive", "color": "#fb923c",
+            "desc": (
+                "Attack-early approach — high first-pitch swing rate (FPS ≥ 65th pct) "
+                "AND high chase rate (OSwing ≥ 60th pct). These players initiate contact "
+                "regardless of count. Good hitters can still carry this tag."
+            ),
+            "examples": "Kyle Tucker, Freddie Freeman, Bryce Harper, George Springer",
+        },
+        {
+            "tag": "Disruptive / Chaotic", "color": "#f472b6",
+            "desc": (
+                "Baserunning personality. Disruptive = high-efficiency, frequent base stealers "
+                "who create net positive run value (sb% > 72%, positive efficiency score). "
+                "Chaotic = frequent but inefficient — high attempt rate, negative run value."
+            ),
+            "examples": "Disruptive: Acuña 2023, Corbin Carroll · Chaotic: Jeremy Peña 2023",
+        },
+    ]
+
+    def _arch_item(a: dict) -> dbc.AccordionItem:
+        badge = dbc.Badge(a["code"], pill=True,
+                          style={"backgroundColor": a["color"], "fontSize": "0.65rem",
+                                 "color": "#fff", "fontWeight": "700"})
+        return dbc.AccordionItem(
+            html.Div([
+                html.P(a["desc"], className="text-white mb-2", style={"fontSize": "0.84rem"}),
+                html.P("Classification gates:", className="mb-1",
+                       style={"fontSize": "0.72rem", "color": "#6b7280", "fontWeight": "600",
+                              "textTransform": "uppercase", "letterSpacing": "0.04em"}),
+                html.Ul([
+                    html.Li(g, style={"fontSize": "0.8rem", "color": "#9ca3af", "marginBottom": "2px"})
+                    for g in a["gates"]
+                ], className="mb-2 ps-3"),
+                html.Small(f"📋  {a['examples']}", className="fst-italic",
+                           style={"color": "#6ee7b7", "fontSize": "0.78rem"}),
+            ], style={"padding": "4px 2px"}),
+            title=html.Span([badge, html.Span(f"  {a['name']}", className="ms-2 fw-semibold",
+                                              style={"color": "#f3f4f6"})]),
+        )
+
+    def _mod_item(m: dict) -> dbc.AccordionItem:
+        badge = dbc.Badge("MOD", pill=True,
+                          style={"backgroundColor": m["color"], "fontSize": "0.6rem",
+                                 "color": "#fff", "fontWeight": "700"})
+        return dbc.AccordionItem(
+            html.Div([
+                html.P(m["desc"], className="text-white mb-2", style={"fontSize": "0.84rem"}),
+                html.Small(f"📋  {m['examples']}", className="fst-italic",
+                           style={"color": "#6ee7b7", "fontSize": "0.78rem"}),
+            ], style={"padding": "4px 2px"}),
+            title=html.Span([badge, html.Span(f"  {m['tag']}", className="ms-2 fw-semibold",
+                                              style={"color": "#f3f4f6"})]),
+        )
+
+    _acc_style = {
+        "backgroundColor": "transparent",
+        "--bs-accordion-bg": "#1f2937",
+        "--bs-accordion-color": "#f3f4f6",
+        "--bs-accordion-border-color": "#374151",
+        "--bs-accordion-btn-color": "#f3f4f6",
+        "--bs-accordion-btn-bg": "#1a2233",
+        "--bs-accordion-active-bg": "#1a2233",
+        "--bs-accordion-active-color": "#f3f4f6",
+    }
+
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Span([
+                html.Small("Archetype Guide", className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                html.Small(" — expand any row to see gates, examples, and definitions",
+                           style={"fontSize": "0.65rem", "color": "#6b7280"}),
+            ]),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody([
+            html.P("Primary Archetypes", className="mb-2",
+                   style={"fontSize": "0.7rem", "textTransform": "uppercase",
+                          "letterSpacing": "0.06em", "color": "#6b7280", "fontWeight": "600"}),
+            dbc.Accordion(
+                [_arch_item(a) for a in ARCHETYPES],
+                flush=True, always_open=False, style=_acc_style, className="mb-3",
+            ),
+            html.Hr(style={"borderColor": "#374151", "margin": "10px 0"}),
+            html.P("Modifiers", className="mb-2",
+                   style={"fontSize": "0.7rem", "textTransform": "uppercase",
+                          "letterSpacing": "0.06em", "color": "#6b7280", "fontWeight": "600"}),
+            dbc.Accordion(
+                [_mod_item(m) for m in MODIFIERS],
+                flush=True, always_open=False, style=_acc_style,
+            ),
+        ], style={"padding": "12px"}),
+    ], style=CARD_STYLE, className="mb-3")
+
+
 def overview_tab() -> dbc.Tab:
     return dbc.Tab(label="Overview", tab_id="tab-overview", children=[
         html.Div(id="team-header", className="mb-3 p-3 rounded",
@@ -207,6 +422,7 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
+        _archetype_guide_card(),
         dbc.Card([
             dbc.CardHeader(
                 html.Small("Hitter Archetype Affinity", className="text-secondary fw-semibold text-uppercase",
