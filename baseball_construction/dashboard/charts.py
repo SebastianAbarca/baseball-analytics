@@ -1484,32 +1484,54 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
     show_r = r_pct >= 0.05
     show_l = l_pct >= 0.05
 
-    # Box dimensions (Statcast units)
-    BOX_W, BOX_H = 6, 11
-    # Right-handed box: left side of HP (3B side from pitcher's view)
+    # ── Batter silhouettes in the box ────────────────────────────────────────
+    # Draw a simple stick-figure batter: head (circle) + body (line) + bat (angled line)
+    # RHH box is on the 3B side (left of HP from pitcher view = lower x)
+    # LHH box is on the 1B side (right of HP)
+    BATTER_COLOR = "#e5e7eb"
+    BOX_W, BOX_H = 7, 12
+    OFFSET = 4   # gap between HP and box edge
+
+    def _draw_batter(cx, cy, hand):
+        """Add stick-figure batter at center (cx, cy). hand='R' or 'L'."""
+        # Batter's box outline
+        fig.add_shape(type="rect",
+            x0=cx - BOX_W/2, y0=cy - BOX_H/2,
+            x1=cx + BOX_W/2, y1=cy + BOX_H/2,
+            line=dict(color="#6b7280", width=1, dash="dot"),
+            row=1, col=1)
+        # Head (circle marker)
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy - BOX_H/2 - 5],
+            mode="markers",
+            marker=dict(color=BATTER_COLOR, size=9, symbol="circle",
+                        line=dict(color=BATTER_COLOR, width=1)),
+            hoverinfo="skip", showlegend=False,
+        ), row=1, col=1)
+        # Body (vertical line from neck to feet)
+        fig.add_shape(type="line",
+            x0=cx, y0=cy - BOX_H/2 - 1,   # neck
+            x1=cx, y1=cy + BOX_H/2 - 1,   # feet
+            line=dict(color=BATTER_COLOR, width=2),
+            row=1, col=1)
+        # Arms (horizontal)
+        fig.add_shape(type="line",
+            x0=cx - 3, y0=cy - 2,
+            x1=cx + 3, y1=cy - 2,
+            line=dict(color=BATTER_COLOR, width=2),
+            row=1, col=1)
+        # Bat — angled up toward pitcher (RHH swings left-to-right, LHH right-to-left)
+        bat_dx = -5 if hand == "R" else 5
+        fig.add_shape(type="line",
+            x0=cx + (2 if hand == "R" else -2), y0=cy - 2,   # hands
+            x1=cx + bat_dx, y1=cy - BOX_H/2 - 3,             # bat tip
+            line=dict(color=BATTER_COLOR, width=2),
+            row=1, col=1)
+
     if show_r:
-        fig.add_shape(type="rect",
-            x0=HP_X - BOX_W - 3, y0=HP_Y - BOX_H/2,
-            x1=HP_X - 3,         y1=HP_Y + BOX_H/2,
-            line=dict(color="#9ca3af", width=1),
-            row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=[HP_X - BOX_W/2 - 3], y=[HP_Y - BOX_H/2 - 4],
-            mode="text", text=["R"], textfont=dict(color="#9ca3af", size=9),
-            hoverinfo="skip", showlegend=False,
-        ), row=1, col=1)
-    # Left-handed box: right side of HP (1B side)
+        _draw_batter(HP_X - BOX_W/2 - OFFSET, HP_Y, "R")
     if show_l:
-        fig.add_shape(type="rect",
-            x0=HP_X + 3,         y0=HP_Y - BOX_H/2,
-            x1=HP_X + BOX_W + 3, y1=HP_Y + BOX_H/2,
-            line=dict(color="#9ca3af", width=1),
-            row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=[HP_X + BOX_W/2 + 3], y=[HP_Y - BOX_H/2 - 4],
-            mode="text", text=["L"], textfont=dict(color="#9ca3af", size=9),
-            hoverinfo="skip", showlegend=False,
-        ), row=1, col=1)
+        _draw_batter(HP_X + BOX_W/2 + OFFSET, HP_Y, "L")
 
     # ── Directional split bars ────────────────────────────────────────────────
     dirs      = ["Pull", "Gap", "Center", "Oppo"]
@@ -1563,8 +1585,12 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         "margin": dict(l=10, r=10, t=45, b=10),
         "showlegend": True,
         "legend": dict(
+            orientation="h",
             font=dict(color=COLORS["subtext"], size=10),
-            x=0.78, y=0.98, bgcolor="rgba(0,0,0,0)",
+            bgcolor="rgba(17,24,39,0.85)",
+            bordercolor="#374151", borderwidth=1,
+            x=0.5, y=0.375,
+            xanchor="center", yanchor="top",
             traceorder="reversed",
         ),
         "plot_bgcolor": "#0d1117",
