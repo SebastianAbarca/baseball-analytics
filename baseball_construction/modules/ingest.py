@@ -846,3 +846,180 @@ def normalize_df(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         invert = col in INVERT_METRICS
         out[f"{col}_pct"] = normalize_percentile(out[col], invert=invert)
     return out
+
+
+# ---------------------------------------------------------------------------
+# IL / Injured List data from MLB Stats API
+# ---------------------------------------------------------------------------
+
+# MLB team ID → our internal abbreviation
+_MLB_TEAM_ID_MAP: dict[int, str] = {
+    133: "ATH", 134: "PIT", 135: "SD",  136: "SEA", 137: "SF",
+    138: "STL", 139: "TB",  140: "TEX", 141: "TOR", 142: "MIN",
+    143: "PHI", 144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY",
+    158: "MIL", 108: "LAA", 109: "AZ",  110: "BAL", 111: "BOS",
+    112: "CHC", 113: "CIN", 114: "CLE", 115: "COL", 116: "DET",
+    117: "HOU", 118: "KC",  119: "LAD", 120: "WSH", 121: "NYM",
+}
+
+
+def pull_il_data(season: int, force: bool = False) -> pd.DataFrame:
+    """
+    Pull IL (Injured List) transaction data for all teams from the MLB Stats API.
+
+    Returns a DataFrame with columns:
+        team          — team abbreviation (e.g. 'HOU')
+        key_mlbam     — player MLBAM ID
+        player_name   — player full name
+        date          — date of transaction (YYYY-MM-DD)
+        transaction   — 'placed' or 'activated'
+        il_type       — '10-Day IL', '60-Day IL', etc.
+        description   — raw transaction description (includes injury notes)
+        season        — season year
+
+    Data is cached at data/processed/il_{season}.csv.
+    Free and public — no authentication required.
+    """
+    import ssl, urllib.request, json
+
+    cache = PROCESSED_DIR / f"il_{season}.csv"
+    if cache.exists() and not force:
+        log.info("Loading IL data %d from cache", season)
+        return pd.read_csv(cache)
+
+    # MLB regular season date ranges
+    season_dates = {
+        2015: ("2015-04-05", "2015-10-04"), 2016: ("2016-04-03", "2016-10-02"),
+        2017: ("2017-04-02", "2017-10-01"), 2018: ("2018-03-29", "2018-10-01"),
+        2019: ("2019-03-28", "2019-09-29"), 2020: ("2020-07-23", "2020-09-27"),
+        2021: ("2021-04-01", "2021-10-03"), 2022: ("2022-04-07", "2022-10-05"),
+        2023: ("2023-03-30", "2023-10-01"), 2024: ("2024-03-20", "2024-09-29"),
+        2025: ("2025-03-27", "2025-09-28"), 2026: ("2026-03-26", "2026-10-04"),
+    }
+    start, end = season_dates.get(season, (f"{season}-04-01", f"{season}-10-01"))
+
+    ctx = ssl._create_unverified_context()
+    all_rows = []
+
+    for team_id, team_abbr in _MLB_TEAM_ID_MAP.items():
+        url = (f"https://statsapi.mlb.com/api/v1/transactions"
+               f"?teamId={team_id}&startDate={start}&endDate={end}&limit=500")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                data = json.loads(resp.read())
+        except Exception as exc:
+            log.warning("IL API failed for team %s season %d: %s", team_abbr, season, exc)
+            continue
+
+        for t in data.get("transactions", []):
+            desc = t.get("description", "")
+            # Filter to IL-related transactions only
+            desc_lower = desc.lower()
+            has_il = any(kw in desc_lower for kw in
+                         ["injured list", "10-day", "15-day", "60-day"])
+            if not has_il:
+                continue
+
+            # "placed [player] on the [X]-day injured list" — "placed" + "injured list" both present
+            is_placed    = ("placed" in desc_lower and "injured list" in desc_lower) \
+                           or "transferred to" in desc_lower
+            is_activated = "activated" in desc_lower and "injured list" in desc_lower
+
+            if not is_placed and not is_activated:
+                continue
+
+            # IL type
+            if "60-day" in desc_lower:
+                il_type = "60-Day IL"
+            elif "15-day" in desc_lower:
+                il_type = "15-Day IL"
+            elif "10-day" in desc_lower:
+                il_type = "10-Day IL"
+            else:
+                il_type = "IL"
+
+            person = t.get("person", {})
+            all_rows.append({
+                "team":         team_abbr,
+                "key_mlbam":    person.get("id"),
+                "player_name":  person.get("fullName", ""),
+                "date":         t.get("date", ""),
+                "transaction":  "placed" if is_placed else "activated",
+                "il_type":      il_type,
+                "description":  desc[:200],
+                "season":       season,
+            })
+
+    if not all_rows:
+        log.warning("No IL data found for season %d", season)
+        return pd.DataFrame(columns=["team","key_mlbam","player_name","date",
+                                     "transaction","il_type","description","season"])
+
+    df = pd.DataFrame(all_rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.sort_values(["team", "player_name", "date"]).reset_index(drop=True)
+    df.to_csv(cache, index=False)
+    log.info("IL data %d — %d transactions across %d teams",
+             season, len(df), df["team"].nunique())
+    return df
+
+
+def compute_il_summary(season: int) -> pd.DataFrame:
+    """
+    Summarise IL data into per-player days-missed for a season.
+
+    Pairs each 'placed' transaction with the next 'activated' transaction
+    for the same player to compute days on IL. If no activation found,
+    uses the season end date.
+
+    Returns DataFrame with columns:
+        team, key_mlbam, player_name, total_il_days, il_stints, injuries
+    """
+    df = pull_il_data(season)
+    if df.empty:
+        return pd.DataFrame(columns=["team","key_mlbam","player_name",
+                                     "total_il_days","il_stints","injuries"])
+
+    season_end = pd.to_datetime(
+        {"2015":"2015-10-04","2016":"2016-10-02","2017":"2017-10-01",
+         "2018":"2018-10-01","2019":"2019-09-29","2020":"2020-09-27",
+         "2021":"2021-10-03","2022":"2022-10-05","2023":"2023-10-01",
+         "2024":"2024-09-29","2025":"2025-09-28","2026":"2026-10-04"}.get(
+             str(season), f"{season}-10-01"))
+
+    rows = []
+    for (team, mlbam), grp in df.groupby(["team", "key_mlbam"]):
+        grp = grp.sort_values("date")
+        name   = grp["player_name"].iloc[0]
+        stints = 0
+        total_days = 0
+        injuries   = []
+
+        placed_rows = grp[grp["transaction"] == "placed"]
+        for _, p_row in placed_rows.iterrows():
+            stints += 1
+            # Find the next activation after this placement
+            activations = grp[(grp["transaction"] == "activated") &
+                               (grp["date"] > p_row["date"])]
+            end_date = activations["date"].iloc[0] if not activations.empty else season_end
+            days = max(0, (end_date - p_row["date"]).days)
+            total_days += days
+            # Extract brief injury note from description
+            desc = p_row["description"]
+            if "." in desc:
+                note = desc.split(".")[-1].strip()[:80]
+                if note:
+                    injuries.append(note)
+
+        rows.append({
+            "team":          team,
+            "key_mlbam":     int(mlbam) if mlbam else None,
+            "player_name":   name,
+            "total_il_days": total_days,
+            "il_stints":     stints,
+            "injuries":      "; ".join(injuries[:3]) if injuries else "",
+        })
+
+    return pd.DataFrame(rows).sort_values(["team","total_il_days"],
+                                           ascending=[True, False])
