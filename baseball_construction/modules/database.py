@@ -186,14 +186,18 @@ def season_pitching_seeded(season: int) -> bool:
 
 def query_debut_seasons() -> dict[int, int]:
     """
-    Return {key_mlbam: debut_season} — the earliest season each player
-    appears in player_batting.  Used to compute MLB tenure without
-    needing service-time data.
+    Return {key_mlbam: debut_season} — the player's actual MLB debut year.
 
-    Fetches in pages of 2000 rows to handle the full multi-season table.
+    Primary source: Chadwick Bureau crosswalk (data/reference/chadwick_crosswalk.csv)
+    field `mlb_played_first`.  This gives real debut years (Freeman=2010,
+    Altuve=2011, etc.) rather than the first year in our DB (which was
+    capped at 2021 for all veterans).
+
+    Fallback: earliest season in player_batting for players not found in
+    Chadwick (e.g. very recent players whose crosswalk entry is missing).
+
     Result is cached to data/processed/debut_seasons.csv and refreshed
-    whenever this function is called with force=False (uses cache if it
-    exists and is younger than 24 h).
+    whenever this function is called (cache TTL 24 h).
     """
     from pathlib import Path
     import time
@@ -201,22 +205,34 @@ def query_debut_seasons() -> dict[int, int]:
     cache = Path(__file__).resolve().parents[1] / "data" / "processed" / "debut_seasons.csv"
     cache.parent.mkdir(parents=True, exist_ok=True)
 
-    # Use cache if fresh (< 24 h)
     if cache.exists() and (time.time() - cache.stat().st_mtime) < 86400:
         df = pd.read_csv(cache)
         return dict(zip(df["key_mlbam"].astype(int), df["debut_season"].astype(int)))
 
+    # ── Primary: Chadwick mlb_played_first ───────────────────────────────────
+    cw_path = Path(__file__).resolve().parents[1] / "data" / "reference" / "chadwick_crosswalk.csv"
+    chadwick_map: dict[int, int] = {}
+    if cw_path.exists():
+        try:
+            cw = pd.read_csv(cw_path, low_memory=False,
+                             usecols=["key_mlbam", "mlb_played_first"])
+            cw["key_mlbam"]        = pd.to_numeric(cw["key_mlbam"],        errors="coerce")
+            cw["mlb_played_first"] = pd.to_numeric(cw["mlb_played_first"], errors="coerce")
+            cw = cw.dropna(subset=["key_mlbam", "mlb_played_first"])
+            chadwick_map = dict(zip(cw["key_mlbam"].astype(int),
+                                    cw["mlb_played_first"].astype(int)))
+            log.info("Chadwick debut seasons: %d players", len(chadwick_map))
+        except Exception as exc:
+            log.warning("Chadwick debut load failed: %s", exc)
+
+    # ── Fallback: DB min(season) for any player not in Chadwick ─────────────
     client  = get_client()
-    page    = 0
-    page_sz = 2000
-    frames  = []
+    page, page_sz, frames = 0, 2000, []
     while True:
-        result = (
-            client.table("player_batting")
-            .select("key_mlbam,season")
-            .range(page * page_sz, (page + 1) * page_sz - 1)
-            .execute()
-        )
+        result = (client.table("player_batting")
+                  .select("key_mlbam,season")
+                  .range(page * page_sz, (page + 1) * page_sz - 1)
+                  .execute())
         if not result.data:
             break
         frames.append(pd.DataFrame(result.data))
@@ -224,15 +240,20 @@ def query_debut_seasons() -> dict[int, int]:
             break
         page += 1
 
-    if not frames:
-        return {}
+    if frames:
+        db = pd.concat(frames, ignore_index=True)
+        db["key_mlbam"] = pd.to_numeric(db["key_mlbam"], errors="coerce")
+        db["season"]    = pd.to_numeric(db["season"],    errors="coerce")
+        db = db.dropna()
+        db_debut = db.groupby("key_mlbam")["season"].min().to_dict()
+        # Merge: Chadwick takes precedence; DB fills gaps
+        merged = {**{int(k): int(v) for k, v in db_debut.items()}, **chadwick_map}
+    else:
+        merged = chadwick_map
 
-    df = pd.concat(frames, ignore_index=True)
-    df["key_mlbam"] = pd.to_numeric(df["key_mlbam"], errors="coerce")
-    df["season"]    = pd.to_numeric(df["season"],    errors="coerce")
-    df = df.dropna()
-    debut = df.groupby("key_mlbam")["season"].min().reset_index()
-    debut.columns = ["key_mlbam", "debut_season"]
+    debut = pd.DataFrame(list(merged.items()), columns=["key_mlbam", "debut_season"])
     debut.to_csv(cache, index=False)
-    log.info("query_debut_seasons: %d unique players cached", len(debut))
+    log.info("query_debut_seasons: %d players (Chadwick=%d, DB-fallback=%d)",
+             len(debut), len(chadwick_map),
+             len(merged) - len(chadwick_map))
     return dict(zip(debut["key_mlbam"].astype(int), debut["debut_season"].astype(int)))

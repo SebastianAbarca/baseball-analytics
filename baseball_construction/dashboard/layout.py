@@ -82,6 +82,7 @@ MLB_TEAMS = [
 ]
 
 SEASONS = list(range(2015, 2027))
+_SEASON_LABELS = {s: (f"⚡ {s} (60G)" if s == 2020 else str(s)) for s in SEASONS}
 
 
 def controls_row() -> dbc.Row:
@@ -98,7 +99,7 @@ def controls_row() -> dbc.Row:
             html.Label("Season", className="text-secondary small mb-1"),
             dbc.Select(
                 id="season-dropdown",
-                options=[{"label": str(s), "value": s} for s in SEASONS],
+                options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
                 value="2023",
             ),
         ], md=2, xs=6),
@@ -143,6 +144,10 @@ def team_header(portrait: dict) -> html.Div:
                 dbc.Badge(
                     mode.upper(), color=badge_color, className="me-2", style=BADGE_STYLE,
                 ),
+                *([dbc.Badge(
+                    "⚡ 60-GAME SEASON", color="warning", className="me-2",
+                    style={**BADGE_STYLE, "fontSize": "0.65rem"},
+                )] if int(season) == 2020 else []),
                 html.Small(
                     f"{games} games · {pa} PA",
                     className="text-secondary",
@@ -588,7 +593,7 @@ def compare_tab() -> dbc.Tab:
                         html.Label("Season", className="text-secondary small mb-1"),
                         dbc.Select(
                             id=f"cmp-season-{suffix}",
-                            options=[{"label": str(s), "value": s} for s in SEASONS],
+                            options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
                             value=default_season,
                         ),
                     ], md=4),
@@ -702,12 +707,12 @@ def scout_tab() -> dbc.Tab:
                         dbc.Row([
                             dbc.Col(dbc.Select(
                                 id="scout-season-min",
-                                options=[{"label": str(s), "value": s} for s in SEASONS],
+                                options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
                                 value=2021,
                             ), width=6),
                             dbc.Col(dbc.Select(
                                 id="scout-season-max",
-                                options=[{"label": str(s), "value": s} for s in SEASONS],
+                                options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
                                 value=2026,
                             ), width=6),
                         ], className="g-1"),
