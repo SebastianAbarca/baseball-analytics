@@ -198,6 +198,11 @@ BATTING_COL_MAP: dict[str, str] = {
     # Luck delta: xwOBA − wOBA (positive = unlucky, negative = lucky)
     # Comes from FG batting CSV column est_woba_minus_woba_diff
     "est_woba_minus_woba_diff": "LuckDelta",
+    # Spray chart metrics (computed from Statcast hc_x/hc_y)
+    "xb_pct":    "XB_pct",       # (2B + 3B) / BIP — gap contact rate
+    "gap_pct":   "GapTend_pct",  # fraction of BIP in ±20–50° gap zones
+    "pull_pct":  "Pull_pct",     # fraction of BIP to pull side
+    "oppo_pct":  "Oppo_pct",     # fraction of BIP to opposite field
 }
 
 PITCHING_COL_MAP: dict[str, str] = {
@@ -385,9 +390,31 @@ def _compute_cross_team_metrics(
             avg_tenure = new_player_share = veteran_share = np.nan
 
         # HR/FB and raw HR count from Statcast for this team's batters
-        team_sc  = statcast[statcast["batter"].isin(ids)]
-        hr_count = int((team_sc["events"] == "home_run").sum())
-        fb_count = int((team_sc["bb_type"] == "fly_ball").sum())
+        team_sc    = statcast[statcast["batter"].isin(ids)]
+        hr_count   = int((team_sc["events"] == "home_run").sum())
+        double_count = int((team_sc["events"] == "double").sum())
+        triple_count = int((team_sc["events"] == "triple").sum())
+        fb_count   = int((team_sc["bb_type"] == "fly_ball").sum())
+        bip_count  = int(team_sc["bb_type"].notna().sum())
+
+        # A2 — Gap contact metrics (doubles+triples / BIP)
+        xb_count = double_count + triple_count
+        team_xb_rate = float(xb_count / bip_count) if bip_count > 0 else np.nan
+        # power_source_ratio: HR / total XBH (1.0 = all HRs, 0.0 = all gap hits)
+        total_xbh = hr_count + xb_count
+        power_source_ratio = float(hr_count / total_xbh) if total_xbh > 0 else np.nan
+
+        # Gap-zone BIP from Statcast hc_x/hc_y
+        team_sc_bip = team_sc[team_sc["hc_x"].notna() & team_sc["hc_y"].notna()].copy()
+        if not team_sc_bip.empty:
+            HP_X, HP_Y = 126.0, 203.0
+            angles = np.degrees(np.arctan2(
+                team_sc_bip["hc_x"].astype(float) - HP_X,
+                HP_Y - team_sc_bip["hc_y"].astype(float),
+            ))
+            team_gap_pct = float((angles.abs().between(20, 50)).sum() / len(angles))
+        else:
+            team_gap_pct = np.nan
 
         # A4 — Lineup Power metrics
         # PA-weighted SLG and Barrel%
@@ -414,6 +441,10 @@ def _compute_cross_team_metrics(
             "team_slg":           team_slg,
             "power_contributors": power_contributors,
             "team_barrel":        team_barrel,
+            # A2 — Gap contact
+            "team_xb_rate":       team_xb_rate,
+            "team_gap_pct":       team_gap_pct,
+            "power_source_ratio": power_source_ratio,   # display metadata, not scored
         })
 
     cross = pd.DataFrame(rows).set_index("team")
@@ -467,6 +498,9 @@ def _compute_cross_team_metrics(
         ("team_slg",          "TeamSLG_pct",           False),
         ("power_contributors","PowerContributors_pct", False),
         ("team_barrel",       "TeamBarrel_pct",        False),
+        # A2 — Gap contact metrics
+        ("team_xb_rate",      "TeamXB_pct",            False),
+        ("team_gap_pct",      "TeamGap_pct",           False),
     ]
 
     out: dict[str, float] = {}
@@ -816,7 +850,7 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
         for col in team_bat.columns:
             if col.endswith("_pct"):
                 val = row.get(col)
-                if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                if val is not None and not pd.isna(val):
                     fval = float(val)
                     metrics[col.removesuffix("_pct")] = fval  # K_pct_pct→K_pct, ISO_pct→ISO
                     metrics[col] = fval                        # also keep ISO_pct, AVG_pct
@@ -1322,6 +1356,24 @@ def build_team_portrait(
     except Exception as exc:
         log.warning("bWAR merge failed: %s", exc)
 
+    # ── 3c. Spray chart stats from Statcast hc_x / hc_y ─────────────────────
+    # Computed once for the full season and merged into batting_full so that
+    # normalization in _normalize_batting ranks against the season pool.
+    # Spray stats are NOT stored in the DB — computed fresh each portrait build.
+    try:
+        from pitch_aggregates import compute_batter_spray_stats
+        spray = compute_batter_spray_stats(statcast, min_bip=20)
+        if not spray.empty:
+            spray["key_mlbam"] = pd.to_numeric(spray["key_mlbam"], errors="coerce")
+            batting_full = batting_full.merge(
+                spray[["key_mlbam", "xb_pct", "gap_pct", "pull_pct", "oppo_pct", "hr_per_bip"]],
+                on="key_mlbam", how="left",
+            )
+            log.info("Spray stats merged — %d batters with spray data",
+                     batting_full["xb_pct"].notna().sum())
+    except Exception as exc:
+        log.warning("Spray stats merge failed: %s", exc)
+
     # ── 3b. Multi-season historical pool for percentile normalization ─────
     # Percentiles are computed against ALL seeded seasons so that "70" means
     # 70th pct of the Statcast era, not just this year's 30 teams.
@@ -1351,6 +1403,25 @@ def build_team_portrait(
     # Normalize against multi-season historical pool
     team_bat = _normalize_batting(batting_pool,  team_bat_raw)
     team_pit = _normalize_pitching(pitching_pool, team_pit_raw)
+
+    # ── Spray stat normalization (current-season only — not in DB pool) ───────
+    # batting_full has spray stats merged; batting_pool (multi-season DB) doesn't.
+    # Rank spray metrics against the full current-season batting_full pool.
+    SPRAY_COLS = [
+        ("xb_pct",   False),   # higher = more doubles+triples per BIP
+        ("gap_pct",  False),   # higher = more BIP in gap zones
+        ("pull_pct", False),
+        ("oppo_pct", False),
+    ]
+    for raw_col, invert in SPRAY_COLS:
+        renamed_col = BATTING_COL_MAP.get(raw_col)
+        if renamed_col and raw_col in batting_full.columns:
+            pool_series = pd.to_numeric(batting_full[raw_col], errors="coerce")
+            team_series = pd.to_numeric(team_bat_raw[raw_col], errors="coerce") \
+                if raw_col in team_bat_raw.columns else pd.Series(dtype=float)
+            if pool_series.notna().sum() > 1 and team_series.notna().sum() > 0:
+                pct_col = f"{renamed_col}_pct"
+                team_bat[pct_col] = _pool_rank(pool_series, team_series, invert=invert)
 
     # ── 4. Spin efficiency ────────────────────────────────────────────────
     pitcher_sc = team_sc[team_sc["pitcher"].isin(pitcher_ids)].copy()
@@ -1428,9 +1499,18 @@ def build_team_portrait(
 
     # ── 10a. Cross-team spread/concentration + tenure metrics ─────────────
     cross_team = {}
+    _power_source_ratio: Optional[float] = None
     try:
         debut_seasons = query_debut_seasons()
         cross_team = _compute_cross_team_metrics(statcast, batting_full, team, season, debut_seasons)
+        # Extract raw power_source_ratio for the target team from the cross frame
+        # (it's display metadata — stored in team_metrics, not scored)
+        _ps_cache = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"
+        if _ps_cache.exists():
+            _ct_df = pd.read_csv(_ps_cache)
+            _row = _ct_df[_ct_df["team"] == team]
+            if not _row.empty and "power_source_ratio" in _ct_df.columns:
+                _power_source_ratio = float(_row["power_source_ratio"].iloc[0])
     except Exception as exc:
         log.warning("Cross-team metrics failed: %s", exc)
 
@@ -1533,8 +1613,9 @@ def build_team_portrait(
             "bullpen_arms":    bullpen_arms,
         },
         "team_metrics": {
-            "batting":  team_batting_agg,
-            "pitching": team_pitching_agg,
+            "batting":            team_batting_agg,
+            "pitching":           team_pitching_agg,
+            "power_source_ratio": _power_source_ratio,  # raw HR/(HR+2B+3B) — display only
         },
         "park":        park_result,
         "philosophy":         philosophy,

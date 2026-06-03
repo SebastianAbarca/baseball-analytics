@@ -422,22 +422,11 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
+        dbc.Row([
+            dbc.Col(_card("Batted Ball Profile", "spray-heatmap", height=380), md=5),
+            dbc.Col(_card("Hitter Archetype Affinity", "hitter-heatmap", height=380), md=7),
+        ]),
         _archetype_guide_card(),
-        dbc.Card([
-            dbc.CardHeader(
-                html.Small("Hitter Archetype Affinity", className="text-secondary fw-semibold text-uppercase",
-                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
-                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-            ),
-            dbc.CardBody(
-                dcc.Graph(
-                    id="hitter-heatmap",
-                    config={"displayModeBar": False},
-                    style={"minHeight": "300px"},
-                ),
-                style={"padding": "8px"},
-            ),
-        ], style=CARD_STYLE, className="mb-3"),
         # ── Player comparison section ───────────────────────────────────────
         dbc.Card([
             dbc.CardHeader(

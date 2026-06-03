@@ -237,6 +237,100 @@ def compute_platoon_optimization(statcast: pd.DataFrame) -> pd.Series:
     return result
 
 
+def compute_batter_spray_stats(
+    statcast: pd.DataFrame,
+    min_bip: int = 20,
+) -> pd.DataFrame:
+    """
+    Per-batter spray chart statistics from Statcast hit coordinates.
+
+    Uses hc_x / hc_y to compute spray angle, then classifies each batted
+    ball as pull, gap, center, or oppo.  Gaps (LC and RC) are the ±20–50°
+    band from the field center line.
+
+    Args:
+        statcast: full-season Statcast DataFrame (must have hc_x, hc_y,
+                  bb_type, events, batter columns)
+        min_bip:  minimum balls-in-play required to include a batter
+
+    Returns DataFrame with columns:
+        key_mlbam  — MLBAM batter ID
+        bip        — total balls in play
+        xb_pct     — (2B + 3B) / bip   (extra-base contact rate)
+        gap_pct    — BIP with |spray_angle| in [20, 50]° / bip
+        pull_pct   — BIP with |spray_angle| > 50° to pull side / bip
+        oppo_pct   — BIP with |spray_angle| > 50° to oppo side / bip
+        hr_per_bip — HR / bip
+    """
+    # Keep only pitches with valid hit coordinates (batted balls)
+    sc = statcast[
+        statcast["hc_x"].notna() &
+        statcast["hc_y"].notna() &
+        statcast["bb_type"].notna()
+    ].copy()
+
+    if sc.empty:
+        return pd.DataFrame(columns=[
+            "key_mlbam", "bip", "xb_pct", "gap_pct",
+            "pull_pct", "oppo_pct", "hr_per_bip",
+        ])
+
+    # ── Spray angle ──────────────────────────────────────────────────────────
+    # Home plate anchor in Statcast SVG coordinate space.
+    # Positive angle → right-field side; negative → left-field side.
+    HP_X, HP_Y = 126.0, 203.0
+    sc["_angle"] = np.degrees(np.arctan2(
+        sc["hc_x"].astype(float) - HP_X,
+        HP_Y - sc["hc_y"].astype(float),   # y-axis flipped
+    ))
+
+    # Pull side for RHH is RF (positive angle); for LHH it's LF (negative).
+    # Gap zones are field-location-based (±20–50°) regardless of handedness —
+    # both LC and RC gaps sit in this band.
+    sc["_abs_angle"]  = sc["_angle"].abs()
+    sc["_in_gap"]     = sc["_abs_angle"].between(20, 50)
+    sc["_is_pull"]    = sc["_abs_angle"] > 50   # extreme pull or oppo
+
+    # Label pull vs oppo by handedness for the pull_pct / oppo_pct split
+    rh_mask = (sc.get("stand", "R") == "R") | (sc.get("p_throws", "R") == "R")
+    # For RHH: positive angle = pull (RF); for LHH: negative angle = pull (LF)
+    sc["_is_pull_side"] = np.where(
+        sc.get("stand", pd.Series("R", index=sc.index)) == "R",
+        sc["_angle"] > 50,    # RHH pull = RF (positive)
+        sc["_angle"] < -50,   # LHH pull = LF (negative)
+    )
+    sc["_is_oppo_side"] = sc["_is_pull"] & ~sc["_is_pull_side"]
+
+    # Event flags
+    sc["_is_double"] = sc["events"] == "double"
+    sc["_is_triple"] = sc["events"] == "triple"
+    sc["_is_hr"]     = sc["events"] == "home_run"
+
+    agg = sc.groupby("batter").agg(
+        bip           = ("hc_x",          "count"),
+        doubles       = ("_is_double",     "sum"),
+        triples       = ("_is_triple",     "sum"),
+        hr            = ("_is_hr",         "sum"),
+        gap_bip       = ("_in_gap",        "sum"),
+        pull_bip      = ("_is_pull_side",  "sum"),
+        oppo_bip      = ("_is_oppo_side",  "sum"),
+    ).reset_index()
+
+    agg = agg[agg["bip"] >= min_bip].copy()
+    bip = agg["bip"].clip(lower=1)
+
+    agg["xb_pct"]    = (agg["doubles"] + agg["triples"]) / bip
+    agg["gap_pct"]   = agg["gap_bip"]  / bip
+    agg["pull_pct"]  = agg["pull_bip"] / bip
+    agg["oppo_pct"]  = agg["oppo_bip"] / bip
+    agg["hr_per_bip"]= agg["hr"]       / bip
+
+    log.info("Batter spray stats — %d batters (min_bip=%d)", len(agg), min_bip)
+    return agg.rename(columns={"batter": "key_mlbam"})[
+        ["key_mlbam", "bip", "xb_pct", "gap_pct", "pull_pct", "oppo_pct", "hr_per_bip"]
+    ]
+
+
 def compute_opener_usage(statcast: pd.DataFrame) -> pd.Series:
     """
     For each team, fraction of games where the first pitcher faced ≤ 9 batters (opener).

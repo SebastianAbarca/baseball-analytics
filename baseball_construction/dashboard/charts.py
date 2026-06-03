@@ -354,6 +354,8 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
             tags.append(pd_)
         if mod.get("table_setter"):
             tags.append("Table Setter")
+        if mod.get("gap_hitter"):
+            tags.append("Gap Hitter")
         if mod.get("aggressive"):
             tags.append("Aggressive")
         disrupt = mod.get("disruptiveness", {}).get("modifier")
@@ -1343,6 +1345,157 @@ def philosophy_breakdown_card(portrait: dict, code: str) -> html.Div:
 # ---------------------------------------------------------------------------
 # Utility — empty placeholder figure
 # ---------------------------------------------------------------------------
+
+def team_spray_heatmap(portrait: dict) -> go.Figure:
+    """
+    2-D density heatmap of the team's batted ball locations.
+
+    Data source: hitters in portrait["players"]["hitters"] carry
+    spray-derived percentiles but not raw coordinates. The heatmap is
+    built from the philosophy_metrics team-level gap/pull/oppo rates plus
+    a schematic field overlay — no raw Statcast access needed at render time.
+
+    Instead we draw a synthetic field diagram and annotate the team's
+    directional tendencies (pull%, gap%, oppo%) as colored wedges/text.
+    This gives an at-a-glance spatial read of the team's batted ball profile.
+    """
+    pm  = portrait.get("philosophy_metrics", {})
+    tm  = portrait.get("team_metrics", {})
+    team   = portrait.get("team", "")
+    season = portrait.get("season", "")
+
+    # Pull raw pull/gap/oppo from batting_agg if available
+    bat = tm.get("batting", {})
+
+    # Read team-level spray from philosophy_metrics (percentile ranks)
+    pull_pct_rank = pm.get("Pull_pct_pct")
+    gap_pct_rank  = pm.get("GapTend_pct_pct")  # or GapTend_pct if stored that way
+    # Also check alternate key names
+    if gap_pct_rank is None:
+        gap_pct_rank = pm.get("TeamGap_pct")
+
+    psr = tm.get("power_source_ratio")  # 0–1: 1.0 = all HRs, 0.0 = all gap
+
+    if pull_pct_rank is None and gap_pct_rank is None:
+        fig = empty_figure("Spray data unavailable — load a portrait with Statcast coverage")
+        return fig
+
+    # ── Draw schematic baseball field ────────────────────────────────────────
+    fig = go.Figure()
+
+    # Field outline (simplified): foul lines at ±45°, outfield arc at r=330ft
+    import math
+    angles_left  = [a for a in range(-45, 1)]
+    angles_right = [a for a in range(0, 46)]
+    all_angles   = list(range(-45, 46))
+
+    def polar_to_xy(r, deg):
+        rad = math.radians(deg)
+        return r * math.sin(rad), r * math.cos(rad)
+
+    # Outfield arc
+    arc_x = [polar_to_xy(330, a)[0] for a in all_angles]
+    arc_y = [polar_to_xy(330, a)[1] for a in all_angles]
+    arc_x = [0] + arc_x + [0]
+    arc_y = [0] + arc_y + [0]
+
+    fig.add_trace(go.Scatter(
+        x=arc_x, y=arc_y, mode="lines", fill="toself",
+        fillcolor="rgba(34,85,34,0.35)",
+        line=dict(color="#4ade80", width=1.5),
+        hoverinfo="skip", name="Field",
+    ))
+
+    # Infield diamond
+    diamond_x = [0, 90*math.sin(math.radians(45)), 0, -90*math.sin(math.radians(45)), 0]
+    diamond_y = [0, 90*math.cos(math.radians(45)), 180, 90*math.cos(math.radians(45)), 0]
+    fig.add_trace(go.Scatter(
+        x=diamond_x, y=diamond_y, mode="lines",
+        line=dict(color="#9ca3af", width=1, dash="dot"),
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    # ── Directional tendency wedges ──────────────────────────────────────────
+    # Color-code pull / gap / oppo zones by percentile rank
+    def _zone_color(pct_rank, low_good=False):
+        """Map a 0-100 percentile to a heat color."""
+        if pct_rank is None:
+            return "rgba(107,114,128,0.4)"
+        v = pct_rank / 100.0
+        if low_good:
+            v = 1 - v
+        r = int(239 * v + 30 * (1-v))
+        g = int(68 * v + 180 * (1-v))
+        b = int(68 * (1-v) + 68 * v)
+        return f"rgba({r},{g},{b},0.55)"
+
+    # Pull zone wedge: spray angle 50–75° (RF for RHH)
+    pull_angles = range(50, 76)
+    pw_x = [0] + [polar_to_xy(280, a)[0] for a in pull_angles] + [0]
+    pw_y = [0] + [polar_to_xy(280, a)[1] for a in pull_angles] + [0]
+    fig.add_trace(go.Scatter(
+        x=pw_x, y=pw_y, mode="lines", fill="toself",
+        fillcolor=_zone_color(pull_pct_rank),
+        line=dict(color="rgba(0,0,0,0)", width=0),
+        hoverinfo="skip", name="Pull tendency",
+    ))
+
+    # Gap zones: ±20–50°
+    for gap_angles in [range(20, 51), range(-50, -19)]:
+        gw_x = [0] + [polar_to_xy(300, a)[0] for a in gap_angles] + [0]
+        gw_y = [0] + [polar_to_xy(300, a)[1] for a in gap_angles] + [0]
+        fig.add_trace(go.Scatter(
+            x=gw_x, y=gw_y, mode="lines", fill="toself",
+            fillcolor=_zone_color(gap_pct_rank),
+            line=dict(color="rgba(0,0,0,0)", width=0),
+            hoverinfo="skip", name="Gap tendency" if gap_angles.start > 0 else None,
+            showlegend=(gap_angles.start > 0),
+        ))
+
+    # ── Annotations ──────────────────────────────────────────────────────────
+    annotations = []
+    if pull_pct_rank is not None:
+        annotations.append(dict(
+            x=220, y=180, text=f"Pull<br>{pull_pct_rank:.0f}th pct",
+            showarrow=False, font=dict(color="#f9fafb", size=11),
+            align="center",
+        ))
+    if gap_pct_rank is not None:
+        annotations.append(dict(
+            x=0, y=290, text=f"Gap<br>{gap_pct_rank:.0f}th pct",
+            showarrow=False, font=dict(color="#f9fafb", size=11),
+            align="center",
+        ))
+    if psr is not None:
+        psr_pct = int(psr * 100)
+        annotations.append(dict(
+            x=0, y=80, text=f"Power source<br>{psr_pct}% HR · {100-psr_pct}% Gap",
+            showarrow=False, font=dict(color="#9ca3af", size=10),
+            align="center",
+        ))
+
+    fig.update_layout(**{
+        **_DARK_LAYOUT,
+        "title": dict(
+            text=f"{team} {season} — Batted Ball Profile",
+            font=dict(size=13, color=COLORS["text"]), x=0.5,
+        ),
+        "xaxis": dict(
+            range=[-350, 350], showgrid=False, zeroline=False,
+            showticklabels=False, scaleanchor="y",
+        ),
+        "yaxis": dict(
+            range=[-20, 380], showgrid=False, zeroline=False,
+            showticklabels=False,
+        ),
+        "margin": dict(l=10, r=10, t=50, b=10),
+        "annotations": annotations,
+        "showlegend": False,
+        "plot_bgcolor": "#0f1923",
+        "paper_bgcolor": COLORS["background"],
+    })
+    return fig
+
 
 def empty_figure(message: str = "No data") -> go.Figure:
     fig = go.Figure()

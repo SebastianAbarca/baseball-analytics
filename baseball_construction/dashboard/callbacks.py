@@ -254,6 +254,12 @@ def hitter_heatmap(data):
     return charts.hitter_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see hitter affinities")
 
 
+@callback(Output("spray-heatmap", "figure"), Input("portrait-store", "data"))
+def spray_heatmap(data):
+    p = _deserialize(data)
+    return charts.team_spray_heatmap(p) if p else charts.empty_figure("Load a portrait to see batted ball profile")
+
+
 # ---------------------------------------------------------------------------
 # Callback 10b — Populate player dropdown options from portrait
 # ---------------------------------------------------------------------------

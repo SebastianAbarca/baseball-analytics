@@ -57,11 +57,13 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Contact and Pressure",
         "dimension": "offense",
         "weights": {
-            "K_inv_pct":          0.25,   # low K% (caller inverts)
-            "OBP_SLG_gap_pct":    0.20,   # OBP outperforms SLG
-            "PitchesPerPA_pct":   0.20,
-            "SprintSpeed_pct":    0.20,
+            "K_inv_pct":          0.20,   # low K% (caller inverts)
+            "OBP_SLG_gap_pct":    0.15,   # OBP outperforms SLG
+            "PitchesPerPA_pct":   0.15,
+            "SprintSpeed_pct":    0.15,
             "Contact_pct_pct":    0.15,
+            "TeamXB_pct":         0.10,   # doubles+triples rate (gap contact pressure)
+            "TeamGap_pct":        0.10,   # fraction of BIP in gap zones
         },
     },
 

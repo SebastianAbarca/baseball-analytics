@@ -77,6 +77,11 @@ TABLE_SETTER_ISO_CEILING   = 45.0   # ISO percentile — not a power threat
 # Disruptiveness — note: raw values required (not percentiles)
 DISRUPTIVE_MIN_ATTEMPTS = 8          # prorated by games played
 
+# Gap Hitter (extra-base contact, gap-zone spray)
+GAP_HITTER_XB_THRESHOLD   = 60.0   # xb_pct ≥ 60th pct (doubles+triples rate)
+GAP_HITTER_GAP_THRESHOLD  = 55.0   # gap_pct ≥ 55th pct (BIP in gap zones)
+GAP_HITTER_HR_CEILING     = 60.0   # HR_FB_pct ≤ 60th pct (not a fly-ball HR hitter)
+
 # Spectrum grey zone
 GREY_ZONE_LOW  = 45.0
 GREY_ZONE_HIGH = 55.0
@@ -473,6 +478,34 @@ def compute_table_setter(
     return speed in ("Fast", "Elite")
 
 
+def compute_gap_hitter(metrics: dict[str, float]) -> bool:
+    """
+    Gap Hitter modifier — player whose extra-base production comes from
+    hitting the ball into the gaps rather than over the fence.
+
+    Gates (all percentile-ranked 0–100 against the season pool):
+      XB_pct     >= 60th pct  — above-average doubles+triples rate per BIP
+      GapTend_pct>= 55th pct  — above-average fraction of BIP in gap zones
+      HR_FB_pct  <= 60th pct  — not primarily a fly-ball HR hitter
+
+    Requires Statcast spray chart data (hc_x/hc_y); returns False if unavailable.
+    Fires on any primary archetype — Contact and Balanced most common.
+    """
+    xb  = metrics.get("XB_pct")
+    gap = metrics.get("GapTend_pct")
+    if xb is None or gap is None:
+        return False
+    if float(xb) < GAP_HITTER_XB_THRESHOLD:
+        return False
+    if float(gap) < GAP_HITTER_GAP_THRESHOLD:
+        return False
+    # HR/FB gate — if available, exclude extreme fly-ball HR hitters
+    hr_fb = metrics.get("HR_FB_pct")
+    if hr_fb is not None and float(hr_fb) > GAP_HITTER_HR_CEILING:
+        return False
+    return True
+
+
 def compute_disruptiveness(
     sb:                int,
     cs:                int,
@@ -575,6 +608,7 @@ def build_hitter_profile(
     """
     primary          = classify_primary(metrics)
     aggressive       = compute_aggressive(metrics)
+    gap_hitter       = compute_gap_hitter(metrics)
     speed_tier       = compute_speed_tier(sprint_speed_raw)
     lucky_unlucky    = compute_lucky_unlucky(metrics)
     contact_quality  = compute_contact_quality(metrics)
@@ -588,6 +622,7 @@ def build_hitter_profile(
         "primary":   primary,
         "modifiers": {
             "aggressive":       aggressive,
+            "gap_hitter":       gap_hitter,
             "speed":            speed_tier,
             "lucky_unlucky":    lucky_unlucky,
             "contact_quality":  contact_quality,
@@ -622,6 +657,7 @@ def profiles_to_dataframe(profiles: list[dict]) -> pd.DataFrame:
             "spectrum_score":     pri.get("spectrum_score"),
             "grey_zone":          pri.get("grey_zone", False),
             "aggressive":         mod.get("aggressive", False),
+            "gap_hitter":         mod.get("gap_hitter", False),
             "speed_tier":         mod["speed"],
             "disruptive_modifier":mod["disruptiveness"]["modifier"],
         })
