@@ -198,6 +198,36 @@ def query_debut_seasons() -> dict[int, int]:
 
     Result is cached to data/processed/debut_seasons.csv and refreshed
     whenever this function is called (cache TTL 24 h).
+
+    ── KNOWN LIMITATIONS (Chadwick vs true MLB service time) ────────────────
+
+    This function returns *calendar debut year*, not *MLB service time*.
+    The two diverge in meaningful ways for roster construction analysis:
+
+    1. Service time manipulation: Teams routinely delay prospect call-ups
+       by 10-15 days to prevent accruing a full year of service, saving a
+       year of team control. Chadwick shows the debut year correctly but
+       `season − debut_year` overstates service by 1 year for these players.
+       (e.g. Kris Bryant 2015, many top prospects since)
+
+    2. IL time doesn't count: A player on 60-day IL accrues no service time.
+       Career IL-heavy players (Tommy John surgeries, etc.) have meaningfully
+       less service time than calendar years suggest.
+
+    3. Pre-arb / arb / free agent thresholds require true service time days
+       (172 days = 1 service year; 3.000 = arb eligible; 6.000 = free agent).
+       Calendar years cannot correctly compute these contractual thresholds.
+
+    Impact on current platform:
+      - C3 (Youth & Development) and C4 (Veteran Experience) are
+        directionally correct but not contractually precise.
+      - A future "Roster Control Profile" (pre-arb/arb/FA split per team)
+        requires a real service time CSV — this function cannot support it.
+
+    Upgrade path: Replace with a CSV of (key_mlbam, service_time_days, season)
+    sourced from Baseball Reference player pages or MLBPA data (~10k rows
+    across 12 seasons). Wire into a `query_service_time()` function alongside
+    this one and update C3/C4 to use it when available.
     """
     from pathlib import Path
     import time
