@@ -82,6 +82,9 @@ GAP_HITTER_XB_THRESHOLD   = 60.0   # xb_pct ≥ 60th pct (doubles+triples rate)
 GAP_HITTER_GAP_THRESHOLD  = 55.0   # gap_pct ≥ 55th pct (BIP in gap zones)
 GAP_HITTER_HR_CEILING     = 60.0   # HR_FB_pct ≤ 60th pct (not a fly-ball HR hitter)
 
+# Plus Power (above-average ISO for a contact/balanced player)
+PLUS_POWER_ISO_THRESHOLD  = 65.0   # ISO_pct ≥ 65th pct (clearly above-average power)
+
 # Spectrum grey zone
 GREY_ZONE_LOW  = 45.0
 GREY_ZONE_HIGH = 55.0
@@ -478,6 +481,25 @@ def compute_table_setter(
     return speed in ("Fast", "Elite")
 
 
+def compute_plus_power(metrics: dict[str, float]) -> bool:
+    """
+    Plus Power modifier — above-average ISO in a contact or balanced hitter.
+
+    Fires only for Contact (T3) and Balanced (T4) players; Power (T5) and
+    Complete Hitter (T1) already imply power. This tag surfaces the contact
+    hitters who also have real thump — Bogaerts, Goldschmidt, early Freeman.
+
+    Gate: ISO_pct ≥ 65th pct
+
+    Caller is responsible for checking primary archetype before applying
+    (suppressed for T1, T2, T5 in build_hitter_profile).
+    """
+    iso = metrics.get("ISO")   # stripped from ISO_pct after normalization
+    if iso is None:
+        return False
+    return float(iso) >= PLUS_POWER_ISO_THRESHOLD
+
+
 def compute_gap_hitter(metrics: dict[str, float]) -> bool:
     """
     Gap Hitter modifier — player whose extra-base production comes from
@@ -606,11 +628,15 @@ def build_hitter_profile(
             modifiers:  {free_swinger, speed, disruptiveness},
         }
     """
-    primary          = classify_primary(metrics)
-    is_complete      = primary.get("type") == "Complete Hitter"
+    primary      = classify_primary(metrics)
+    primary_type = primary.get("type", "")
+    is_complete  = primary_type == "Complete Hitter"
+    is_tto       = primary_type == "Three True Outcomes"
+    is_contact   = primary_type in ("Contact", "Balanced")
 
     aggressive       = compute_aggressive(metrics)
     gap_hitter       = compute_gap_hitter(metrics)
+    plus_power       = compute_plus_power(metrics) if is_contact else False
     speed_tier       = compute_speed_tier(sprint_speed_raw)
     lucky_unlucky    = compute_lucky_unlucky(metrics)
     contact_quality  = compute_contact_quality(metrics)
@@ -619,22 +645,29 @@ def build_hitter_profile(
     disruptiveness   = compute_disruptiveness(sb, cs, opportunities, games, season_games,
                                               attempt_rate_pct=attempt_rate_pct)
 
-    # ── Complete Hitter suppression ──────────────────────────────────────────
-    # Tags whose meaning is already implied by the Complete Hitter gates are
-    # suppressed to keep the modifier column clean and non-redundant.
-    #   Gap Hitter    — implied by elite contact quality + power gates
-    #   Plus Contact  — implied by Barrel% ≥ 65th + Contact% ≥ 55th gates
-    #   Disciplined   — implied by BB% ≥ 65th gate (walks are already a gate)
-    # Tags kept for Complete Hitters: speed, Lucky/Unlucky, Aggressive,
-    #   Table Setter, Disruptive/Chaotic (none implied by the T1 gates).
+    # ── Archetype-based modifier suppression ─────────────────────────────────
+    # Tags implied by the archetype's own gates are dropped — only surprising
+    # or additional information survives.
+
     if is_complete:
-        gap_hitter    = False
+        # T1 gates: Barrel% ≥ 65, Contact% ≥ 55, BB% ≥ 65
+        # Implied → suppress Gap Hitter, Plus Contact, Disciplined
+        # Keep: speed, Lucky/Unlucky, Aggressive, Elite Discipline, Disruptive
+        gap_hitter = False
         if contact_quality == "Plus Contact":
             contact_quality = None
         if plate_discipline == "Disciplined":
             plate_discipline = None
-        # Elite Discipline (composite ≥ 75) is stronger than the BB% ≥ 65 gate,
-        # so we keep it — it signals genuinely elite patience beyond the T1 floor.
+        # Elite Discipline (≥ 75th) exceeds the BB% ≥ 65 floor → keep it.
+
+    elif is_tto:
+        # T2 gates: K% ≥ 55 (no contact implied), BB% ≥ 65 (discipline implied)
+        # Implied → suppress Weak Contact, Disciplined
+        # Keep: speed, Lucky/Unlucky, Elite Discipline, Aggressive, Disruptive
+        if contact_quality == "Weak Contact":
+            contact_quality = None
+        if plate_discipline == "Disciplined":
+            plate_discipline = None
 
     return {
         "player_id": player_id,
@@ -642,6 +675,7 @@ def build_hitter_profile(
         "modifiers": {
             "aggressive":       aggressive,
             "gap_hitter":       gap_hitter,
+            "plus_power":       plus_power,
             "speed":            speed_tier,
             "lucky_unlucky":    lucky_unlucky,
             "contact_quality":  contact_quality,

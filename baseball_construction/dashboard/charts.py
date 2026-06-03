@@ -354,6 +354,8 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
             tags.append(pd_)
         if mod.get("table_setter"):
             tags.append("Table Setter")
+        if mod.get("plus_power"):
+            tags.append("Plus Power")
         if mod.get("gap_hitter"):
             tags.append("Gap Hitter")
         if mod.get("aggressive"):
