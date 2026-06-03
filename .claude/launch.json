@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "baseball-dashboard",
+      "runtimeExecutable": "python3.12",
+      "runtimeArgs": ["baseball_construction/dashboard/app.py"],
+      "port": 8050
+    }
+  ]
+}
