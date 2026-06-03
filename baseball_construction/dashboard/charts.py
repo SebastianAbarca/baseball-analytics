@@ -338,13 +338,22 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         wars.append(f"{war:.1f}" if war is not None else "—")
         types.append(pri.get("type") or "—")
 
-        # Build modifier string: speed tier + flags
+        # Build modifier string — order: speed | luck | contact | discipline | approach | baserunning
         tags = []
         speed = mod.get("speed")
-        if speed in ("Elite", "Fast"):
+        if speed in ("Elite", "Fast", "Slow"):
             tags.append(speed)
-        elif speed == "Slow":
-            tags.append("Slow")
+        luck = mod.get("lucky_unlucky")
+        if luck:
+            tags.append(luck)
+        cq = mod.get("contact_quality")
+        if cq:
+            tags.append(cq)
+        pd_ = mod.get("plate_discipline")
+        if pd_:
+            tags.append(pd_)
+        if mod.get("table_setter"):
+            tags.append("Table Setter")
         if mod.get("aggressive"):
             tags.append("Aggressive")
         if mod.get("free_swinger"):

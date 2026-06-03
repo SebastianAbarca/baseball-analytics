@@ -195,6 +195,9 @@ BATTING_COL_MAP: dict[str, str] = {
     "war":              "WAR_bat",
     "zone_swing_pct":   "ZSwing_pct",
     "contact_pct":      "Contact_pct",
+    # Luck delta: xwOBA − wOBA (positive = unlucky, negative = lucky)
+    # Comes from FG batting CSV column est_woba_minus_woba_diff
+    "est_woba_minus_woba_diff": "LuckDelta",
 }
 
 PITCHING_COL_MAP: dict[str, str] = {
@@ -572,6 +575,21 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
     # (K_pct_pct is inverted; TTO classifier needs raw strikeout rank)
     if "K_pct" in full.columns and "K_pct" in team.columns:
         team["K_pct_raw_pct"] = _pool_rank(full["K_pct"], team["K_pct"], invert=False)
+
+    # LuckDelta_pct: normalize xwOBA−wOBA gap from the full batting pool,
+    # then map to team players by key_mlbam (team_bat may not have this column
+    # since it comes from the DB rather than the FG batting CSV).
+    if "LuckDelta" in full.columns and full["LuckDelta"].notna().sum() > 1:
+        try:
+            from ingest import normalize_percentile as _np
+            luck_valid   = full[full["LuckDelta"].notna()].copy()
+            luck_pcts    = _np(luck_valid["LuckDelta"])  # higher = more unlucky
+            luck_map     = dict(zip(luck_valid["key_mlbam"], luck_pcts))
+            team["LuckDelta_pct"] = team["key_mlbam"].map(
+                lambda x: luck_map.get(int(x)) if pd.notna(x) else None
+            )
+        except Exception:
+            pass
 
     return team
 

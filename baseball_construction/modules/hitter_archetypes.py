@@ -64,6 +64,23 @@ SPEED_ELITE_THRESHOLD   = 29.0   # ft/sec — top ~10%
 SPEED_FAST_THRESHOLD    = 28.0   # ft/sec — top ~35%
 SPEED_AVERAGE_THRESHOLD = 26.5   # ft/sec — above slow
 
+# Lucky / Unlucky (LuckDelta = xwOBA − wOBA percentile, positive = unlucky)
+LUCKY_THRESHOLD   = 25.0   # bottom 25% luck delta → luckier than expected
+UNLUCKY_THRESHOLD = 75.0   # top 25% luck delta → unluckier than expected
+
+# Contact Quality (composite of Barrel_pct + HardHit_pct percentiles)
+CONTACT_QUALITY_PLUS_THRESHOLD   = 70.0  # top 30% → "Plus Contact"
+CONTACT_QUALITY_WEAK_THRESHOLD   = 30.0  # bottom 30% → "Weak Contact"
+
+# Plate Discipline (composite: BB_pct weighted 60%, OSwing inv 40%)
+DISCIPLINE_ELITE_THRESHOLD  = 75.0  # top 25% → "Elite Discipline"
+DISCIPLINE_PATIENT_THRESHOLD= 55.0  # top 45% → "Disciplined"
+DISCIPLINE_HACKER_THRESHOLD = 35.0  # bottom 35% → "Hacker"
+
+# Table Setter
+TABLE_SETTER_OBP_THRESHOLD = 65.0   # OBP percentile — above-average on-base
+TABLE_SETTER_ISO_CEILING   = 45.0   # ISO percentile — not a power threat
+
 # Disruptiveness — note: raw values required (not percentiles)
 DISRUPTIVE_MIN_ATTEMPTS = 8          # prorated by games played
 
@@ -376,6 +393,111 @@ def compute_speed_tier(sprint_speed_raw: Optional[float]) -> Optional[str]:
     return "Slow"
 
 
+def compute_lucky_unlucky(metrics: dict[str, float]) -> Optional[str]:
+    """
+    Lucky / Unlucky modifier based on xwOBA − wOBA percentile rank.
+
+    LuckDelta = xwOBA − wOBA (from est_woba_minus_woba_diff in FG batting CSV).
+    After cross-player normalization, higher percentile = more unlucky.
+
+    Returns 'Lucky' | 'Unlucky' | None.
+    Only fires for players with Statcast coverage (LuckDelta available).
+    """
+    luck = metrics.get("LuckDelta")
+    if luck is None:
+        return None
+    if float(luck) <= LUCKY_THRESHOLD:
+        return "Lucky"
+    if float(luck) >= UNLUCKY_THRESHOLD:
+        return "Unlucky"
+    return None
+
+
+def compute_contact_quality(metrics: dict[str, float]) -> Optional[str]:
+    """
+    Contact Quality tier based on Barrel% and Hard Hit% percentile ranks.
+
+    Composite = 0.5 * Barrel_pct + 0.5 * HardHit_pct
+    Falls back to whichever is available if only one is present.
+
+    Returns 'Plus Contact' | 'Weak Contact' | None (average or no data).
+    """
+    barrel   = metrics.get("Barrel_pct")
+    hard_hit = metrics.get("HardHit_pct")
+
+    if barrel is None and hard_hit is None:
+        return None
+
+    vals = [v for v in [barrel, hard_hit] if v is not None]
+    composite = float(np.mean(vals))
+
+    if composite >= CONTACT_QUALITY_PLUS_THRESHOLD:
+        return "Plus Contact"
+    if composite <= CONTACT_QUALITY_WEAK_THRESHOLD:
+        return "Weak Contact"
+    return None
+
+
+def compute_plate_discipline(metrics: dict[str, float]) -> Optional[str]:
+    """
+    Plate Discipline grade — composite of walk rate and chase rate.
+
+    Score = BB_pct_pct × 0.60 + (100 − OSwing_pct) × 0.40
+    OSwing falls back to zone swing / pitches per PA signals if unavailable.
+
+    Returns 'Elite Discipline' | 'Disciplined' | 'Hacker' | None (average).
+    Skips Average to reduce label clutter.
+    """
+    bb_pct   = metrics.get("BB_pct")     # already percentile-ranked
+    oswing   = metrics.get("OSwing_pct") # higher = chases more (bad)
+
+    if bb_pct is None:
+        return None
+
+    if oswing is not None:
+        score = float(bb_pct) * 0.60 + (100.0 - float(oswing)) * 0.40
+    else:
+        # Chase not available — fall back to walk rate only
+        score = float(bb_pct)
+
+    if score >= DISCIPLINE_ELITE_THRESHOLD:
+        return "Elite Discipline"
+    if score >= DISCIPLINE_PATIENT_THRESHOLD:
+        return "Disciplined"
+    if score <= DISCIPLINE_HACKER_THRESHOLD:
+        return "Hacker"
+    return None
+
+
+def compute_table_setter(
+    metrics:          dict[str, float],
+    sprint_speed_raw: Optional[float] = None,
+) -> bool:
+    """
+    Table Setter modifier — high OBP + speed + low power.
+
+    Gates:
+      OBP_pct   >= 65  (above-average on-base ability)
+      speed tier Fast or Elite (>= 28.0 ft/sec)
+      ISO_pct   <= 45  (not a power threat — limits to true table setters)
+
+    Captures: Myles Straw, Tommy Edman, early-career Altuve types.
+    A Complete Hitter would have ISO > 45 and thus NOT be a Table Setter.
+    """
+    obp = metrics.get("OBP")   # stripped from OBP_pct after normalization
+    iso = metrics.get("ISO")   # stripped from ISO_pct after normalization
+
+    if obp is None or iso is None:
+        return False
+    if float(obp) < TABLE_SETTER_OBP_THRESHOLD:
+        return False
+    if float(iso) > TABLE_SETTER_ISO_CEILING:
+        return False
+
+    speed = compute_speed_tier(sprint_speed_raw)
+    return speed in ("Fast", "Elite")
+
+
 def compute_disruptiveness(
     sb:                int,
     cs:                int,
@@ -476,20 +598,28 @@ def build_hitter_profile(
             modifiers:  {free_swinger, speed, disruptiveness},
         }
     """
-    primary        = classify_primary(metrics)
-    aggressive     = compute_aggressive(metrics)
-    free_swinger   = compute_free_swinger(metrics)
-    speed_tier     = compute_speed_tier(sprint_speed_raw)
-    disruptiveness = compute_disruptiveness(sb, cs, opportunities, games, season_games,
-                                            attempt_rate_pct=attempt_rate_pct)
+    primary          = classify_primary(metrics)
+    aggressive       = compute_aggressive(metrics)
+    free_swinger     = compute_free_swinger(metrics)
+    speed_tier       = compute_speed_tier(sprint_speed_raw)
+    lucky_unlucky    = compute_lucky_unlucky(metrics)
+    contact_quality  = compute_contact_quality(metrics)
+    plate_discipline = compute_plate_discipline(metrics)
+    table_setter     = compute_table_setter(metrics, sprint_speed_raw)
+    disruptiveness   = compute_disruptiveness(sb, cs, opportunities, games, season_games,
+                                              attempt_rate_pct=attempt_rate_pct)
 
     return {
         "player_id": player_id,
         "primary":   primary,
         "modifiers": {
-            "aggressive":      aggressive,
-            "free_swinger":    free_swinger,
-            "speed":           speed_tier,
+            "aggressive":       aggressive,
+            "free_swinger":     free_swinger,
+            "speed":            speed_tier,
+            "lucky_unlucky":    lucky_unlucky,
+            "contact_quality":  contact_quality,
+            "plate_discipline": plate_discipline,
+            "table_setter":     table_setter,
             "disruptiveness":  disruptiveness,
         },
     }
