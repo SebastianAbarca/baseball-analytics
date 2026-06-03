@@ -607,6 +607,8 @@ def build_hitter_profile(
         }
     """
     primary          = classify_primary(metrics)
+    is_complete      = primary.get("type") == "Complete Hitter"
+
     aggressive       = compute_aggressive(metrics)
     gap_hitter       = compute_gap_hitter(metrics)
     speed_tier       = compute_speed_tier(sprint_speed_raw)
@@ -616,6 +618,23 @@ def build_hitter_profile(
     table_setter     = compute_table_setter(metrics, sprint_speed_raw)
     disruptiveness   = compute_disruptiveness(sb, cs, opportunities, games, season_games,
                                               attempt_rate_pct=attempt_rate_pct)
+
+    # ── Complete Hitter suppression ──────────────────────────────────────────
+    # Tags whose meaning is already implied by the Complete Hitter gates are
+    # suppressed to keep the modifier column clean and non-redundant.
+    #   Gap Hitter    — implied by elite contact quality + power gates
+    #   Plus Contact  — implied by Barrel% ≥ 65th + Contact% ≥ 55th gates
+    #   Disciplined   — implied by BB% ≥ 65th gate (walks are already a gate)
+    # Tags kept for Complete Hitters: speed, Lucky/Unlucky, Aggressive,
+    #   Table Setter, Disruptive/Chaotic (none implied by the T1 gates).
+    if is_complete:
+        gap_hitter    = False
+        if contact_quality == "Plus Contact":
+            contact_quality = None
+        if plate_discipline == "Disciplined":
+            plate_discipline = None
+        # Elite Discipline (composite ≥ 75) is stronger than the BB% ≥ 65 gate,
+        # so we keep it — it signals genuinely elite patience beyond the T1 floor.
 
     return {
         "player_id": player_id,
