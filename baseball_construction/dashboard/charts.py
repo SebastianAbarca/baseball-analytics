@@ -1355,3 +1355,226 @@ def empty_figure(message: str = "No data") -> go.Figure:
     )
     fig.update_layout(**_DARK_LAYOUT)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Team Comparison charts
+# ---------------------------------------------------------------------------
+
+# Team A = blue, Team B = orange (consistent across all comparison charts)
+_CMP_COLOR_A = "#60a5fa"
+_CMP_COLOR_B = "#f97316"
+
+
+def _portrait_label(portrait: dict) -> str:
+    team   = portrait.get("team", "?")
+    season = portrait.get("season", "?")
+    return f"{team} {season}"
+
+
+def compare_radar(portrait_a: dict | None, portrait_b: dict | None) -> go.Figure:
+    """
+    Overlaid philosophy radar — both teams on the same spider.
+    Uses the same dimension order as philosophy_radar().
+    """
+    if not portrait_a and not portrait_b:
+        return empty_figure("Load Team A and Team B to compare")
+
+    # Dimension order matches philosophy_radar
+    DIMS = ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]
+    DIM_LABELS = {
+        "A1": "TTO", "A2": "Contact+Pressure", "A3": "Aggressive Early",
+        "A4": "Lineup Power", "B1": "Stuff Dominant", "B2": "Command+Contact Mgmt",
+        "B3": "Pitch Design", "B4": "Defensive Infra",
+        "C1": "bWAR Distribution", "C2": "Roster Continuity",
+        "C3": "Youth+Dev", "C4": "Veteran Experience",
+    }
+    labels = [DIM_LABELS.get(d, d) for d in DIMS]
+
+    fig = go.Figure()
+
+    for portrait, color, suffix in [
+        (portrait_a, _CMP_COLOR_A, "a"),
+        (portrait_b, _CMP_COLOR_B, "b"),
+    ]:
+        if not portrait:
+            continue
+        scores = portrait.get("scores", {})
+        vals = []
+        for d in DIMS:
+            s = scores.get(d, {}).get("score")
+            vals.append(float(s) if s is not None else 0.0)
+        vals_closed = vals + [vals[0]]
+        lbl = _portrait_label(portrait)
+
+        fig.add_trace(go.Scatterpolar(
+            r=vals_closed,
+            theta=labels + [labels[0]],
+            fill="toself",
+            name=lbl,
+            line=dict(color=color, width=2),
+            fillcolor=_hex_to_rgba(color, 0.12),
+            hovertemplate="<b>%{theta}</b><br>" + lbl + ": %{r:.0f}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=9, color=COLORS["subtext"]),
+                            gridcolor="#374151", linecolor="#374151"),
+            angularaxis=dict(tickfont=dict(size=10, color=COLORS["subtext"]), gridcolor="#374151"),
+            bgcolor=COLORS["surface"],
+        ),
+        showlegend=True,
+        legend=dict(font=dict(color=COLORS["subtext"]), orientation="h", y=-0.08),
+    )
+    return fig
+
+
+def compare_dim_bars(portrait_a: dict | None, portrait_b: dict | None) -> go.Figure:
+    """Grouped horizontal bars — philosophy dimension scores for both teams."""
+    if not portrait_a and not portrait_b:
+        return empty_figure("Load both teams to compare")
+
+    DIM_ORDER = ["A1","A2","A3","A4","B1","B2","B3","B4","C1","C2","C3","C4"]
+    DIM_NAMES = {
+        "A1": "Three True Outcomes",  "A2": "Contact / Speed",
+        "A3": "Aggressive Approach",   "A4": "Lineup Power",
+        "B1": "Stuff Dominance",        "B2": "Command & Defense",
+        "B3": "Pitch Design",           "B4": "Defensive Infra",
+        "C1": "WAR Distribution",       "C2": "Roster Continuity",
+        "C3": "Youth & Dev",            "C4": "Veteran Experience",
+    }
+
+    dims  = [DIM_NAMES.get(d, d) for d in reversed(DIM_ORDER)]
+    codes = list(reversed(DIM_ORDER))
+
+    fig = go.Figure()
+    for portrait, color in [(portrait_a, _CMP_COLOR_A), (portrait_b, _CMP_COLOR_B)]:
+        if not portrait:
+            continue
+        scores = portrait.get("scores", {})
+        vals   = [float(scores.get(c, {}).get("score") or 0) for c in codes]
+        fig.add_trace(go.Bar(
+            x=vals, y=dims, orientation="h",
+            name=_portrait_label(portrait),
+            marker_color=color,
+            hovertemplate="<b>%{y}</b><br>Score: %{x:.0f}<extra></extra>",
+        ))
+
+    fig.update_layout(**{
+        **_DARK_LAYOUT,
+        "barmode": "group",
+        "margin": dict(l=160, r=20, t=30, b=40),
+        "bargap": 0.25, "bargroupgap": 0.08,
+        "xaxis": dict(range=[0, 100], title="Score (0–100)", gridcolor="#374151",
+                      tickfont=dict(color=COLORS["subtext"]),
+                      title_font=dict(color=COLORS["subtext"])),
+        "yaxis": dict(tickfont=dict(color=COLORS["text"], size=11)),
+        "legend": dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.04),
+    })
+    return fig
+
+
+def compare_batting_bars(portrait_a: dict | None, portrait_b: dict | None) -> go.Figure:
+    """Side-by-side team batting profile percentile bars."""
+    if not portrait_a and not portrait_b:
+        return empty_figure("Load both teams to compare")
+
+    METRICS = [
+        ("sprint_speed_pct",  "Sprint Speed"),
+        ("Contact_pct_pct",   "Contact%"),
+        ("OSwing_pct_pct",    "O-Swing%"),
+        ("FPS_pct_pct",       "FPS%"),
+        ("SwStr_pct_pct",     "SwStr%"),
+        ("Barrel_pct_pct",    "Barrel%"),
+        ("xwOBA_pct",         "xwOBA"),
+        ("HardHit_pct_pct",   "Hard Hit%"),
+        ("BB_pct_pct",        "BB%"),
+        ("K_pct_pct",         "K%"),
+    ]
+
+    # Batting percentile metrics live in portrait["philosophy_metrics"]
+    fig = go.Figure()
+    for portrait, color in [(portrait_a, _CMP_COLOR_A), (portrait_b, _CMP_COLOR_B)]:
+        if not portrait:
+            continue
+        pm    = portrait.get("philosophy_metrics", {})
+        vals  = [float(pm.get(key) or 0) for key, _ in METRICS]
+        names = [label for _, label in METRICS]
+        fig.add_trace(go.Bar(
+            y=list(reversed(names)), x=list(reversed(vals)), orientation="h",
+            name=_portrait_label(portrait),
+            marker_color=color,
+            hovertemplate="<b>%{y}</b><br>Percentile: %{x:.0f}<extra></extra>",
+        ))
+
+    fig.add_vline(x=50, line=dict(color="#6b7280", width=1, dash="dot"))
+    fig.update_layout(**{
+        **_DARK_LAYOUT,
+        "barmode": "group",
+        "margin": dict(l=100, r=20, t=30, b=40),
+        "bargap": 0.25, "bargroupgap": 0.08,
+        "xaxis": dict(range=[0, 100], title="Percentile vs. league", gridcolor="#374151",
+                      tickfont=dict(color=COLORS["subtext"]),
+                      title_font=dict(color=COLORS["subtext"])),
+        "yaxis": dict(tickfont=dict(color=COLORS["text"], size=11)),
+        "legend": dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.04),
+    })
+    return fig
+
+
+def compare_archetype_bars(portrait_a: dict | None, portrait_b: dict | None) -> go.Figure:
+    """
+    Grouped bar chart showing hitter archetype mix (%) for both teams.
+    """
+    if not portrait_a and not portrait_b:
+        return empty_figure("Load both teams to compare")
+
+    ARCH_ORDER = ["Complete Hitter", "Three True Outcomes", "Contact", "Balanced", "Power"]
+    arch_colors = {
+        "Complete Hitter": "#6366f1", "Three True Outcomes": "#ef4444",
+        "Contact": "#22c55e", "Balanced": "#06b6d4", "Power": "#f97316",
+    }
+
+    fig = go.Figure()
+
+    def _arch_pct(portrait: dict) -> dict[str, float]:
+        hitters = portrait.get("players", {}).get("hitters", [])
+        if not hitters:
+            return {}
+        total = len(hitters)
+        from collections import Counter
+        c = Counter(h.get("primary", {}).get("type", "Other") for h in hitters)
+        return {t: (c.get(t, 0) / total * 100) for t in ARCH_ORDER}
+
+    labels = []
+    for portrait, bar_color, pattern in [
+        (portrait_a, _CMP_COLOR_A, ""),
+        (portrait_b, _CMP_COLOR_B, "/"),
+    ]:
+        if not portrait:
+            continue
+        pct = _arch_pct(portrait)
+        lbl = _portrait_label(portrait)
+        labels.append(lbl)
+        fig.add_trace(go.Bar(
+            x=ARCH_ORDER,
+            y=[pct.get(t, 0) for t in ARCH_ORDER],
+            name=lbl,
+            marker_color=bar_color,
+            hovertemplate="<b>%{x}</b><br>" + lbl + ": %{y:.1f}%<extra></extra>",
+        ))
+
+    fig.update_layout(**{
+        **_DARK_LAYOUT,
+        "barmode": "group",
+        "margin": dict(l=50, r=20, t=40, b=60),
+        "bargap": 0.3, "bargroupgap": 0.1,
+        "yaxis": dict(title="% of roster", range=[0, 100], gridcolor="#374151",
+                      tickfont=dict(color=COLORS["subtext"]),
+                      title_font=dict(color=COLORS["subtext"])),
+        "xaxis": dict(tickfont=dict(color=COLORS["text"], size=10)),
+        "legend": dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.06),
+    })
+    return fig

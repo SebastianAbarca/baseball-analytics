@@ -363,3 +363,87 @@ clientside_callback(
     Input("portrait-store", "data"),
     Input("main-tabs", "active_tab"),
 )
+
+
+# ---------------------------------------------------------------------------
+# Comparison Callbacks — Team A and Team B portrait builders + chart renderers
+# ---------------------------------------------------------------------------
+
+def _build_cmp_portrait(team: str, season: int):
+    """Shared portrait builder for comparison tab (no running spinner)."""
+    import dash_bootstrap_components as dbc
+    from dash import html
+    try:
+        statcast = pull_statcast_season(int(season))
+        portrait = build_team_portrait(team, int(season), statcast=statcast)
+        serialized = _serialize(portrait)
+        cov = portrait.get("data_coverage", 0.0)
+        banner = dbc.Alert(
+            [html.Strong(f"{team} {season}"), f" loaded · {cov:.0%} coverage"],
+            color="success", className="py-1 mb-0",
+        )
+        return serialized, banner
+    except Exception as exc:
+        log.exception("compare portrait failed: %s", exc)
+        return no_update, dbc.Alert(f"Error: {exc}", color="danger", className="py-1")
+
+
+@callback(
+    Output("cmp-store-a",    "data"),
+    Output("cmp-status-a",   "children"),
+    Input("cmp-btn-a",       "n_clicks"),
+    State("cmp-team-a",      "value"),
+    State("cmp-season-a",    "value"),
+    running=[
+        (Output("cmp-btn-a", "disabled"), True, False),
+        (Output("cmp-status-a", "children"),
+         __import__("dash_bootstrap_components").Alert(
+             "Loading Team A…", color="primary", className="py-1 mb-0"),
+         no_update),
+    ],
+    prevent_initial_call=True,
+)
+def build_cmp_portrait_a(n_clicks, team, season):
+    if not team or not season:
+        return no_update, no_update
+    return _build_cmp_portrait(team, int(season))
+
+
+@callback(
+    Output("cmp-store-b",    "data"),
+    Output("cmp-status-b",   "children"),
+    Input("cmp-btn-b",       "n_clicks"),
+    State("cmp-team-b",      "value"),
+    State("cmp-season-b",    "value"),
+    running=[
+        (Output("cmp-btn-b", "disabled"), True, False),
+        (Output("cmp-status-b", "children"),
+         __import__("dash_bootstrap_components").Alert(
+             "Loading Team B…", color="warning", className="py-1 mb-0"),
+         no_update),
+    ],
+    prevent_initial_call=True,
+)
+def build_cmp_portrait_b(n_clicks, team, season):
+    if not team or not season:
+        return no_update, no_update
+    return _build_cmp_portrait(team, int(season))
+
+
+@callback(
+    Output("cmp-radar",      "figure"),
+    Output("cmp-dim-bars",   "figure"),
+    Output("cmp-batting",    "figure"),
+    Output("cmp-archetypes", "figure"),
+    Input("cmp-store-a",     "data"),
+    Input("cmp-store-b",     "data"),
+)
+def update_compare_charts(data_a, data_b):
+    pa = _deserialize(data_a)
+    pb = _deserialize(data_b)
+    return (
+        charts.compare_radar(pa, pb),
+        charts.compare_dim_bars(pa, pb),
+        charts.compare_batting_bars(pa, pb),
+        charts.compare_archetype_bars(pa, pb),
+    )
