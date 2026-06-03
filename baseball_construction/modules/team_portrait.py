@@ -1609,6 +1609,79 @@ def build_team_portrait(
     # ── 14. Data coverage ─────────────────────────────────────────────────
     coverage = _data_coverage(philosophy_metrics)
 
+    # ── 15. Spray chart data ──────────────────────────────────────────────
+    spray_data: dict = {}
+    try:
+        HP_X, HP_Y = 126.0, 203.0
+        team_bip = statcast[
+            statcast["batter"].isin(hitter_ids) &
+            statcast["hc_x"].notna() & statcast["hc_y"].notna()
+        ].copy()
+
+        def _event_bucket(ev: str) -> str:
+            if ev == "home_run":            return "hr"
+            if ev in ("double", "triple"):  return "xbh"
+            if ev == "single":              return "single"
+            return "out"
+
+        team_bip["_bucket"] = team_bip["events"].fillna("out").apply(_event_bucket)
+        team_bip["_angle"]  = np.degrees(np.arctan2(
+            team_bip["hc_x"].astype(float) - HP_X,
+            HP_Y - team_bip["hc_y"].astype(float),
+        ))
+        n_bip = len(team_bip)
+        rh_mask = (team_bip.get("stand", pd.Series("R", index=team_bip.index)) == "R")
+        lh_mask = ~rh_mask
+        true_pull_mask = (rh_mask & (team_bip["_angle"] >  50)) | (lh_mask & (team_bip["_angle"] < -50))
+        true_oppo_mask = (rh_mask & (team_bip["_angle"] < -50)) | (lh_mask & (team_bip["_angle"] >  50))
+        gap_mask    = team_bip["_angle"].abs().between(20, 50)
+        center_mask = team_bip["_angle"].abs() < 20
+
+        # League-wide directional averages (all batters this season)
+        lg_bip = statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()].copy()
+        lg_n   = len(lg_bip)
+        if lg_n > 0:
+            lg_bip["_angle"] = np.degrees(np.arctan2(
+                lg_bip["hc_x"].astype(float) - HP_X,
+                HP_Y - lg_bip["hc_y"].astype(float),
+            ))
+            lg_rh = (lg_bip.get("stand", pd.Series("R", index=lg_bip.index)) == "R")
+            lg_lh = ~lg_rh
+            lg_pull   = float(((lg_rh & (lg_bip["_angle"] >  50)) | (lg_lh & (lg_bip["_angle"] < -50))).sum() / lg_n)
+            lg_gap    = float(lg_bip["_angle"].abs().between(20, 50).sum() / lg_n)
+            lg_center = float((lg_bip["_angle"].abs() < 20).sum() / lg_n)
+            lg_oppo   = float(((lg_rh & (lg_bip["_angle"] < -50)) | (lg_lh & (lg_bip["_angle"] >  50))).sum() / lg_n)
+        else:
+            lg_pull = lg_gap = lg_center = lg_oppo = 0.25
+
+        hr_n  = int((team_bip["_bucket"] == "hr").sum())
+        xbh_n = int((team_bip["_bucket"] == "xbh").sum())
+        s_n   = int((team_bip["_bucket"] == "single").sum())
+        stand_cts   = team_bip["stand"].value_counts().to_dict() if "stand" in team_bip.columns else {}
+        total_stand = sum(stand_cts.values()) or 1
+
+        spray_data = {
+            "hc_x":       [float(x) for x in team_bip["hc_x"].tolist()[:5000]],
+            "hc_y":       [float(y) for y in team_bip["hc_y"].tolist()[:5000]],
+            "event_type": team_bip["_bucket"].tolist()[:5000],
+            "stand":      (team_bip["stand"].tolist()[:5000] if "stand" in team_bip.columns else []),
+            "pull_pct":   float(true_pull_mask.sum() / n_bip) if n_bip else 0,
+            "gap_pct":    float(gap_mask.sum()        / n_bip) if n_bip else 0,
+            "center_pct": float(center_mask.sum()     / n_bip) if n_bip else 0,
+            "oppo_pct":   float(true_oppo_mask.sum()  / n_bip) if n_bip else 0,
+            "lg_pull_pct":   lg_pull,
+            "lg_gap_pct":    lg_gap,
+            "lg_center_pct": lg_center,
+            "lg_oppo_pct":   lg_oppo,
+            "hr_count":     hr_n,
+            "xbh_count":    xbh_n,
+            "single_count": s_n,
+            "stand_pct":    {k: v/total_stand for k, v in stand_cts.items()},
+        }
+        log.info("Spray data — %d BIP  HR=%d 2B/3B=%d 1B=%d", n_bip, hr_n, xbh_n, s_n)
+    except Exception as exc:
+        log.warning("Spray data failed: %s", exc)
+
     portrait = {
         "team":   team,
         "season": season,
@@ -1636,6 +1709,7 @@ def build_team_portrait(
             )
         },
         "data_coverage": coverage,
+        "spray_data":    spray_data,
     }
 
     log.info(

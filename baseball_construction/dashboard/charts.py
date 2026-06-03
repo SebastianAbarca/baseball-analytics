@@ -1350,152 +1350,241 @@ def philosophy_breakdown_card(portrait: dict, code: str) -> html.Div:
 
 def team_spray_heatmap(portrait: dict) -> go.Figure:
     """
-    2-D density heatmap of the team's batted ball locations.
+    Real dot spray chart with directional split bars and power source donut.
 
-    Data source: hitters in portrait["players"]["hitters"] carry
-    spray-derived percentiles but not raw coordinates. The heatmap is
-    built from the philosophy_metrics team-level gap/pull/oppo rates plus
-    a schematic field overlay — no raw Statcast access needed at render time.
-
-    Instead we draw a synthetic field diagram and annotate the team's
-    directional tendencies (pull%, gap%, oppo%) as colored wedges/text.
-    This gives an at-a-glance spatial read of the team's batted ball profile.
+    Three panels:
+      Top (full width): dot spray chart — actual hc_x/hc_y from Statcast,
+        colored by outcome (HR=red, 2B/3B=orange, 1B=blue, out=grey).
+        Field diagram with foul lines, arc, diamond, pitcher's mound.
+        Batter's box silhouette(s) based on team handedness split.
+      Bottom-left: directional split bars (Pull/Gap/Center/Oppo vs league avg)
+      Bottom-right: power source donut (HR / 2B+3B / 1B share of hits)
     """
-    pm  = portrait.get("philosophy_metrics", {})
-    tm  = portrait.get("team_metrics", {})
+    import math
+    from plotly.subplots import make_subplots as _make_subplots
+
+    spray  = portrait.get("spray_data", {})
     team   = portrait.get("team", "")
     season = portrait.get("season", "")
 
-    # Pull raw pull/gap/oppo from batting_agg if available
-    bat = tm.get("batting", {})
+    if not spray or not spray.get("hc_x"):
+        return empty_figure("Spray data unavailable — reload portrait")
 
-    # Read team-level spray from philosophy_metrics (percentile ranks)
-    pull_pct_rank = pm.get("Pull_pct_pct")
-    gap_pct_rank  = pm.get("GapTend_pct_pct")  # or GapTend_pct if stored that way
-    # Also check alternate key names
-    if gap_pct_rank is None:
-        gap_pct_rank = pm.get("TeamGap_pct")
+    # ── Subplots: spray field (top, full-width) + bars + donut ───────────────
+    fig = _make_subplots(
+        rows=2, cols=2,
+        row_heights=[0.62, 0.38],
+        specs=[
+            [{"colspan": 2, "type": "scatter"}, None],
+            [{"type": "bar"},                    {"type": "pie"}],
+        ],
+        vertical_spacing=0.06,
+        horizontal_spacing=0.08,
+    )
 
-    psr = tm.get("power_source_ratio")  # 0–1: 1.0 = all HRs, 0.0 = all gap
+    # ── Field geometry (Statcast coords: HP≈(126,203), CF≈(126,15)) ──────────
+    HP_X, HP_Y = 126.0, 203.0
 
-    if pull_pct_rank is None and gap_pct_rank is None:
-        fig = empty_figure("Spray data unavailable — load a portrait with Statcast coverage")
-        return fig
+    # Outfield arc (approx fence at 300–350 Statcast units from HP)
+    arc_angles = [a for a in range(-45, 46)]
+    r_fence    = 185  # units from HP to fence (calibrated to HR landing zone)
+    arc_x = [HP_X + r_fence * math.sin(math.radians(a)) for a in arc_angles]
+    arc_y = [HP_Y - r_fence * math.cos(math.radians(a)) for a in arc_angles]
+    arc_x = [HP_X - r_fence * math.sin(math.radians(45))] + arc_x + \
+            [HP_X + r_fence * math.sin(math.radians(45))]
+    arc_y = [HP_Y - r_fence * math.cos(math.radians(45))] + arc_y + \
+            [HP_Y - r_fence * math.cos(math.radians(45))]
 
-    # ── Draw schematic baseball field ────────────────────────────────────────
-    fig = go.Figure()
+    # Foul lines (extend beyond fence)
+    r_line = 210
+    fig.add_trace(go.Scatter(
+        x=[HP_X, HP_X - r_line * math.sin(math.radians(45))],
+        y=[HP_Y, HP_Y - r_line * math.cos(math.radians(45))],
+        mode="lines", line=dict(color="#6b7280", width=1),
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=[HP_X, HP_X + r_line * math.sin(math.radians(45))],
+        y=[HP_Y, HP_Y - r_line * math.cos(math.radians(45))],
+        mode="lines", line=dict(color="#6b7280", width=1),
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
 
-    # Field outline (simplified): foul lines at ±45°, outfield arc at r=330ft
-    import math
-    angles_left  = [a for a in range(-45, 1)]
-    angles_right = [a for a in range(0, 46)]
-    all_angles   = list(range(-45, 46))
-
-    def polar_to_xy(r, deg):
-        rad = math.radians(deg)
-        return r * math.sin(rad), r * math.cos(rad)
-
-    # Outfield arc
-    arc_x = [polar_to_xy(330, a)[0] for a in all_angles]
-    arc_y = [polar_to_xy(330, a)[1] for a in all_angles]
-    arc_x = [0] + arc_x + [0]
-    arc_y = [0] + arc_y + [0]
-
+    # Outfield arc + grass fill
     fig.add_trace(go.Scatter(
         x=arc_x, y=arc_y, mode="lines", fill="toself",
-        fillcolor="rgba(34,85,34,0.35)",
+        fillcolor="rgba(22,101,52,0.4)",
         line=dict(color="#4ade80", width=1.5),
-        hoverinfo="skip", name="Field",
-    ))
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
 
-    # Infield diamond
-    diamond_x = [0, 90*math.sin(math.radians(45)), 0, -90*math.sin(math.radians(45)), 0]
-    diamond_y = [0, 90*math.cos(math.radians(45)), 180, 90*math.cos(math.radians(45)), 0]
+    # Infield dirt circle (approximate)
+    infield_r = 58
+    theta_if = [math.radians(a) for a in range(0, 361, 5)]
+    fig.add_trace(go.Scatter(
+        x=[HP_X + infield_r * math.sin(t) for t in theta_if],
+        y=[HP_Y - infield_r * math.cos(t) for t in theta_if],
+        mode="lines", fill="toself",
+        fillcolor="rgba(120,80,40,0.3)",
+        line=dict(color="rgba(0,0,0,0)", width=0),
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
+
+    # Infield diamond (bases ≈ 34 units apart at 45°)
+    B = 34  # base-to-base in Statcast units
+    diamond_x = [HP_X, HP_X + B, HP_X, HP_X - B, HP_X]
+    diamond_y = [HP_Y, HP_Y - B, HP_Y - 2*B, HP_Y - B, HP_Y]
     fig.add_trace(go.Scatter(
         x=diamond_x, y=diamond_y, mode="lines",
-        line=dict(color="#9ca3af", width=1, dash="dot"),
+        line=dict(color="#d1fae5", width=1.5),
         hoverinfo="skip", showlegend=False,
-    ))
+    ), row=1, col=1)
 
-    # ── Directional tendency wedges ──────────────────────────────────────────
-    # Color-code pull / gap / oppo zones by percentile rank
-    def _zone_color(pct_rank, low_good=False):
-        """Map a 0-100 percentile to a heat color."""
-        if pct_rank is None:
-            return "rgba(107,114,128,0.4)"
-        v = pct_rank / 100.0
-        if low_good:
-            v = 1 - v
-        r = int(239 * v + 30 * (1-v))
-        g = int(68 * v + 180 * (1-v))
-        b = int(68 * (1-v) + 68 * v)
-        return f"rgba({r},{g},{b},0.55)"
-
-    # Pull zone wedge: spray angle 50–75° (RF for RHH)
-    pull_angles = range(50, 76)
-    pw_x = [0] + [polar_to_xy(280, a)[0] for a in pull_angles] + [0]
-    pw_y = [0] + [polar_to_xy(280, a)[1] for a in pull_angles] + [0]
+    # Pitcher's mound
+    mound_r = 5
+    theta_m  = [math.radians(a) for a in range(0, 361, 10)]
     fig.add_trace(go.Scatter(
-        x=pw_x, y=pw_y, mode="lines", fill="toself",
-        fillcolor=_zone_color(pull_pct_rank),
+        x=[HP_X + mound_r * math.sin(t) for t in theta_m],
+        y=[HP_Y - B + mound_r * math.cos(t) for t in theta_m],
+        mode="lines", fill="toself",
+        fillcolor="rgba(150,100,50,0.6)",
         line=dict(color="rgba(0,0,0,0)", width=0),
-        hoverinfo="skip", name="Pull tendency",
-    ))
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
 
-    # Gap zones: ±20–50°
-    for gap_angles in [range(20, 51), range(-50, -19)]:
-        gw_x = [0] + [polar_to_xy(300, a)[0] for a in gap_angles] + [0]
-        gw_y = [0] + [polar_to_xy(300, a)[1] for a in gap_angles] + [0]
+    # ── Batted ball dots ──────────────────────────────────────────────────────
+    hc_x       = spray["hc_x"]
+    hc_y       = spray["hc_y"]
+    event_type = spray["event_type"]
+
+    _OUTCOME = {
+        "hr":     dict(color="#ef4444", size=7,  opacity=0.85, name="Home Run"),
+        "xbh":    dict(color="#f97316", size=5,  opacity=0.75, name="2B / 3B"),
+        "single": dict(color="#60a5fa", size=4,  opacity=0.65, name="Single"),
+        "out":    dict(color="#4b5563", size=3,  opacity=0.25, name="Out"),
+    }
+    for etype in ["out", "single", "xbh", "hr"]:  # out first so HRs render on top
+        xs = [x for x, e in zip(hc_x, event_type) if e == etype]
+        ys = [y for y, e in zip(hc_y, event_type) if e == etype]
+        if not xs:
+            continue
+        cfg = _OUTCOME[etype]
         fig.add_trace(go.Scatter(
-            x=gw_x, y=gw_y, mode="lines", fill="toself",
-            fillcolor=_zone_color(gap_pct_rank),
-            line=dict(color="rgba(0,0,0,0)", width=0),
-            hoverinfo="skip", name="Gap tendency" if gap_angles.start > 0 else None,
-            showlegend=(gap_angles.start > 0),
-        ))
+            x=xs, y=ys, mode="markers",
+            marker=dict(color=cfg["color"], size=cfg["size"],
+                        opacity=cfg["opacity"], line=dict(width=0)),
+            name=cfg["name"],
+            hovertemplate=f"{cfg['name']}<extra></extra>",
+        ), row=1, col=1)
 
-    # ── Annotations ──────────────────────────────────────────────────────────
-    annotations = []
-    if pull_pct_rank is not None:
-        annotations.append(dict(
-            x=220, y=180, text=f"Pull<br>{pull_pct_rank:.0f}th pct",
-            showarrow=False, font=dict(color="#f9fafb", size=11),
-            align="center",
-        ))
-    if gap_pct_rank is not None:
-        annotations.append(dict(
-            x=0, y=290, text=f"Gap<br>{gap_pct_rank:.0f}th pct",
-            showarrow=False, font=dict(color="#f9fafb", size=11),
-            align="center",
-        ))
-    if psr is not None:
-        psr_pct = int(psr * 100)
-        annotations.append(dict(
-            x=0, y=80, text=f"Power source<br>{psr_pct}% HR · {100-psr_pct}% Gap",
-            showarrow=False, font=dict(color="#9ca3af", size=10),
-            align="center",
-        ))
+    # ── Batter's box silhouettes ──────────────────────────────────────────────
+    stand_pct = spray.get("stand_pct", {})
+    r_pct = stand_pct.get("R", 0)
+    l_pct = stand_pct.get("L", 0)
+    show_r = r_pct >= 0.05
+    show_l = l_pct >= 0.05
 
+    # Box dimensions (Statcast units)
+    BOX_W, BOX_H = 6, 11
+    # Right-handed box: left side of HP (3B side from pitcher's view)
+    if show_r:
+        fig.add_shape(type="rect",
+            x0=HP_X - BOX_W - 3, y0=HP_Y - BOX_H/2,
+            x1=HP_X - 3,         y1=HP_Y + BOX_H/2,
+            line=dict(color="#9ca3af", width=1),
+            row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=[HP_X - BOX_W/2 - 3], y=[HP_Y - BOX_H/2 - 4],
+            mode="text", text=["R"], textfont=dict(color="#9ca3af", size=9),
+            hoverinfo="skip", showlegend=False,
+        ), row=1, col=1)
+    # Left-handed box: right side of HP (1B side)
+    if show_l:
+        fig.add_shape(type="rect",
+            x0=HP_X + 3,         y0=HP_Y - BOX_H/2,
+            x1=HP_X + BOX_W + 3, y1=HP_Y + BOX_H/2,
+            line=dict(color="#9ca3af", width=1),
+            row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=[HP_X + BOX_W/2 + 3], y=[HP_Y - BOX_H/2 - 4],
+            mode="text", text=["L"], textfont=dict(color="#9ca3af", size=9),
+            hoverinfo="skip", showlegend=False,
+        ), row=1, col=1)
+
+    # ── Directional split bars ────────────────────────────────────────────────
+    dirs      = ["Pull", "Gap", "Center", "Oppo"]
+    team_vals = [spray.get(f"{d.lower()}_pct", 0) * 100 for d in dirs]
+    lg_vals   = [spray.get(f"lg_{d.lower()}_pct", 0) * 100 for d in dirs]
+
+    fig.add_trace(go.Bar(
+        x=dirs, y=team_vals, name="Team",
+        marker_color=COLORS["primary"],
+        hovertemplate="%{x}: %{y:.1f}%<extra></extra>",
+    ), row=2, col=1)
+
+    # League-average dots
+    fig.add_trace(go.Scatter(
+        x=dirs, y=lg_vals, mode="markers",
+        marker=dict(color="#9ca3af", size=8, symbol="line-ew",
+                    line=dict(color="#9ca3af", width=2)),
+        name="Lg Avg",
+        hovertemplate="Lg avg %{x}: %{y:.1f}%<extra></extra>",
+    ), row=2, col=1)
+
+    # ── Power source donut ────────────────────────────────────────────────────
+    hr_n  = spray.get("hr_count", 0)
+    xbh_n = spray.get("xbh_count", 0)
+    s_n   = spray.get("single_count", 0)
+    if hr_n + xbh_n + s_n > 0:
+        fig.add_trace(go.Pie(
+            values=[hr_n, xbh_n, s_n],
+            labels=["HR", "2B/3B", "1B"],
+            hole=0.52,
+            marker=dict(colors=["#ef4444", "#f97316", "#60a5fa"],
+                        line=dict(color=COLORS["background"], width=1)),
+            textfont=dict(color=COLORS["text"], size=11),
+            hovertemplate="%{label}: %{value} (%{percent})<extra></extra>",
+            showlegend=False,
+        ), row=2, col=2)
+        # Center annotation
+        fig.add_annotation(
+            text="Hits", xref="paper", yref="paper",
+            x=0.88, y=0.12, showarrow=False,
+            font=dict(color=COLORS["subtext"], size=10),
+        )
+
+    # ── Layout ────────────────────────────────────────────────────────────────
     fig.update_layout(**{
         **_DARK_LAYOUT,
         "title": dict(
             text=f"{team} {season} — Batted Ball Profile",
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
-        "xaxis": dict(
-            range=[-350, 350], showgrid=False, zeroline=False,
-            showticklabels=False, scaleanchor="y",
+        "margin": dict(l=10, r=10, t=45, b=10),
+        "showlegend": True,
+        "legend": dict(
+            font=dict(color=COLORS["subtext"], size=10),
+            x=0.78, y=0.98, bgcolor="rgba(0,0,0,0)",
+            traceorder="reversed",
         ),
-        "yaxis": dict(
-            range=[-20, 380], showgrid=False, zeroline=False,
-            showticklabels=False,
-        ),
-        "margin": dict(l=10, r=10, t=50, b=10),
-        "annotations": annotations,
-        "showlegend": False,
-        "plot_bgcolor": "#0f1923",
+        "plot_bgcolor": "#0d1117",
         "paper_bgcolor": COLORS["background"],
     })
+
+    # Field axes (flipped y so HP is at bottom)
+    fig.update_xaxes(range=[0, 252], showgrid=False, zeroline=False,
+                     showticklabels=False, row=1, col=1)
+    fig.update_yaxes(range=[215, 5], showgrid=False, zeroline=False,
+                     showticklabels=False, row=1, col=1)
+
+    # Bar chart axes
+    fig.update_yaxes(title_text="% of BIP", ticksuffix="%",
+                     gridcolor="#374151",
+                     tickfont=dict(color=COLORS["subtext"]),
+                     title_font=dict(color=COLORS["subtext"]),
+                     row=2, col=1)
+    fig.update_xaxes(tickfont=dict(color=COLORS["text"]), row=2, col=1)
+
     return fig
 
 
