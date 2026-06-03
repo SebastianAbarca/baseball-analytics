@@ -1508,12 +1508,10 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         hovertemplate="%{x}: %{y:.1f}%<extra></extra>",
     ), row=2, col=1)
 
-    # League-average dots
-    fig.add_trace(go.Scatter(
-        x=dirs, y=lg_vals, mode="markers",
-        marker=dict(color="#9ca3af", size=8, symbol="line-ew",
-                    line=dict(color="#9ca3af", width=2)),
-        name="Lg Avg",
+    fig.add_trace(go.Bar(
+        x=dirs, y=lg_vals, name="Lg Avg",
+        marker_color="#4b5563",
+        marker_line=dict(color="#6b7280", width=1),
         hovertemplate="Lg avg %{x}: %{y:.1f}%<extra></extra>",
     ), row=2, col=1)
 
@@ -1547,6 +1545,9 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
         "margin": dict(l=10, r=10, t=45, b=10),
+        "barmode": "group",
+        "bargap": 0.25,
+        "bargroupgap": 0.08,
         "showlegend": True,
         "legend": dict(
             orientation="h",
