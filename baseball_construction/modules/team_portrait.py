@@ -860,6 +860,12 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
         sprint_raw = row.get("sprint_speed") or row.get("Sprint Speed")
         sprint_raw = float(sprint_raw) if sprint_raw is not None and not pd.isna(sprint_raw) else None
 
+        # Raw K rate (fraction, e.g. 0.259) for Complete Hitter K% ceiling.
+        # Stored under "K_pct" after BATTING_COL_MAP rename; fall back to "k_rate".
+        k_raw = row.get("K_pct") or row.get("k_rate") or row.get("K_rate")
+        if k_raw is not None and not pd.isna(k_raw):
+            metrics["k_rate_raw"] = float(k_raw)
+
         # Attempt rate percentile (cross-player, pre-computed above)
         att_pct = att_pct_series.get(idx)
         att_pct = float(att_pct) if att_pct is not None and not np.isnan(att_pct) else None

@@ -32,13 +32,19 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 COMPLETE_THRESHOLDS: dict[str, float] = {
-    "xwOBA":       70.0,   # overall expected offensive quality (replaces wRC+)
-    "OBP":         70.0,   # on-base ability
-    "ISO":         70.0,   # real power
-    "BB_pct":      65.0,   # plate discipline
-    "Barrel_pct":  65.0,   # consistent hard contact (replaces ZContact%)
-    "Contact_pct": 55.0,   # ability to make contact (the Schwarber gate)
+    "xwOBA":    70.0,   # overall expected offensive quality
+    "OBP":      70.0,   # on-base ability
+    "ISO":      70.0,   # real power
+    "BB_pct":   65.0,   # plate discipline
+    "Barrel_pct": 65.0, # consistent hard contact quality
+    "AVG":      75.0,   # batting average — output is king. Replaces Contact_pct:
+                        # Contact% measures process (swing contact rate) but doesn't
+                        # guarantee useful contact. AVG measures actual results.
 }
+
+# K% hard ceiling — true TTO strikeout rates are incompatible with "complete"
+# regardless of AVG or other metrics. Raw fraction (0.30 = 30%).
+COMPLETE_K_CEILING = 0.30
 
 TTO_THRESHOLDS: dict[str, float] = {
     "K_pct_raw": 55.0,   # above average K rate (non-inverted pct — higher = more Ks)
@@ -145,11 +151,21 @@ def classify_complete(metrics: dict[str, float]) -> Optional[dict]:
     """
     Type 1 — Complete Hitter.
 
-    All 5 COMPLETE_THRESHOLDS must be met.
-    Returns archetype dict or None if not Complete.
+    All 6 COMPLETE_THRESHOLDS must be met, including AVG ≥ 75th pct.
+    AVG replaces the old Contact_pct gate — output is king. Contact%
+    measures process (swing contact rate) but a high contact rate with
+    weak contact (Grisham) doesn't make a Complete Hitter. AVG does.
+
+    Additional ceiling: K% > 30% raw disqualifies regardless of AVG,
+    keeping extreme TTO strikeout rates out of the Complete Hitter label.
     """
     passes, raw_conf, margins = _check_thresholds(metrics, COMPLETE_THRESHOLDS)
     if not passes:
+        return None
+
+    # K% hard ceiling: > 30% raw K rate disqualifies
+    k_raw = metrics.get("k_rate_raw")
+    if k_raw is not None and float(k_raw) > COMPLETE_K_CEILING:
         return None
 
     disp_conf = display_confidence(raw_conf, ceiling=0.35)
