@@ -1478,60 +1478,15 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         ), row=1, col=1)
 
     # ── Batter's box silhouettes ──────────────────────────────────────────────
-    stand_pct = spray.get("stand_pct", {})
-    r_pct = stand_pct.get("R", 0)
-    l_pct = stand_pct.get("L", 0)
-    show_r = r_pct >= 0.05
-    show_l = l_pct >= 0.05
-
-    # ── Batter silhouettes in the box ────────────────────────────────────────
-    # Draw a simple stick-figure batter: head (circle) + body (line) + bat (angled line)
-    # RHH box is on the 3B side (left of HP from pitcher view = lower x)
-    # LHH box is on the 1B side (right of HP)
-    BATTER_COLOR = "#e5e7eb"
-    BOX_W, BOX_H = 7, 12
-    OFFSET = 4   # gap between HP and box edge
-
-    def _draw_batter(cx, cy, hand):
-        """Add stick-figure batter at center (cx, cy). hand='R' or 'L'."""
-        # Batter's box outline
-        fig.add_shape(type="rect",
-            x0=cx - BOX_W/2, y0=cy - BOX_H/2,
-            x1=cx + BOX_W/2, y1=cy + BOX_H/2,
-            line=dict(color="#6b7280", width=1, dash="dot"),
-            row=1, col=1)
-        # Head (circle marker)
-        fig.add_trace(go.Scatter(
-            x=[cx], y=[cy - BOX_H/2 - 5],
-            mode="markers",
-            marker=dict(color=BATTER_COLOR, size=9, symbol="circle",
-                        line=dict(color=BATTER_COLOR, width=1)),
-            hoverinfo="skip", showlegend=False,
-        ), row=1, col=1)
-        # Body (vertical line from neck to feet)
-        fig.add_shape(type="line",
-            x0=cx, y0=cy - BOX_H/2 - 1,   # neck
-            x1=cx, y1=cy + BOX_H/2 - 1,   # feet
-            line=dict(color=BATTER_COLOR, width=2),
-            row=1, col=1)
-        # Arms (horizontal)
-        fig.add_shape(type="line",
-            x0=cx - 3, y0=cy - 2,
-            x1=cx + 3, y1=cy - 2,
-            line=dict(color=BATTER_COLOR, width=2),
-            row=1, col=1)
-        # Bat — angled up toward pitcher (RHH swings left-to-right, LHH right-to-left)
-        bat_dx = -5 if hand == "R" else 5
-        fig.add_shape(type="line",
-            x0=cx + (2 if hand == "R" else -2), y0=cy - 2,   # hands
-            x1=cx + bat_dx, y1=cy - BOX_H/2 - 3,             # bat tip
-            line=dict(color=BATTER_COLOR, width=2),
-            row=1, col=1)
-
-    if show_r:
-        _draw_batter(HP_X - BOX_W/2 - OFFSET, HP_Y, "R")
-    if show_l:
-        _draw_batter(HP_X + BOX_W/2 + OFFSET, HP_Y, "L")
+    # ── Home plate marker ────────────────────────────────────────────────────
+    # Simple pentagon at HP position so the eye anchors to the origin point
+    fig.add_trace(go.Scatter(
+        x=[HP_X], y=[HP_Y],
+        mode="markers",
+        marker=dict(color="#ffffff", size=7, symbol="pentagon",
+                    line=dict(color="#6b7280", width=1)),
+        hoverinfo="skip", showlegend=False,
+    ), row=1, col=1)
 
     # ── Directional split bars ────────────────────────────────────────────────
     dirs      = ["Pull", "Gap", "Center", "Oppo"]

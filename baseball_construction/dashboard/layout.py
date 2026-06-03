@@ -422,10 +422,8 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
-        dbc.Row([
-            dbc.Col(_card("Batted Ball Profile", "spray-heatmap", height=560), md=5),
-            dbc.Col(_card("Hitter Archetype Affinity", "hitter-heatmap", height=560), md=7),
-        ]),
+        _card("Batted Ball Profile", "spray-heatmap", height=580),
+        _card("Hitter Archetype Affinity", "hitter-heatmap", height=420),
         _archetype_guide_card(),
         # ── Player comparison section ───────────────────────────────────────
         dbc.Card([
