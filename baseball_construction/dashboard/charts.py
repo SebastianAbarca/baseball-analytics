@@ -324,10 +324,11 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         fig.update_layout(**_DARK_LAYOUT)
         return fig
 
-    names, ages, pas, wars, types, spectrums = [], [], [], [], [], []
+    names, ages, pas, wars, types, modifiers_col = [], [], [], [], [], []
 
     for h in sorted(hitters, key=lambda x: -(x.get("pa") or 0)):
         pri  = h.get("primary", {})
+        mod  = h.get("modifiers", {})
         name = (h.get("name") or "").strip() or f"ID {h.get('player_id', '?')}"
         war  = h.get("war")
 
@@ -336,28 +337,42 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         pas.append(str(h.get("pa") or "—"))
         wars.append(f"{war:.1f}" if war is not None else "—")
         types.append(pri.get("type") or "—")
-        sp = pri.get("spectrum_score")
-        spectrums.append(f"{sp:.1f}" if sp is not None else "—")
+
+        # Build modifier string: speed tier + flags
+        tags = []
+        speed = mod.get("speed")
+        if speed in ("Elite", "Fast"):
+            tags.append(speed)
+        elif speed == "Slow":
+            tags.append("Slow")
+        if mod.get("aggressive"):
+            tags.append("Aggressive")
+        if mod.get("free_swinger"):
+            tags.append("Free Swinger")
+        disrupt = mod.get("disruptiveness", {}).get("modifier")
+        if disrupt:
+            tags.append(disrupt)
+        modifiers_col.append(", ".join(tags) if tags else "—")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
 
     fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 2, 1],
+        columnwidth=[3, 1, 1, 1, 2, 2],
         header=dict(
             values=["<b>Player</b>", "<b>Age</b>", "<b>PA</b>",
-                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Spectrum</b>"],
+                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Modifiers</b>"],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align=["left", "center", "center", "center", "left", "center"],
+            align=["left", "center", "center", "center", "left", "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
-            values=[names, ages, pas, wars, types, spectrums],
+            values=[names, ages, pas, wars, types, modifiers_col],
             fill_color=[row_colors] * 6,
             font=dict(color=COLORS["text"], size=11),
-            align=["left", "center", "center", "center", "left", "center"],
+            align=["left", "center", "center", "center", "left", "left"],
             line_color=COLORS["border"],
             height=28,
         ),

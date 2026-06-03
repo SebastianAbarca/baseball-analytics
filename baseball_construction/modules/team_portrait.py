@@ -703,8 +703,38 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
     Requires percentile columns (_pct suffix) to be present.
     Returns list of profile dicts from build_hitter_profile().
     """
+    from ingest import normalize_percentile
+
+    # Pre-compute cross-player attempt_rate percentile for Disruptive/Chaotic gate.
+    # opportunities ≈ OBP * PA (times on base proxy — avoids needing raw H/BB/HBP counts).
+    def _attempt_rate(row_) -> Optional[float]:
+        sb_ = float(row_.get("SB", 0) or 0)
+        cs_ = float(row_.get("CS", 0) or 0)
+        obp_= float(row_.get("OBP") or row_.get("obp") or 0)
+        pa_ = float(row_.get("PA") or row_.get("pa") or 1)
+        tob = obp_ * pa_
+        if tob <= 0:
+            return None
+        return (sb_ + cs_) / tob
+
+    attempt_rates = pd.Series(
+        [_attempt_rate(r) for _, r in team_bat.iterrows()],
+        index=team_bat.index,
+    )
+    # Only normalize among players who have at least minimum attempts
+    min_att = 2
+    has_attempts = attempt_rates.notna() & (
+        (team_bat.get("SB", pd.Series(0, index=team_bat.index)).fillna(0)
+         + team_bat.get("CS", pd.Series(0, index=team_bat.index)).fillna(0)) >= min_att
+    )
+    att_pct_series = pd.Series(np.nan, index=team_bat.index)
+    if has_attempts.sum() > 1:
+        att_pct_series[has_attempts] = normalize_percentile(
+            attempt_rates[has_attempts]
+        ).values
+
     profiles = []
-    for _, row in team_bat.iterrows():
+    for idx, row in team_bat.iterrows():
         player_id = row.get("key_mlbam")
         if pd.isna(player_id):
             continue
@@ -723,20 +753,26 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
                     metrics[col.removesuffix("_pct")] = fval  # K_pct_pct→K_pct, ISO_pct→ISO
                     metrics[col] = fval                        # also keep ISO_pct, AVG_pct
 
-        # Raw sprint speed for Speed modifier
+        # Raw sprint speed (ft/sec) for Speed modifier hard threshold.
+        # sprint_speed in DB is stored as raw ft/sec after re-seeding.
         sprint_raw = row.get("sprint_speed") or row.get("Sprint Speed")
         sprint_raw = float(sprint_raw) if sprint_raw is not None and not pd.isna(sprint_raw) else None
 
+        # Attempt rate percentile (cross-player, pre-computed above)
+        att_pct = att_pct_series.get(idx)
+        att_pct = float(att_pct) if att_pct is not None and not np.isnan(att_pct) else None
+
         # SB/CS — available from BRef merge; Savant-only falls back to 0
+        obp_val = float(row.get("OBP") or row.get("obp") or 0)
+        pa_val  = float(row.get("PA") or row.get("pa") or 1)
         profile = build_hitter_profile(
             player_id=int(player_id),
             metrics=metrics,
             sprint_speed_raw=sprint_raw,
             sb=int(row.get("SB", 0) or 0),
             cs=int(row.get("CS", 0) or 0),
-            opportunities=int(row.get("1B", 0) or 0)
-            + int(row.get("BB", 0) or 0)
-            + int(row.get("HBP", 0) or 0),
+            opportunities=int(obp_val * pa_val),
+            attempt_rate_pct=att_pct,
         )
         info = _get_player_info_map().get(int(player_id), {})
         profile["name"] = info.get("name")

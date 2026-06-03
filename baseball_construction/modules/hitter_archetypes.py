@@ -46,13 +46,23 @@ TTO_THRESHOLDS: dict[str, float] = {
     "ISO":       65.0,   # clearly above average power
 }
 
+# Aggressive modifier — high FPS AND high chase rate (2-gate, no BB requirement)
+AGGRESSIVE_THRESHOLDS: dict[str, float] = {
+    "FPS_pct":    65.0,   # first-pitch swing % > 65th pct
+    "OSwing_pct": 60.0,   # chase rate > 60th pct
+}
+
+# Free Swinger — aggressive approach AND fails to draw walks (3-gate intensifier)
 FREE_SWINGER_THRESHOLDS: dict[str, float] = {
     "FPS_pct":    65.0,   # first-pitch swing % > 65th pct
     "OSwing_pct": 60.0,   # chase rate > 60th pct
     "BB_inv_pct": 65.0,   # walk rate < 35th pct → caller inverts → inv pct > 65
 }
 
-SPRINT_SPEED_HARD_THRESHOLD = 28.0   # ft/sec
+# Speed tiers (raw ft/sec thresholds)
+SPEED_ELITE_THRESHOLD   = 29.0   # ft/sec — top ~10%
+SPEED_FAST_THRESHOLD    = 28.0   # ft/sec — top ~35%
+SPEED_AVERAGE_THRESHOLD = 26.5   # ft/sec — above slow
 
 # Disruptiveness — note: raw values required (not percentiles)
 DISRUPTIVE_MIN_ATTEMPTS = 8          # prorated by games played
@@ -308,12 +318,32 @@ def classify_primary(metrics: dict[str, float]) -> dict:
 # Step 6 — Modifiers
 # ---------------------------------------------------------------------------
 
+def compute_aggressive(metrics: dict[str, float]) -> bool:
+    """
+    Aggressive modifier — high FPS AND high chase rate.
+
+    Players who attack early in counts and expand the zone.
+    Good hitters (Tucker, Alvarez) can have this; it doesn't imply poor discipline.
+
+    Gate: FPS_pct >= 65 AND OSwing_pct >= 60.
+    """
+    for metric, threshold in AGGRESSIVE_THRESHOLDS.items():
+        val = metrics.get(metric)
+        if val is None or float(val) < threshold:
+            return False
+    return True
+
+
 def compute_free_swinger(metrics: dict[str, float]) -> bool:
     """
-    Free Swinger flag — all 3 conditions must be met:
+    Free Swinger flag — aggressive approach AND can't draw walks (3-gate intensifier).
+
+    Rarer than Aggressive. Implies:
       FPS_pct    >= 65th pct  (first-pitch swing)
       OSwing_pct >= 60th pct  (chase rate)
-      BB_pct_inv >= 35th pct  (low walk rate — caller supplies inverted pct)
+      BB_inv_pct >= 65th pct  (walk rate < 35th pct — caller supplies inverted pct)
+
+    A player can be both Aggressive and Free Swinger (Salvador Perez type).
     """
     for metric, threshold in FREE_SWINGER_THRESHOLDS.items():
         val = metrics.get(metric)
@@ -322,56 +352,50 @@ def compute_free_swinger(metrics: dict[str, float]) -> bool:
     return True
 
 
-def compute_speed_modifier(
-    metrics: dict[str, float],
-    sprint_speed_raw: Optional[float] = None,
-) -> Optional[str]:
+def compute_speed_tier(sprint_speed_raw: Optional[float]) -> Optional[str]:
     """
-    Speed modifier.
+    Speed tier based on raw sprint speed (ft/sec).
 
-    Requires:
-      sprint_speed_raw >= 28.0 ft/sec  (hard threshold on raw value)
-      AND any one of:
-        SB_efficiency_pct >= 50  (net positive run value — pct rank)
-        XBT_pct           >= 55  (extra bases taken %)
-        HP_to_1B_inv_pct  >= 25  (low home-to-first time — caller inverts)
+    Returns 'Elite' | 'Fast' | 'Average' | 'Slow' | None (if no data).
 
-    Returns 'Speed' or None.
+    Thresholds (raw ft/sec, season-stable):
+      Elite:   >= 29.0  (top ~10%)
+      Fast:    >= 28.0  (top ~35%)
+      Average: >= 26.5  (middle ~40%)
+      Slow:     < 26.5  (bottom ~25%)
     """
-    # Hard threshold on raw sprint speed
-    speed = sprint_speed_raw or metrics.get("sprint_speed_raw")
-    if speed is None or float(speed) < SPRINT_SPEED_HARD_THRESHOLD:
+    if sprint_speed_raw is None:
         return None
-
-    gates = {
-        "SB_efficiency_pct": 50.0,
-        "XBT_pct":           55.0,
-        "HP_to_1B_inv_pct":  25.0,
-    }
-    for gate_metric, gate_threshold in gates.items():
-        val = metrics.get(gate_metric)
-        if val is not None and float(val) >= gate_threshold:
-            return "Speed"
-
-    return None
+    speed = float(sprint_speed_raw)
+    if speed >= SPEED_ELITE_THRESHOLD:
+        return "Elite"
+    if speed >= SPEED_FAST_THRESHOLD:
+        return "Fast"
+    if speed >= SPEED_AVERAGE_THRESHOLD:
+        return "Average"
+    return "Slow"
 
 
 def compute_disruptiveness(
-    sb:           int,
-    cs:           int,
-    opportunities:int,
-    games:        int,
-    season_games: int = 162,
+    sb:                int,
+    cs:                int,
+    opportunities:     int,
+    games:             int,
+    season_games:      int = 162,
+    attempt_rate_pct:  Optional[float] = None,
 ) -> dict:
     """
     Disruptive / Chaotic baserunning modifier.
 
     Args:
-        sb:            stolen bases
-        cs:            caught stealing
-        opportunities: times on base (1B + walks + HBP)
-        games:         games played so far
-        season_games:  full season length (default 162)
+        sb:               stolen bases
+        cs:               caught stealing
+        opportunities:    approximate times on base (OBP * PA or 1B+BB+HBP)
+        games:            games played so far
+        season_games:     full season length (default 162)
+        attempt_rate_pct: cross-player percentile rank of attempt_rate (0–100).
+                          When provided, gates at >= 25 (top 75% of active
+                          baserunners). When None, uses raw fallback (> 0.05).
 
     Returns dict with keys:
         modifier    — 'Disruptive' | 'Chaotic' | None
@@ -396,9 +420,15 @@ def compute_disruptiveness(
     sb_pct       = sb / attempts
     attempt_rate = attempts / max(opportunities, 1)
 
-    if efficiency > 0.5 and sb_pct > 0.72 and attempt_rate > 0.40:
+    # Rate gate: top 50% of active baserunners (pct >= 50) or raw fallback
+    if attempt_rate_pct is not None:
+        rate_passes = attempt_rate_pct >= 50.0
+    else:
+        rate_passes = attempt_rate > 0.08
+
+    if efficiency > 0.5 and sb_pct > 0.72 and rate_passes:
         modifier = "Disruptive"
-    elif efficiency < -0.5 and sb_pct < 0.65 and attempt_rate > 0.40:
+    elif efficiency < -0.5 and sb_pct < 0.65 and rate_passes:
         modifier = "Chaotic"
     else:
         modifier = None
@@ -417,14 +447,15 @@ def compute_disruptiveness(
 # ---------------------------------------------------------------------------
 
 def build_hitter_profile(
-    player_id:     int,
-    metrics:       dict[str, float],
+    player_id:        int,
+    metrics:          dict[str, float],
     sprint_speed_raw: Optional[float] = None,
-    sb:            int = 0,
-    cs:            int = 0,
-    opportunities: int = 0,
-    games:         int = 162,
-    season_games:  int = 162,
+    sb:               int = 0,
+    cs:               int = 0,
+    opportunities:    int = 0,
+    games:            int = 162,
+    season_games:     int = 162,
+    attempt_rate_pct: Optional[float] = None,
 ) -> dict:
     """
     Full hitter classification for one player × season.
@@ -445,17 +476,20 @@ def build_hitter_profile(
             modifiers:  {free_swinger, speed, disruptiveness},
         }
     """
-    primary          = classify_primary(metrics)
-    free_swinger     = compute_free_swinger(metrics)
-    speed_mod        = compute_speed_modifier(metrics, sprint_speed_raw)
-    disruptiveness   = compute_disruptiveness(sb, cs, opportunities, games, season_games)
+    primary        = classify_primary(metrics)
+    aggressive     = compute_aggressive(metrics)
+    free_swinger   = compute_free_swinger(metrics)
+    speed_tier     = compute_speed_tier(sprint_speed_raw)
+    disruptiveness = compute_disruptiveness(sb, cs, opportunities, games, season_games,
+                                            attempt_rate_pct=attempt_rate_pct)
 
     return {
         "player_id": player_id,
         "primary":   primary,
         "modifiers": {
+            "aggressive":      aggressive,
             "free_swinger":    free_swinger,
-            "speed":           speed_mod,
+            "speed":           speed_tier,
             "disruptiveness":  disruptiveness,
         },
     }
@@ -484,8 +518,9 @@ def profiles_to_dataframe(profiles: list[dict]) -> pd.DataFrame:
             "display_confidence": pri["display_confidence"],
             "spectrum_score":     pri.get("spectrum_score"),
             "grey_zone":          pri.get("grey_zone", False),
+            "aggressive":         mod.get("aggressive", False),
             "free_swinger":       mod["free_swinger"],
-            "speed_modifier":     mod["speed"],
+            "speed_tier":         mod["speed"],
             "disruptive_modifier":mod["disruptiveness"]["modifier"],
         })
     return pd.DataFrame(rows)
