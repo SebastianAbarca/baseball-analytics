@@ -52,13 +52,6 @@ AGGRESSIVE_THRESHOLDS: dict[str, float] = {
     "OSwing_pct": 60.0,   # chase rate > 60th pct
 }
 
-# Free Swinger — aggressive approach AND fails to draw walks (3-gate intensifier)
-FREE_SWINGER_THRESHOLDS: dict[str, float] = {
-    "FPS_pct":    65.0,   # first-pitch swing % > 65th pct
-    "OSwing_pct": 60.0,   # chase rate > 60th pct
-    "BB_inv_pct": 65.0,   # walk rate < 35th pct → caller inverts → inv pct > 65
-}
-
 # Speed tiers (raw ft/sec thresholds)
 SPEED_ELITE_THRESHOLD   = 29.0   # ft/sec — top ~10%
 SPEED_FAST_THRESHOLD    = 28.0   # ft/sec — top ~35%
@@ -73,9 +66,9 @@ CONTACT_QUALITY_PLUS_THRESHOLD   = 70.0  # top 30% → "Plus Contact"
 CONTACT_QUALITY_WEAK_THRESHOLD   = 30.0  # bottom 30% → "Weak Contact"
 
 # Plate Discipline (composite: BB_pct weighted 60%, OSwing inv 40%)
-DISCIPLINE_ELITE_THRESHOLD  = 75.0  # top 25% → "Elite Discipline"
-DISCIPLINE_PATIENT_THRESHOLD= 55.0  # top 45% → "Disciplined"
-DISCIPLINE_HACKER_THRESHOLD = 35.0  # bottom 35% → "Hacker"
+DISCIPLINE_ELITE_THRESHOLD       = 75.0  # top 25% → "Elite Discipline"
+DISCIPLINE_PATIENT_THRESHOLD     = 55.0  # top 45% → "Disciplined"
+DISCIPLINE_FREE_SWINGER_THRESHOLD= 35.0  # bottom 35% → "Free Swinger" (swings freely, low discipline)
 
 # Table Setter
 TABLE_SETTER_OBP_THRESHOLD = 65.0   # OBP percentile — above-average on-base
@@ -351,24 +344,6 @@ def compute_aggressive(metrics: dict[str, float]) -> bool:
     return True
 
 
-def compute_free_swinger(metrics: dict[str, float]) -> bool:
-    """
-    Free Swinger flag — aggressive approach AND can't draw walks (3-gate intensifier).
-
-    Rarer than Aggressive. Implies:
-      FPS_pct    >= 65th pct  (first-pitch swing)
-      OSwing_pct >= 60th pct  (chase rate)
-      BB_inv_pct >= 65th pct  (walk rate < 35th pct — caller supplies inverted pct)
-
-    A player can be both Aggressive and Free Swinger (Salvador Perez type).
-    """
-    for metric, threshold in FREE_SWINGER_THRESHOLDS.items():
-        val = metrics.get(metric)
-        if val is None or float(val) < threshold:
-            return False
-    return True
-
-
 def compute_speed_tier(sprint_speed_raw: Optional[float]) -> Optional[str]:
     """
     Speed tier based on raw sprint speed (ft/sec).
@@ -445,7 +420,7 @@ def compute_plate_discipline(metrics: dict[str, float]) -> Optional[str]:
     Score = BB_pct_pct × 0.60 + (100 − OSwing_pct) × 0.40
     OSwing falls back to zone swing / pitches per PA signals if unavailable.
 
-    Returns 'Elite Discipline' | 'Disciplined' | 'Hacker' | None (average).
+    Returns 'Elite Discipline' | 'Disciplined' | 'Free Swinger' | None (average).
     Skips Average to reduce label clutter.
     """
     bb_pct   = metrics.get("BB_pct")     # already percentile-ranked
@@ -464,8 +439,8 @@ def compute_plate_discipline(metrics: dict[str, float]) -> Optional[str]:
         return "Elite Discipline"
     if score >= DISCIPLINE_PATIENT_THRESHOLD:
         return "Disciplined"
-    if score <= DISCIPLINE_HACKER_THRESHOLD:
-        return "Hacker"
+    if score <= DISCIPLINE_FREE_SWINGER_THRESHOLD:
+        return "Free Swinger"
     return None
 
 
@@ -600,7 +575,6 @@ def build_hitter_profile(
     """
     primary          = classify_primary(metrics)
     aggressive       = compute_aggressive(metrics)
-    free_swinger     = compute_free_swinger(metrics)
     speed_tier       = compute_speed_tier(sprint_speed_raw)
     lucky_unlucky    = compute_lucky_unlucky(metrics)
     contact_quality  = compute_contact_quality(metrics)
@@ -614,7 +588,6 @@ def build_hitter_profile(
         "primary":   primary,
         "modifiers": {
             "aggressive":       aggressive,
-            "free_swinger":     free_swinger,
             "speed":            speed_tier,
             "lucky_unlucky":    lucky_unlucky,
             "contact_quality":  contact_quality,
@@ -649,7 +622,6 @@ def profiles_to_dataframe(profiles: list[dict]) -> pd.DataFrame:
             "spectrum_score":     pri.get("spectrum_score"),
             "grey_zone":          pri.get("grey_zone", False),
             "aggressive":         mod.get("aggressive", False),
-            "free_swinger":       mod["free_swinger"],
             "speed_tier":         mod["speed"],
             "disruptive_modifier":mod["disruptiveness"]["modifier"],
         })

@@ -283,13 +283,13 @@ def _archetype_guide_card() -> dbc.Card:
             "examples": "Plus Contact: Yordan Álvarez, Juan Soto · Weak Contact: low-exit-velo slap hitters",
         },
         {
-            "tag": "Elite Discipline / Disciplined / Hacker", "color": "#60a5fa",
+            "tag": "Elite Discipline / Disciplined / Free Swinger", "color": "#60a5fa",
             "desc": (
                 "Plate approach grade — weighted composite of walk rate (60%) and "
                 "inverted chase rate (40%). Elite Discipline = top 25%, "
-                "Disciplined = top 45%, Hacker = bottom 35% of the composite."
+                "Disciplined = top 45%, Free Swinger = bottom 35% of the composite."
             ),
-            "examples": "Elite Discipline: Juan Soto, Bryce Harper · Hacker: Lane Thomas, Jazz Chisholm Jr.",
+            "examples": "Elite Discipline: Juan Soto, Bryce Harper · Free Swinger: Lane Thomas, Jazz Chisholm Jr.",
         },
         {
             "tag": "Table Setter", "color": "#10b981",

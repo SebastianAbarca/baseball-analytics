@@ -356,8 +356,6 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
             tags.append("Table Setter")
         if mod.get("aggressive"):
             tags.append("Aggressive")
-        if mod.get("free_swinger"):
-            tags.append("Free Swinger")
         disrupt = mod.get("disruptiveness", {}).get("modifier")
         if disrupt:
             tags.append(disrupt)
