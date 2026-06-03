@@ -14,3 +14,4 @@ baseball_construction/data/reference/*.csv
 
 # OS
 .DS_Store
+.claude/
