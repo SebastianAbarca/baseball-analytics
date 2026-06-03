@@ -88,8 +88,8 @@ GAP_HITTER_XB_THRESHOLD   = 60.0   # xb_pct ≥ 60th pct (doubles+triples rate)
 GAP_HITTER_GAP_THRESHOLD  = 55.0   # gap_pct ≥ 55th pct (BIP in gap zones)
 GAP_HITTER_HR_CEILING     = 60.0   # HR_FB_pct ≤ 60th pct (not a fly-ball HR hitter)
 
-# Plus Power (above-average ISO for a contact/balanced player)
-PLUS_POWER_ISO_THRESHOLD  = 65.0   # ISO_pct ≥ 65th pct (clearly above-average power)
+# Plus Power (above-average ISO for a contact/balanced player — fallback when Gap Hitter doesn't fire)
+PLUS_POWER_ISO_THRESHOLD  = 60.0   # ISO_pct ≥ 60th pct (above-average power for a contact hitter)
 
 # Spectrum grey zone
 GREY_ZONE_LOW  = 45.0
@@ -519,29 +519,27 @@ def compute_plus_power(metrics: dict[str, float]) -> bool:
 def compute_gap_hitter(metrics: dict[str, float]) -> bool:
     """
     Gap Hitter modifier — player whose extra-base production comes from
-    hitting the ball into the gaps rather than over the fence.
+    hitting the ball into the gaps.
 
-    Gates (all percentile-ranked 0–100 against the season pool):
-      XB_pct     >= 60th pct  — above-average doubles+triples rate per BIP
-      GapTend_pct>= 55th pct  — above-average fraction of BIP in gap zones
-      HR_FB_pct  <= 60th pct  — not primarily a fly-ball HR hitter
+    Gates (percentile-ranked 0–100 against the season pool):
+      XB_pct      >= 60th pct  — above-average doubles+triples rate per BIP
+      GapTend_pct >= 55th pct  — above-average fraction of BIP in gap zones
+
+    HR/FB ceiling removed: spray angle + doubles rate already describe the
+    behavior. A contact player with high gap tendency who also has a modest
+    HR/FB rate is still a gap hitter. The ceiling was creating artificial
+    mutual exclusivity with Plus Power.
+
+    When Gap Hitter fires, Plus Power is suppressed in build_hitter_profile
+    (Gap Hitter is more specific — spray-confirmed).
 
     Requires Statcast spray chart data (hc_x/hc_y); returns False if unavailable.
-    Fires on any primary archetype — Contact and Balanced most common.
     """
     xb  = metrics.get("XB_pct")
     gap = metrics.get("GapTend_pct")
     if xb is None or gap is None:
         return False
-    if float(xb) < GAP_HITTER_XB_THRESHOLD:
-        return False
-    if float(gap) < GAP_HITTER_GAP_THRESHOLD:
-        return False
-    # HR/FB gate — if available, exclude extreme fly-ball HR hitters
-    hr_fb = metrics.get("HR_FB_pct")
-    if hr_fb is not None and float(hr_fb) > GAP_HITTER_HR_CEILING:
-        return False
-    return True
+    return float(xb) >= GAP_HITTER_XB_THRESHOLD and float(gap) >= GAP_HITTER_GAP_THRESHOLD
 
 
 def compute_disruptiveness(
@@ -652,7 +650,9 @@ def build_hitter_profile(
 
     aggressive       = compute_aggressive(metrics)
     gap_hitter       = compute_gap_hitter(metrics)
-    plus_power       = compute_plus_power(metrics) if is_contact else False
+    # Plus Power fires for Contact/Balanced only, and is suppressed when Gap Hitter
+    # fires — Gap Hitter is the spray-confirmed, more specific label.
+    plus_power       = compute_plus_power(metrics) if (is_contact and not gap_hitter) else False
     speed_tier       = compute_speed_tier(sprint_speed_raw)
     lucky_unlucky    = compute_lucky_unlucky(metrics)
     contact_quality  = compute_contact_quality(metrics)
