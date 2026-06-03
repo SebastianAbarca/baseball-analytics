@@ -1619,8 +1619,9 @@ def build_team_portrait(
         ].copy()
 
         def _event_bucket(ev: str) -> str:
-            if ev == "home_run":            return "hr"
-            if ev in ("double", "triple"):  return "xbh"
+            if ev == "home_run": return "hr"
+            if ev == "double":   return "double"
+            if ev == "triple":   return "triple"
             if ev == "single":              return "single"
             return "out"
 
@@ -1654,8 +1655,10 @@ def build_team_portrait(
         else:
             lg_pull = lg_gap = lg_center = lg_oppo = 0.25
 
-        hr_n  = int((team_bip["_bucket"] == "hr").sum())
-        xbh_n = int((team_bip["_bucket"] == "xbh").sum())
+        hr_n     = int((team_bip["_bucket"] == "hr").sum())
+        double_n = int((team_bip["_bucket"] == "double").sum())
+        triple_n = int((team_bip["_bucket"] == "triple").sum())
+        xbh_n    = double_n + triple_n
         s_n   = int((team_bip["_bucket"] == "single").sum())
         stand_cts   = team_bip["stand"].value_counts().to_dict() if "stand" in team_bip.columns else {}
         total_stand = sum(stand_cts.values()) or 1
@@ -1675,6 +1678,8 @@ def build_team_portrait(
             "lg_oppo_pct":   lg_oppo,
             "hr_count":     hr_n,
             "xbh_count":    xbh_n,
+            "double_count": double_n,
+            "triple_count": triple_n,
             "single_count": s_n,
             "stand_pct":    {k: v/total_stand for k, v in stand_cts.items()},
         }

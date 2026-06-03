@@ -1458,12 +1458,13 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
     event_type = spray["event_type"]
 
     _OUTCOME = {
-        "hr":     dict(color="#ef4444", size=7,  opacity=0.85, name="Home Run"),
-        "xbh":    dict(color="#f97316", size=5,  opacity=0.75, name="2B / 3B"),
+        "hr":     dict(color="#f97316", size=7,  opacity=0.90, name="Home Run"),
+        "triple": dict(color="#22c55e", size=6,  opacity=0.85, name="Triple"),
+        "double": dict(color="#06b6d4", size=5,  opacity=0.75, name="Double"),
         "single": dict(color="#60a5fa", size=4,  opacity=0.65, name="Single"),
-        "out":    dict(color="#4b5563", size=3,  opacity=0.25, name="Out"),
+        "out":    dict(color="#ef4444", size=3,  opacity=0.18, name="Out"),
     }
-    for etype in ["out", "single", "xbh", "hr"]:  # out first so HRs render on top
+    for etype in ["out", "single", "double", "triple", "hr"]:  # out first so HRs render on top
         xs = [x for x, e in zip(hc_x, event_type) if e == etype]
         ys = [y for y, e in zip(hc_y, event_type) if e == etype]
         if not xs:
