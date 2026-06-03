@@ -417,31 +417,81 @@ def _compute_cross_team_metrics(
         })
 
     cross = pd.DataFrame(rows).set_index("team")
-    out: dict[str, float] = {}
-    for col, key, invert in [
+
+    # ── Cache current season's cross-team DataFrame ────────────────────────
+    # Then load all other cached seasons to build a multi-year normalization
+    # pool. Normalizing against 30-team × N-season history rather than just
+    # 30-team × 1-season means "70" = "better than 70% of Statcast-era teams"
+    # and scores are stable year-over-year.
+    cache_path = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"
+    try:
+        cross.reset_index().to_csv(cache_path, index=False)
+    except Exception as exc:
+        log.warning("Could not save cross-team cache for %d: %s", season, exc)
+
+    pool_frames = [cross.reset_index().assign(pool_season=season)]
+    for p in sorted(PROCESSED_DIR.glob("cross_team_metrics_*.csv")):
+        try:
+            other_season = int(p.stem.split("_")[-1])
+        except ValueError:
+            continue
+        if other_season == season:
+            continue
+        try:
+            df_hist = pd.read_csv(p)
+            df_hist["pool_season"] = other_season
+            pool_frames.append(df_hist)
+        except Exception:
+            pass
+
+    if len(pool_frames) > 1:
+        pool = pd.concat(pool_frames, ignore_index=True)
+        log.info("Cross-team pool: %d team-seasons (%d historical seasons)",
+                 len(pool), len(pool_frames))
+    else:
+        pool = cross.reset_index()
+
+    METRIC_MAP = [
         ("iso_spread",        "ISO_spread_pct",        False),
         ("xwoba_spread",      "wRCplus_spread_pct",    False),
         ("pa_concentration",  "PA_concentration_pct",  False),
         ("war_concentration", "WAR_concentration_pct", False),
         ("war_variance",      "WAR_variance_inv_pct",  True),
         ("roster_floor",      "RosterFloor_pct",       False),
-        ("avg_tenure",        "AvgTenure_inv_pct",     True),   # C3: lower tenure = more developmental
-        ("avg_tenure",        "AvgTenure_pct",         False),  # C4: higher tenure = more experienced
-        ("new_player_share",  "NewPlayerShare_pct",    False),  # C3: more rookies/sophs = higher score
-        ("veteran_share",     "VeteranShare_pct",      False),  # C4: more 5+-year vets = higher score
+        ("avg_tenure",        "AvgTenure_inv_pct",     True),
+        ("avg_tenure",        "AvgTenure_pct",         False),
+        ("new_player_share",  "NewPlayerShare_pct",    False),
+        ("veteran_share",     "VeteranShare_pct",      False),
         ("hr_fb",             "HR_FB_pct",             False),
-        # A4 — Lineup Power
         ("team_hr",           "TeamHR_pct",            False),
         ("team_slg",          "TeamSLG_pct",           False),
         ("power_contributors","PowerContributors_pct", False),
         ("team_barrel",       "TeamBarrel_pct",        False),
-    ]:
-        series = cross[col] if col in cross.columns else pd.Series(dtype=float)
-        if series.notna().sum() > 1 and target_team in series.index:
-            pcts = normalize_percentile(series, invert=invert)
-            out[key] = float(pcts.loc[target_team])
+    ]
 
-    log.info("Cross-team metrics — %d populated for %s", len(out), target_team)
+    out: dict[str, float] = {}
+    # Target team's current-season values (from the just-computed cross frame)
+    if target_team not in cross.index:
+        log.warning("Cross-team: target team %s not in current season cross frame", target_team)
+        return out
+
+    for col, key, invert in METRIC_MAP:
+        pool_col = pool[col] if col in pool.columns else None
+        if pool_col is None or pool_col.notna().sum() <= 1:
+            continue
+        target_val = cross.loc[target_team, col] if col in cross.columns else None
+        if target_val is None or (isinstance(target_val, float) and np.isnan(target_val)):
+            continue
+        # Rank target_val against the full historical pool
+        pool_vals = pool_col.dropna()
+        if invert:
+            pct = float((pool_vals < target_val).sum() / len(pool_vals) * 100)
+        else:
+            pct = float((pool_vals <= target_val).sum() / len(pool_vals) * 100)
+        out[key] = pct
+
+    log.info("Cross-team metrics — %d populated for %s (pool size: %d team-seasons)",
+             len(out), target_team, len(pool))
     return out
 
 
