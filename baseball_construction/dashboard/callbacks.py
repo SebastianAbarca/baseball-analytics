@@ -30,6 +30,30 @@ from layout import team_header
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Portrait disk cache
+# ---------------------------------------------------------------------------
+
+import time as _time
+from datetime import datetime as _datetime
+
+_PORTRAIT_CACHE = _HERE.parent / "data" / "processed" / "portraits"
+_PORTRAIT_CACHE.mkdir(parents=True, exist_ok=True)
+
+
+def _cache_path(team: str, season: int) -> Path:
+    return _PORTRAIT_CACHE / f"{team}_{season}.json"
+
+
+def _cache_valid(path: Path, season: int) -> bool:
+    """Historical seasons: cache indefinitely. Current season: 24h TTL."""
+    if not path.exists():
+        return False
+    current_year = _datetime.now().year
+    if int(season) < current_year:
+        return True
+    return (_time.time() - path.stat().st_mtime) < 86400
+
 
 # ---------------------------------------------------------------------------
 # JSON serialization helpers
@@ -95,10 +119,35 @@ def build_portrait(n_clicks, team: str, season: int):
     if not team or not season:
         return no_update, dbc.Alert("Select a team and season.", color="warning", className="py-1")
 
+    # ── Check portrait cache first ────────────────────────────────────────
+    cp = _cache_path(team, int(season))
+    if _cache_valid(cp, int(season)):
+        try:
+            t0 = _time.perf_counter()
+            cached_json = cp.read_text()
+            cached = json.loads(cached_json)
+            elapsed = _time.perf_counter() - t0
+            mode = cached.get("temporal", {}).get("mode", "—")
+            cov  = cached.get("data_coverage", 0.0)
+            banner = dbc.Alert(
+                [html.Strong(f"{team} {season}"),
+                 f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
+                color="success", className="py-1 mb-0",
+            )
+            log.info("Portrait cache hit: %s %d (%.2fs)", team, season, elapsed)
+            return cached_json, banner
+        except Exception as exc:
+            log.warning("Portrait cache read failed, rebuilding: %s", exc)
+
     try:
         statcast = pull_statcast_season(int(season))
         portrait = build_team_portrait(team, int(season), statcast=statcast)
         serialized = _serialize(portrait)
+        # Save to cache
+        try:
+            cp.write_text(serialized)
+        except Exception as exc:
+            log.warning("Portrait cache write failed: %s", exc)
         mode = portrait.get("temporal", {}).get("mode", "—")
         cov  = portrait.get("data_coverage", 0.0)
         banner = dbc.Alert(
