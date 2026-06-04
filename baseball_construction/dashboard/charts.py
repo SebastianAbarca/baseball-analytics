@@ -1811,3 +1811,131 @@ def compare_archetype_bars(portrait_a: dict | None, portrait_b: dict | None) -> 
         "legend": dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.06),
     })
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Construction vs Results charts
+# ---------------------------------------------------------------------------
+
+def construction_vs_results_radar(portrait: dict) -> go.Figure:
+    """
+    Philosophy radar with projected (dotted/amber) vs actual (solid/blue) overlay.
+    """
+    proj   = portrait.get("projected", {})
+    scores = portrait.get("philosophy", {}).get("scores", {})
+    team   = portrait.get("team", "")
+    season = portrait.get("season", "")
+
+    DIMS = ["A1","A2","A3","A4","B1","B2","B3","B4","C1","C2","C3","C4"]
+    DIM_LABELS = {
+        "A1":"TTO","A2":"Contact+Pressure","A3":"Aggressive Early",
+        "A4":"Lineup Power","B1":"Stuff Dominant","B2":"Command+Contact Mgmt",
+        "B3":"Pitch Design","B4":"Defensive Infra",
+        "C1":"bWAR Distribution","C2":"Roster Continuity",
+        "C3":"Youth+Dev","C4":"Veteran Experience",
+    }
+    labels = [DIM_LABELS.get(d, d) for d in DIMS]
+    fig = go.Figure()
+
+    # Actual (solid blue)
+    actual_vals   = [float(scores.get(d, {}).get("score") or 0) for d in DIMS]
+    actual_closed = actual_vals + [actual_vals[0]]
+    fig.add_trace(go.Scatterpolar(
+        r=actual_closed, theta=labels + [labels[0]],
+        fill="toself", name=f"{season} Actual",
+        line=dict(color=COLORS["primary"], width=2),
+        fillcolor=_hex_to_rgba(COLORS["primary"], 0.12),
+        hovertemplate="<b>%{theta}</b><br>Actual: %{r:.0f}<extra></extra>",
+    ))
+
+    # Projected (dotted amber)
+    proj_metrics = proj.get("philosophy_metrics", {})
+    prior        = proj.get("prior_season")
+    if proj_metrics and prior:
+        try:
+            from philosophy import compute_all_philosophies
+            proj_scores = compute_all_philosophies(proj_metrics)
+            proj_vals   = [float(proj_scores.get(d, {}).get("score") or 0) for d in DIMS]
+        except Exception:
+            proj_vals = [0.0] * len(DIMS)
+
+        proj_closed = proj_vals + [proj_vals[0]]
+        prior_str   = f"⚡ {prior}" if proj.get("prior_season_flag") else str(prior)
+        coverage    = proj.get("coverage", 0)
+        fig.add_trace(go.Scatterpolar(
+            r=proj_closed, theta=labels + [labels[0]],
+            fill="toself",
+            name=f"Projected (from {prior_str} · {coverage:.0%} PA)",
+            line=dict(color="#f59e0b", width=2, dash="dot"),
+            fillcolor=_hex_to_rgba("#f59e0b", 0.08),
+            hovertemplate="<b>%{theta}</b><br>Projected: %{r:.0f}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0,100],
+                            tickfont=dict(size=9, color=COLORS["subtext"]),
+                            gridcolor="#374151", linecolor="#374151"),
+            angularaxis=dict(tickfont=dict(size=10, color=COLORS["subtext"]),
+                             gridcolor="#374151"),
+            bgcolor=COLORS["surface"],
+        ),
+        showlegend=True,
+        legend=dict(font=dict(color=COLORS["subtext"]), orientation="h", y=-0.14),
+        title=dict(text=f"{team} {season} — Construction vs Results",
+                   font=dict(size=13, color=COLORS["text"]), x=0.5),
+    )
+    return fig
+
+
+def construction_vs_results_archetypes(portrait: dict) -> go.Figure:
+    """Grouped bars: projected vs actual hitter archetype distribution."""
+    proj    = portrait.get("projected", {})
+    hitters = portrait.get("players", {}).get("hitters", [])
+    team    = portrait.get("team", "")
+    season  = portrait.get("season", "")
+
+    ARCH_ORDER = ["Complete Hitter","Three True Outcomes","Contact","Balanced","Power"]
+    from collections import Counter
+    actual_raw   = Counter(h["primary"]["type"] for h in hitters)
+    total_actual = max(sum(actual_raw.values()), 1)
+    actual_pct   = [actual_raw.get(a,0)/total_actual*100 for a in ARCH_ORDER]
+
+    proj_dist = proj.get("archetype_dist", {})
+    proj_pct  = [proj_dist.get(a,0)*100 for a in ARCH_ORDER]
+    prior     = proj.get("prior_season")
+    coverage  = proj.get("coverage", 0)
+    excl      = proj.get("excluded_pa_pct", 0)
+    prior_str = (f"⚡ {prior}" if proj.get("prior_season_flag") else str(prior)) if prior else "N/A"
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=ARCH_ORDER, y=actual_pct, name=f"{season} Actual",
+        marker_color=COLORS["primary"],
+        hovertemplate="<b>%{x}</b><br>Actual: %{y:.1f}%<extra></extra>",
+    ))
+    if prior and any(v > 0 for v in proj_pct):
+        fig.add_trace(go.Bar(
+            x=ARCH_ORDER, y=proj_pct,
+            name=f"Projected (from {prior_str}, {coverage:.0%} PA)",
+            marker_color="#f59e0b",
+            hovertemplate="<b>%{x}</b><br>Projected: %{y:.1f}%<extra></extra>",
+        ))
+
+    note = (f"Projection covers {coverage:.0%} of PA · "
+            f"{excl:.0%} excluded (rookies / no prior data)") if prior else "No prior-year data"
+
+    fig.update_layout(**{
+        **_DARK_LAYOUT,
+        "barmode":"group","bargap":0.3,"bargroupgap":0.1,
+        "title":dict(text=f"{team} {season} — Archetype Mix: Projected vs Actual<br>"
+                          f"<sup>{note}</sup>",
+                     font=dict(size=12, color=COLORS["text"]), x=0.5),
+        "yaxis":dict(title="% of roster", range=[0,100], gridcolor="#374151",
+                     tickfont=dict(color=COLORS["subtext"]),
+                     title_font=dict(color=COLORS["subtext"])),
+        "xaxis":dict(tickfont=dict(color=COLORS["text"], size=10)),
+        "legend":dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.1),
+    })
+    return fig

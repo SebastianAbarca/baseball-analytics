@@ -1284,6 +1284,157 @@ def _data_coverage(philosophy_metrics: dict[str, float]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Construction vs Results — projected profile from prior-year stats
+# ---------------------------------------------------------------------------
+
+def _compute_projected_profile(
+    season:     int,
+    hitter_ids: set[int],
+    team_bat:   pd.DataFrame,
+) -> dict:
+    """
+    Build a projected team profile from prior-year player performance.
+
+    For each player who appeared for the team in `season`, looks up their
+    (season-1) stats from player_batting, classifies them, and weights their
+    contribution by actual PA accumulated with this team in `season`.
+
+    Returns a projection dict or {} if prior-season data is unavailable
+    (e.g. season=2015 has no 2014 data, or season=2016 with 2015 pool).
+
+    Notes:
+    - Rookies / players with no prior-year data are excluded and tracked
+      as `excluded_pa_pct`.
+    - Trade-deadline acquisitions are naturally down-weighted because they
+      have fewer PA with the team — no special handling needed.
+    - Prior season 2020 (⚡ shortened) is flagged but included as-is.
+    """
+    from hitter_archetypes import build_hitter_profile, COMPLETE_THRESHOLDS
+    from collections import Counter
+
+    prior = season - 1
+    if prior < 2015:
+        return {}
+
+    try:
+        prior_bat = query_batting(prior)
+    except Exception as exc:
+        log.warning("Projected profile: could not load %d batting: %s", prior, exc)
+        return {}
+
+    if prior_bat is None or prior_bat.empty:
+        return {}
+
+    # Normalize prior-year pool within the prior season (not current season)
+    NORM_SPECS = [
+        ("iso",        "ISO_pct",        False),
+        ("obp",        "OBP_pct",        False),
+        ("bb_rate",    "BB_pct_pct",     False),
+        ("k_rate",     "K_pct_raw_pct",  True),
+        ("barrel_pct", "Barrel_pct_pct", False),
+        ("avg",        "AVG_pct",        False),
+        ("contact_pct","Contact_pct_pct",False),
+        ("xwoba",      "xwOBA_pct",      False),
+    ]
+    prior_bat = prior_bat.copy()
+    for raw_col, pct_col, invert in NORM_SPECS:
+        if raw_col in prior_bat.columns:
+            prior_bat[pct_col] = normalize_percentile(
+                pd.to_numeric(prior_bat[raw_col], errors="coerce"), invert=invert)
+
+    if "k_rate" in prior_bat.columns:
+        prior_bat["K_pct_raw_pct_noninv"] = normalize_percentile(
+            pd.to_numeric(prior_bat["k_rate"], errors="coerce"), invert=False)
+    if "obp" in prior_bat.columns and "iso" in prior_bat.columns:
+        prior_bat["OBP_ISO_gap"] = (pd.to_numeric(prior_bat["obp"], errors="coerce") -
+                                     pd.to_numeric(prior_bat["iso"], errors="coerce"))
+        prior_bat["OBP_ISO_gap_pct"] = normalize_percentile(prior_bat["OBP_ISO_gap"])
+
+    prior_map = {int(r["key_mlbam"]): r
+                 for _, r in prior_bat.iterrows()
+                 if pd.notna(r.get("key_mlbam"))}
+
+    # PA weights from current season team_bat
+    pa_col = "PA" if "PA" in team_bat.columns else "pa"
+    id_col = "key_mlbam"
+    pa_weights: dict[int, float] = {}
+    for _, row in team_bat.iterrows():
+        pid = int(row.get(id_col, 0) or 0)
+        pa  = float(row.get(pa_col, 0) or 0)
+        if pid and pa > 0:
+            pa_weights[pid] = pa
+
+    total_pa    = sum(pa_weights.values())
+    covered_pa  = 0.0
+    archetype_pa: dict[str, float] = Counter()
+    proj_metrics: dict[str, list[float]] = {}  # metric → [(value, weight), ...]
+
+    pct_cols_prior = [c for c in prior_bat.columns
+                      if c.endswith("_pct") and not c.startswith("_")]
+
+    for pid in hitter_ids:
+        pa = pa_weights.get(pid, 0)
+        if pa == 0 or pid not in prior_map:
+            continue
+
+        row = prior_map[pid]
+        metrics: dict[str, float] = {}
+        for col in pct_cols_prior:
+            val = row.get(col)
+            if val is not None and not pd.isna(val):
+                fval = float(val)
+                metrics[col.removesuffix("_pct")] = fval
+                metrics[col] = fval
+
+        k_ni = row.get("K_pct_raw_pct_noninv")
+        if k_ni is not None and not pd.isna(k_ni):
+            metrics["K_pct_raw"] = float(k_ni)
+        if "BB_pct" in metrics:
+            metrics["BB_inv_pct"] = 100.0 - metrics["BB_pct"]
+
+        sprint  = row.get("sprint_speed")
+        k_raw   = row.get("k_rate")
+        if k_raw is not None and not pd.isna(k_raw):
+            metrics["k_rate_raw"] = float(k_raw)
+
+        p = build_hitter_profile(
+            player_id=pid, metrics=metrics,
+            sprint_speed_raw=(float(sprint) if sprint is not None
+                              and not pd.isna(sprint) else None),
+        )
+        archetype = p["primary"]["type"]
+        archetype_pa[archetype] += pa
+        covered_pa += pa
+
+        # Collect weighted philosophy-relevant metrics for projected scores
+        for key, val in metrics.items():
+            if key.endswith("_pct") or key in COMPLETE_THRESHOLDS:
+                proj_metrics.setdefault(key, []).append((val, pa))
+
+    if total_pa == 0 or covered_pa == 0:
+        return {}
+
+    # PA-weighted archetype distribution
+    arch_dist = {k: v / covered_pa for k, v in archetype_pa.items()}
+
+    # PA-weighted philosophy metric averages (for projected radar)
+    proj_philosophy: dict[str, float] = {}
+    for key, pairs in proj_metrics.items():
+        total_w = sum(w for _, w in pairs)
+        if total_w > 0:
+            proj_philosophy[key] = sum(v * w for v, w in pairs) / total_w
+
+    return {
+        "archetype_dist":     arch_dist,
+        "philosophy_metrics": proj_philosophy,
+        "coverage":           covered_pa / total_pa,
+        "excluded_pa_pct":    1.0 - (covered_pa / total_pa),
+        "prior_season":       prior,
+        "prior_season_flag":  (prior == 2020),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1609,6 +1760,20 @@ def build_team_portrait(
     # ── 14. Data coverage ─────────────────────────────────────────────────
     coverage = _data_coverage(philosophy_metrics)
 
+    # ── 16. Construction vs Results — projected profile ───────────────────
+    projected: dict = {}
+    try:
+        projected = _compute_projected_profile(season, hitter_ids, team_bat)
+        if projected:
+            log.info(
+                "Projected profile — prior=%d  coverage=%.0f%%  excluded=%.0f%%",
+                projected["prior_season"],
+                projected["coverage"] * 100,
+                projected["excluded_pa_pct"] * 100,
+            )
+    except Exception as exc:
+        log.warning("Projected profile failed: %s", exc)
+
     # ── 15. Spray chart data ──────────────────────────────────────────────
     spray_data: dict = {}
     try:
@@ -1728,6 +1893,7 @@ def build_team_portrait(
         },
         "data_coverage": coverage,
         "spray_data":    spray_data,
+        "projected":     projected,
     }
 
     log.info(

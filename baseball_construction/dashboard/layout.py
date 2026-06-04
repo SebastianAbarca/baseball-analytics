@@ -414,6 +414,11 @@ def overview_tab() -> dbc.Tab:
             dbc.Col(_card("Park Factor — Pitcher Friendliness", "park-gauge", height=320), md=4),
             dbc.Col(_card("Team Spin Efficiency", "spin-bar", height=200), md=8),
         ]),
+        # ── Construction vs Results ────────────────────────────────────────
+        dbc.Row([
+            dbc.Col(_card("Construction vs Results — Philosophy", "cvr-radar", height=480), md=6),
+            dbc.Col(_card("Construction vs Results — Archetype Mix", "cvr-archetypes", height=380), md=6),
+        ]),
     ])
 
 

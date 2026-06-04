@@ -735,3 +735,19 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
         color="success", className="py-1 mb-0",
     )
     return fig, status
+
+
+# ---------------------------------------------------------------------------
+# Construction vs Results callbacks
+# ---------------------------------------------------------------------------
+
+@callback(Output("cvr-radar",      "figure"), Input("portrait-store", "data"))
+def cvr_radar(data):
+    p = _deserialize(data)
+    return charts.construction_vs_results_radar(p) if p else charts.empty_figure("Load a portrait to see Construction vs Results")
+
+
+@callback(Output("cvr-archetypes", "figure"), Input("portrait-store", "data"))
+def cvr_archetypes(data):
+    p = _deserialize(data)
+    return charts.construction_vs_results_archetypes(p) if p else charts.empty_figure()
