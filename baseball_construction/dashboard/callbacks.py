@@ -55,6 +55,52 @@ def _cache_valid(path: Path, season: int) -> bool:
     return (_time.time() - path.stat().st_mtime) < 86400
 
 
+def _storage_download(team: str, season: int) -> str | None:
+    """
+    Try to fetch portrait JSON from Supabase Storage 'portraits' bucket.
+    Returns the JSON string if found, None otherwise.
+
+    Used in production where the local filesystem is ephemeral — portraits
+    are pre-generated and uploaded to Supabase Storage so deploys don't
+    require building from scratch.
+    """
+    try:
+        from database import get_client
+        filename = f"{team}_{season}.json"
+        data = get_client().storage.from_("portraits").download(filename)
+        if data:
+            text = data.decode("utf-8") if isinstance(data, bytes) else data
+            # Write to local cache so subsequent requests hit disk
+            cp = _cache_path(team, int(season))
+            cp.write_text(text)
+            log.info("Portrait downloaded from Supabase Storage: %s %d", team, season)
+            return text
+    except Exception as exc:
+        log.debug("Storage download miss for %s %d: %s", team, season, exc)
+    return None
+
+
+def _storage_upload(team: str, season: int, json_text: str) -> None:
+    """Upload portrait JSON to Supabase Storage (best-effort, non-blocking)."""
+    try:
+        from database import get_client
+        filename = f"{team}_{season}.json"
+        data = json_text.encode("utf-8")
+        client = get_client()
+        # Upsert: overwrite if exists
+        try:
+            client.storage.from_("portraits").remove([filename])
+        except Exception:
+            pass
+        client.storage.from_("portraits").upload(
+            filename, data,
+            file_options={"content-type": "application/json"},
+        )
+        log.info("Portrait uploaded to Supabase Storage: %s %d", team, season)
+    except Exception as exc:
+        log.warning("Storage upload failed for %s %d: %s", team, season, exc)
+
+
 # ---------------------------------------------------------------------------
 # JSON serialization helpers
 # ---------------------------------------------------------------------------
@@ -121,6 +167,8 @@ def build_portrait(n_clicks, team: str, season: int):
 
     # ── Check portrait cache first ────────────────────────────────────────
     cp = _cache_path(team, int(season))
+
+    # 1. Local disk cache (fast — sub-millisecond)
     if _cache_valid(cp, int(season)):
         try:
             t0 = _time.perf_counter()
@@ -134,20 +182,38 @@ def build_portrait(n_clicks, team: str, season: int):
                  f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
                 color="success", className="py-1 mb-0",
             )
-            log.info("Portrait cache hit: %s %d (%.2fs)", team, season, elapsed)
+            log.info("Portrait cache hit (disk): %s %d (%.2fs)", team, season, elapsed)
             return cached_json, banner
         except Exception as exc:
-            log.warning("Portrait cache read failed, rebuilding: %s", exc)
+            log.warning("Portrait disk cache read failed: %s", exc)
+
+    # 2. Supabase Storage (production fallback — ~1-2s download)
+    storage_json = _storage_download(team, int(season))
+    if storage_json:
+        try:
+            cached = json.loads(storage_json)
+            mode = cached.get("temporal", {}).get("mode", "—")
+            cov  = cached.get("data_coverage", 0.0)
+            banner = dbc.Alert(
+                [html.Strong(f"{team} {season}"),
+                 f" loaded · mode={mode} · coverage={cov:.0%} · ☁️ from storage"],
+                color="success", className="py-1 mb-0",
+            )
+            return storage_json, banner
+        except Exception as exc:
+            log.warning("Storage portrait parse failed: %s", exc)
 
     try:
         statcast = pull_statcast_season(int(season))
         portrait = build_team_portrait(team, int(season), statcast=statcast)
         serialized = _serialize(portrait)
-        # Save to cache
+        # Save to local disk cache
         try:
             cp.write_text(serialized)
         except Exception as exc:
-            log.warning("Portrait cache write failed: %s", exc)
+            log.warning("Portrait disk cache write failed: %s", exc)
+        # Also upload to Supabase Storage (async-ish — non-blocking on failure)
+        _storage_upload(team, int(season), serialized)
         mode = portrait.get("temporal", {}).get("mode", "—")
         cov  = portrait.get("data_coverage", 0.0)
         banner = dbc.Alert(

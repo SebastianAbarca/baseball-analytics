@@ -15,3 +15,11 @@ baseball_construction/data/reference/*.csv
 # OS
 .DS_Store
 .claude/
+
+# Portrait JSON caches (stored in Supabase Storage, not git)
+baseball_construction/data/processed/portraits/
+
+# Derived data caches (generated locally, not deployed)
+baseball_construction/data/processed/*.pkl
+baseball_construction/data/processed/*.parquet
+baseball_construction/data/processed/batting_prior_*.parquet
