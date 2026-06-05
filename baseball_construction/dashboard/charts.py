@@ -1939,3 +1939,119 @@ def construction_vs_results_archetypes(portrait: dict) -> go.Figure:
         "legend":dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.1),
     })
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Hitter vs Archetype Benchmark heatmap
+# ---------------------------------------------------------------------------
+
+def hitter_vs_archetype_heatmap(portrait: dict) -> go.Figure:
+    """
+    Heatmap showing each hitter's performance vs the historical median
+    for their archetype.
+
+    Rows = players (by PA desc). Columns = key metrics.
+    Cell value = % above/below archetype historical median.
+    Green = above archetype par · Red = below archetype par · Grey = no data.
+
+    K% is inverted for display: lower K% = better → shown as green when below median.
+    """
+    hitters = portrait.get("players", {}).get("hitters", [])
+    if not hitters:
+        return empty_figure("No hitter data")
+
+    hitters_sorted = sorted(hitters, key=lambda h: -(h.get("pa") or 0))
+
+    # Columns: metric key → display label
+    METRICS = [
+        ("avg",          "AVG"),
+        ("obp",          "OBP"),
+        ("iso",          "ISO"),
+        ("k_rate",       "K%"),
+        ("bb_rate",      "BB%"),
+        ("barrel_pct",   "Barrel%"),
+        ("contact_pct",  "Contact%"),
+        ("sprint_speed", "Speed"),
+    ]
+    # Metrics where LOWER is better (so invert for display coloring)
+    LOWER_IS_BETTER = {"k_rate"}
+
+    col_labels = [label for _, label in METRICS]
+    row_labels  = []
+    z_vals      = []
+    text_vals   = []
+    hover_vals  = []
+
+    for h in hitters_sorted:
+        name     = (h.get("name") or "").strip() or f"ID {h.get('player_id','?')}"
+        archetype = h.get("primary", {}).get("type", "?")
+        pa        = h.get("pa", 0)
+        vs_arch   = h.get("vs_archetype", {})
+
+        row_labels.append(f"{name} ({pa} PA)")
+        row_z, row_txt, row_hover = [], [], []
+
+        for metric, label in METRICS:
+            delta = vs_arch.get(metric)
+            if delta is None:
+                row_z.append(None)
+                row_txt.append("")
+                row_hover.append(f"{name}<br>{label}: no data")
+            else:
+                # Invert display for lower-is-better metrics
+                display = -delta if metric in LOWER_IS_BETTER else delta
+                pct_str = f"{delta*100:+.1f}%"
+                row_z.append(display * 100)   # scale to ±% for colorscale
+                row_txt.append(pct_str)
+                row_hover.append(
+                    f"<b>{name}</b> ({archetype})<br>"
+                    f"{label}: {pct_str} vs {archetype} median"
+                )
+        z_vals.append(row_z)
+        text_vals.append(row_txt)
+        hover_vals.append(row_hover)
+
+    # Replace None with NaN for Plotly
+    import numpy as _np
+    z_array = _np.array([[v if v is not None else float("nan")
+                           for v in row] for row in z_vals], dtype=float)
+
+    fig = go.Figure(go.Heatmap(
+        z=z_array,
+        x=col_labels,
+        y=row_labels,
+        text=text_vals,
+        texttemplate="%{text}",
+        hovertext=hover_vals,
+        hoverinfo="text",
+        colorscale=[
+            [0.0,  "#ef4444"],   # -30% or worse → red
+            [0.35, "#f97316"],
+            [0.5,  "#374151"],   # at par → neutral grey
+            [0.65, "#22c55e"],
+            [1.0,  "#16a34a"],   # +30% or better → green
+        ],
+        zmid=0,
+        zmin=-30, zmax=30,
+        showscale=True,
+        colorbar=dict(
+            title=dict(text="% vs archetype median", font=dict(color=COLORS["subtext"], size=10)),
+            tickfont=dict(color=COLORS["subtext"], size=9),
+            tickvals=[-30, -15, 0, 15, 30],
+            ticktext=["-30%", "-15%", "par", "+15%", "+30%"],
+            len=0.6,
+        ),
+        textfont=dict(size=9, color="#f9fafb"),
+    ))
+
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        title=dict(
+            text="Hitters vs Archetype Historical Median",
+            font=dict(size=13, color=COLORS["text"]), x=0.5,
+        ),
+        xaxis=dict(side="top", tickfont=dict(color=COLORS["text"], size=10)),
+        yaxis=dict(tickfont=dict(color=COLORS["text"], size=10), autorange="reversed"),
+        margin=dict(l=160, r=80, t=60, b=10),
+    )
+    return fig

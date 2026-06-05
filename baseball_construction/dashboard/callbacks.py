@@ -366,7 +366,7 @@ def bullpen_table(data):
 @callback(Output("hitter-heatmap", "figure"), Input("portrait-store", "data"))
 def hitter_heatmap(data):
     p = _deserialize(data)
-    return charts.hitter_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see hitter affinities")
+    return charts.hitter_vs_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see hitter benchmarks")
 
 
 @callback(Output("spray-heatmap", "figure"), Input("portrait-store", "data"))

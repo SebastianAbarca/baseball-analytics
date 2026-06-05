@@ -73,6 +73,20 @@ from temporal import determine_mode, process_metrics
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Archetype benchmark medians (historical, loaded once at module import)
+def _load_archetype_benchmarks() -> dict:
+    try:
+        import json
+        p = PROCESSED_DIR / "archetype_benchmarks_hitters.json"
+        if p.exists():
+            return json.loads(p.read_text())
+    except Exception as exc:
+        log.warning("Could not load archetype benchmarks: %s", exc)
+    return {}
+
+_ARCHETYPE_BENCHMARKS: dict = _load_archetype_benchmarks()
+
+
 # Player info cache (name + age from Chadwick)
 # ---------------------------------------------------------------------------
 
@@ -965,6 +979,35 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
         profile["pa"]   = int(row.get("PA") or row.get("pa") or 0)
         war_raw = row.get("WAR_bat")
         profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
+
+        # ── vs-archetype benchmarks ───────────────────────────────────────────
+        # For each hitter, compute % above/below historical median for their
+        # archetype on key metrics. Loaded from archetype_benchmarks_hitters.json.
+        try:
+            archetype_name = profile["primary"]["type"]
+            bench = _ARCHETYPE_BENCHMARKS.get(archetype_name, {})
+            vs_arch: dict[str, float] = {}
+            RAW_STATS = {
+                "avg": row.get("avg") or row.get("AVG"),
+                "obp": row.get("obp") or row.get("OBP"),
+                "iso": row.get("iso") or row.get("ISO"),
+                "k_rate": row.get("k_rate") or row.get("K_rate"),
+                "bb_rate": row.get("bb_rate") or row.get("BB_rate"),
+                "barrel_pct": row.get("barrel_pct") or row.get("Barrel_pct"),
+                "contact_pct": row.get("contact_pct") or row.get("Contact_pct"),
+                "sprint_speed": row.get("sprint_speed"),
+            }
+            for metric, val in RAW_STATS.items():
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    continue
+                if metric not in bench or "median" not in bench[metric]:
+                    continue
+                median = bench[metric]["median"]
+                if median and median != 0:
+                    vs_arch[metric] = float(val) / median - 1.0  # % above/below
+            profile["vs_archetype"] = vs_arch
+        except Exception:
+            profile["vs_archetype"] = {}
 
         # Store curated percentile metrics for the interactive player chart.
         # Each raw_key is the exact key that _classify_hitters puts in `metrics`

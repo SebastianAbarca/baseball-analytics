@@ -433,7 +433,7 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
         _card("Batted Ball Profile", "spray-heatmap", height=580),
-        _card("Hitter Archetype Affinity", "hitter-heatmap", height=420),
+        _card("Hitters vs Archetype Historical Median", "hitter-heatmap", height=500),
         _archetype_guide_card(),
         # ── Player comparison section ───────────────────────────────────────
         dbc.Card([
