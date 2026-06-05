@@ -217,6 +217,7 @@ BATTING_COL_MAP: dict[str, str] = {
     "gap_pct":   "GapTend_pct",  # fraction of BIP in ±20–50° gap zones
     "pull_pct":  "Pull_pct",     # fraction of BIP to pull side
     "oppo_pct":  "Oppo_pct",     # fraction of BIP to opposite field
+    "hr_fb":     "HR_FB_pct",    # HR / fly balls — per-player power purity
 }
 
 PITCHING_COL_MAP: dict[str, str] = {
@@ -987,15 +988,19 @@ def _classify_hitters(team_bat: pd.DataFrame) -> list[dict]:
             archetype_name = profile["primary"]["type"]
             bench = _ARCHETYPE_BENCHMARKS.get(archetype_name, {})
             vs_arch: dict[str, float] = {}
+            # All keys use post-BATTING_COL_MAP column names.
+            # k_rate/bb_rate/contact_pct are renamed before this code runs;
+            # sprint_speed and xwoba arrive as Statcast percentile ranks (0-100).
             RAW_STATS = {
-                "avg": row.get("avg") or row.get("AVG"),
-                "obp": row.get("obp") or row.get("OBP"),
-                "iso": row.get("iso") or row.get("ISO"),
-                "k_rate": row.get("k_rate") or row.get("K_rate"),
-                "bb_rate": row.get("bb_rate") or row.get("BB_rate"),
-                "barrel_pct": row.get("barrel_pct") or row.get("Barrel_pct"),
-                "contact_pct": row.get("contact_pct") or row.get("Contact_pct"),
-                "sprint_speed": row.get("sprint_speed"),
+                "avg":          row.get("AVG"),
+                "obp":          row.get("OBP"),
+                "iso":          row.get("ISO"),
+                "k_rate":       row.get("K_pct"),       # K_rate → K_pct after rename
+                "bb_rate":      row.get("BB_pct"),      # BB_rate → BB_pct after rename
+                "barrel_pct":   row.get("Barrel_pct"),  # brl_percent → Barrel_pct (pct rank)
+                "contact_pct":  row.get("Contact_pct"), # contact_pct → Contact_pct after rename
+                "sprint_speed": row.get("sprint_speed"),  # Statcast pct rank (0-100)
+                "xwoba":        row.get("xwOBA"),        # xwoba → xwOBA (Statcast pct rank)
             }
             for metric, val in RAW_STATS.items():
                 if val is None or (isinstance(val, float) and np.isnan(val)):
@@ -1338,13 +1343,17 @@ def _team_temporal(
 
 def _compute_turnover(statcast: pd.DataFrame, season: int) -> dict[str, float]:
     """
-    For each team, fraction of current-season hitters who were NOT on the
-    team the prior season.  Requires prior-season Statcast parquet in cache.
+    PA-weighted batter continuity + BF-weighted pitcher continuity.
 
-    Results are cached to data/processed/team_turnover_{season}.csv so
-    subsequent portrait builds skip the prior-year parquet load.
+    For each team, asks: what fraction of this season's production (PA for
+    batters, BF for pitchers) came from players who were also on this team
+    last season?
 
-    Returns {team: turnover_rate} for all teams where prior-season data exists.
+    Keeping your 3 stars who account for 70% of PA = high continuity.
+    Keeping 10 bench players who account for 15% of PA = low continuity.
+
+    Returns {team: continuity_rate} where 1.0 = full core retained.
+    Cached to data/processed/team_turnover_{season}.csv.
     """
     from ingest import PROCESSED_DIR
     cache = PROCESSED_DIR / f"team_turnover_{season}.csv"
@@ -1359,27 +1368,80 @@ def _compute_turnover(statcast: pd.DataFrame, season: int) -> dict[str, float]:
         log.info("No prior-season Statcast cache for %d — skipping turnover", season - 1)
         return {}
 
-    # Load only the columns we need (fast — subset of 139 cols)
+    # Load only the columns we need from prior season
     prev_sc = pd.read_parquet(
         str(prev_parquet),
-        columns=["batter", "home_team", "away_team", "inning_topbot"],
+        columns=["batter", "pitcher", "home_team", "away_team", "inning_topbot", "events"],
     )
 
-    cur_team_ids  = _all_team_hitter_ids(statcast)
-    prev_team_ids = _all_team_hitter_ids(prev_sc)
+    def _team_col(df: pd.DataFrame) -> pd.Series:
+        """Batting team for each row."""
+        return np.where(df["inning_topbot"] == "Top", df["away_team"], df["home_team"])
 
+    def _pitching_team_col(df: pd.DataFrame) -> pd.Series:
+        """Pitching team for each row."""
+        return np.where(df["inning_topbot"] == "Top", df["home_team"], df["away_team"])
+
+    # ── Current season: PA per batter per team, BF per pitcher per team ──────
+    # PA = rows where events is not null (end of plate appearance)
+    pa_rows = statcast[statcast["events"].notna()].copy()
+    pa_rows["bat_team"] = _team_col(pa_rows)
+    pa_rows["pit_team"] = _pitching_team_col(pa_rows)
+
+    cur_bat_pa = pa_rows.groupby(["bat_team", "batter"]).size().reset_index(name="pa")
+    cur_pit_bf = pa_rows.groupby(["pit_team", "pitcher"]).size().reset_index(name="bf")
+
+    # ── Prior season: which players appeared for each team ───────────────────
+    prev_pa_rows = prev_sc[prev_sc["events"].notna()].copy()
+    prev_pa_rows["bat_team"] = _team_col(prev_pa_rows)
+    prev_pa_rows["pit_team"] = _pitching_team_col(prev_pa_rows)
+
+    prev_bat_teams: dict[str, set] = (
+        prev_pa_rows.groupby("bat_team")["batter"]
+        .apply(set).to_dict()
+    )
+    prev_pit_teams: dict[str, set] = (
+        prev_pa_rows.groupby("pit_team")["pitcher"]
+        .apply(set).to_dict()
+    )
+
+    # ── Compute continuity per team ───────────────────────────────────────────
+    all_teams = set(cur_bat_pa["bat_team"].unique()) | set(cur_pit_bf["pit_team"].unique())
     rates: dict[str, float] = {}
-    for team, cur_ids in cur_team_ids.items():
-        prev_ids = prev_team_ids.get(team, set())
-        if cur_ids:
-            new_players = cur_ids - prev_ids
-            rates[team] = len(new_players) / len(cur_ids)
 
-    # Persist so future builds skip the parquet load
+    for team in all_teams:
+        # Batter continuity — PA-weighted
+        team_bat = cur_bat_pa[cur_bat_pa["bat_team"] == team]
+        total_pa = team_bat["pa"].sum()
+        if total_pa > 0:
+            prior_batters = prev_bat_teams.get(team, set())
+            retained_pa = team_bat[team_bat["batter"].isin(prior_batters)]["pa"].sum()
+            bat_continuity = retained_pa / total_pa
+        else:
+            bat_continuity = np.nan
+
+        # Pitcher continuity — BF-weighted
+        team_pit = cur_pit_bf[cur_pit_bf["pit_team"] == team]
+        total_bf = team_pit["bf"].sum()
+        if total_bf > 0:
+            prior_pitchers = prev_pit_teams.get(team, set())
+            retained_bf = team_pit[team_pit["pitcher"].isin(prior_pitchers)]["bf"].sum()
+            pit_continuity = retained_bf / total_bf
+        else:
+            pit_continuity = np.nan
+
+        # Combined: average of both sides (equal weight)
+        components = [v for v in [bat_continuity, pit_continuity] if not np.isnan(v)]
+        if components:
+            rates[team] = float(np.mean(components))
+
     pd.DataFrame({"team": list(rates), "turnover_rate": list(rates.values())}).to_csv(
         cache, index=False
     )
-    log.info("Turnover computed — %d teams (season %d vs %d)", len(rates), season, season - 1)
+    log.info(
+        "Turnover computed (PA+BF weighted) — %d teams (season %d vs %d)",
+        len(rates), season, season - 1,
+    )
     return rates
 
 
@@ -1611,10 +1673,12 @@ def build_team_portrait(
         log.info("Loading season %d from Supabase", season)
         batting_full  = query_batting(season)
         pitching_full = query_pitching(season)
+        _sprint_speed_is_raw = True   # DB stores raw ft/sec after re-seeding
     else:
         log.info("Season %d not in Supabase — pulling from BRef/Savant", season)
         batting_full  = pull_fg_batting(season)
         pitching_full = pull_fg_pitching(season)
+        _sprint_speed_is_raw = False  # Savant CSV stores percentile rank (0-100)
 
     # Ensure key_mlbam column exists (Savant fallback uses player_id)
     for df_obj in [batting_full, pitching_full]:
@@ -1623,6 +1687,13 @@ def build_team_portrait(
 
     batting_full["key_mlbam"]  = pd.to_numeric(batting_full.get("key_mlbam"),  errors="coerce")
     pitching_full["key_mlbam"] = pd.to_numeric(pitching_full.get("key_mlbam"), errors="coerce")
+
+    # When batting_full comes from the Savant CSV (non-seeded season), sprint_speed
+    # is a Statcast percentile rank (0-100). compute_speed_tier expects raw ft/sec.
+    # Null it out so _classify_hitters skips speed tier rather than producing garbage.
+    if not _sprint_speed_is_raw and "sprint_speed" in batting_full.columns:
+        log.info("Non-seeded season — nulling sprint_speed (percentile rank, not ft/sec)")
+        batting_full["sprint_speed"] = np.nan
 
     # Merge bWAR into batting_full / pitching_full — overrides the empty DB war column
     try:
@@ -1652,7 +1723,7 @@ def build_team_portrait(
         if not spray.empty:
             spray["key_mlbam"] = pd.to_numeric(spray["key_mlbam"], errors="coerce")
             batting_full = batting_full.merge(
-                spray[["key_mlbam", "xb_pct", "gap_pct", "pull_pct", "oppo_pct", "hr_per_bip"]],
+                spray[["key_mlbam", "xb_pct", "gap_pct", "pull_pct", "oppo_pct", "hr_per_bip", "hr_fb"]],
                 on="key_mlbam", how="left",
             )
             log.info("Spray stats merged — %d batters with spray data",
@@ -1698,6 +1769,7 @@ def build_team_portrait(
         ("gap_pct",  False),   # higher = more BIP in gap zones
         ("pull_pct", False),
         ("oppo_pct", False),
+        ("hr_fb",    False),   # HR / fly balls — power purity; higher = more HR power
     ]
     for raw_col, invert in SPRAY_COLS:
         renamed_col = BATTING_COL_MAP.get(raw_col)

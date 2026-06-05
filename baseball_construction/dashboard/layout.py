@@ -206,8 +206,9 @@ def _archetype_guide_card() -> dbc.Card:
                 "OBP ≥ 70th pct — elite on-base ability",
                 "ISO ≥ 70th pct — real power threat",
                 "BB% ≥ 65th pct — draws walks consistently",
-                "Barrel% ≥ 65th pct — makes elite contact quality",
-                "Contact% ≥ 55th pct — can actually put the ball in play",
+                "Barrel% ≥ 65th pct — consistent hard contact quality",
+                "AVG ≥ 75th pct — output is king; high contact rate with weak contact doesn't qualify",
+                "K% < 30% raw — extreme strikeout rates disqualify regardless of other gates",
             ],
             "examples": "Juan Soto, Freddie Freeman, Yordan Álvarez, Kyle Tucker 2023",
         },
@@ -529,7 +530,7 @@ def roster_tab() -> dbc.Tab:
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),
-        *[_philosophy_collapse(c) for c in ["C1", "C3", "C4"]],
+        *[_philosophy_collapse(c) for c in ["C1", "C2", "C3", "C4"]],
     ])
 
 
@@ -785,7 +786,7 @@ def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
         active_tab="tab-overview",
-        children=[overview_tab(), offense_tab(), pitching_tab(), compare_tab(), scout_tab()],
+        children=[overview_tab(), offense_tab(), pitching_tab(), roster_tab(), compare_tab(), scout_tab()],
         className="mb-3",
     )
 

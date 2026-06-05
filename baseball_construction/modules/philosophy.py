@@ -465,9 +465,6 @@ def aggregate_team_offensive_metrics(
     if bat.empty:
         return pd.DataFrame()
 
-    # PA-weight all averages
-    pa = bat["PA"].fillna(1)
-
     def wm(col: str) -> "pd.Series":
         return bat.groupby(team_col).apply(
             lambda g: np.average(

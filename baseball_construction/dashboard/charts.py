@@ -1241,8 +1241,9 @@ METRIC_LABELS: dict[str, str] = {
 }
 
 METRIC_MISSING_REASON: dict[str, str] = {
-    # C2 — requires prior-year roster data
-    "CoreRetention_pct": "Requires prior-season roster data (not yet implemented)",
+    # C2 — requires prior-season Statcast parquet; will be missing for seasons
+    # where statcast_{season-1}.parquet has not been cached locally.
+    "CoreRetention_pct": "Requires prior-season Statcast cache (statcast_{season-1}.parquet)",
 }
 
 
@@ -1971,7 +1972,8 @@ def hitter_vs_archetype_heatmap(portrait: dict) -> go.Figure:
         ("bb_rate",      "BB%"),
         ("barrel_pct",   "Barrel%"),
         ("contact_pct",  "Contact%"),
-        ("sprint_speed", "Speed"),
+        ("sprint_speed", "Speed%"),
+        ("xwoba",        "xwOBA%"),
     ]
     # Metrics where LOWER is better (so invert for display coloring)
     LOWER_IS_BETTER = {"k_rate"}
@@ -1998,14 +2000,16 @@ def hitter_vs_archetype_heatmap(portrait: dict) -> go.Figure:
                 row_txt.append("")
                 row_hover.append(f"{name}<br>{label}: no data")
             else:
-                # Invert display for lower-is-better metrics
+                # Invert display coloring for lower-is-better metrics (K%)
+                # Text also inverted so green cells always show positive numbers
                 display = -delta if metric in LOWER_IS_BETTER else delta
-                pct_str = f"{delta*100:+.1f}%"
+                pct_str = f"{display*100:+.1f}%"
                 row_z.append(display * 100)   # scale to ±% for colorscale
                 row_txt.append(pct_str)
                 row_hover.append(
                     f"<b>{name}</b> ({archetype})<br>"
                     f"{label}: {pct_str} vs {archetype} median"
+                    + (" (lower = better)" if metric in LOWER_IS_BETTER else "")
                 )
         z_vals.append(row_z)
         text_vals.append(row_txt)

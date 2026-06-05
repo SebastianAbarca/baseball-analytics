@@ -86,7 +86,6 @@ DISRUPTIVE_MIN_ATTEMPTS = 8          # prorated by games played
 # Gap Hitter (extra-base contact, gap-zone spray)
 GAP_HITTER_XB_THRESHOLD   = 60.0   # xb_pct ≥ 60th pct (doubles+triples rate)
 GAP_HITTER_GAP_THRESHOLD  = 55.0   # gap_pct ≥ 55th pct (BIP in gap zones)
-GAP_HITTER_HR_CEILING     = 60.0   # HR_FB_pct ≤ 60th pct (not a fly-ball HR hitter)
 
 # Plus Power (above-average ISO for a contact/balanced player — fallback when Gap Hitter doesn't fire)
 PLUS_POWER_ISO_THRESHOLD  = 60.0   # ISO_pct ≥ 60th pct (above-average power for a contact hitter)
@@ -115,14 +114,22 @@ from philosophy import display_confidence
 def _check_thresholds(
     metrics: dict[str, float],
     thresholds: dict[str, float],
+    min_present: int | None = None,
 ) -> tuple[bool, float, dict[str, float]]:
     """
-    Check whether all thresholds are met. Return (passes, raw_confidence, margins).
+    Check whether all present thresholds are met.
 
-    passes         — True if every metric meets its threshold
-    raw_confidence — mean margin above threshold across all required metrics,
-                     divided by 100 to bring into [0, 1] range
+    passes         — True if all present metrics meet their thresholds AND
+                     min_present gates have data (or min_present is None →
+                     original strict behaviour: any missing = fail)
+    raw_confidence — mean margin above threshold across present metrics / 100
     margins        — {metric: (observed - threshold) / 100}
+
+    min_present:
+      None  → strict mode: any missing metric fails the check (original behaviour)
+      int N → flexible mode: at least N metrics must be present; missing ones are
+              skipped rather than failing. Use for Statcast-dependent gates (Complete
+              Hitter) where early seasons / low-PA players lack xwOBA / Barrel%.
     """
     margins = {}
     missing = []
@@ -134,9 +141,21 @@ def _check_thresholds(
             continue
         margins[metric] = (float(val) - threshold) / 100.0
 
-    if missing:
-        log.debug("_check_thresholds: missing metrics %s — treating as failed", missing)
-        return False, 0.0, margins
+    n_present = len(margins)
+
+    if min_present is None:
+        # Original strict mode — any missing fails
+        if missing:
+            log.debug("_check_thresholds: missing metrics %s — treating as failed", missing)
+            return False, 0.0, margins
+    else:
+        # Flexible mode — require at least min_present gates to have data
+        if n_present < min_present:
+            log.debug(
+                "_check_thresholds: only %d/%d metrics present (min %d) — failing",
+                n_present, len(thresholds), min_present,
+            )
+            return False, 0.0, margins
 
     passes         = all(m >= 0 for m in margins.values())
     raw_confidence = np.mean(list(margins.values())) if margins else 0.0
@@ -159,7 +178,11 @@ def classify_complete(metrics: dict[str, float]) -> Optional[dict]:
     Additional ceiling: K% > 30% raw disqualifies regardless of AVG,
     keeping extreme TTO strikeout rates out of the Complete Hitter label.
     """
-    passes, raw_conf, margins = _check_thresholds(metrics, COMPLETE_THRESHOLDS)
+    # min_present=4: require at least 4 of 6 gates to have data.
+    # xwOBA and Barrel% are missing for < 300 PA and in 2015-2016 Statcast gaps —
+    # don't auto-fail for data absence, but all present gates must still pass.
+    # Confidence is naturally lower when fewer metrics are available.
+    passes, raw_conf, margins = _check_thresholds(metrics, COMPLETE_THRESHOLDS, min_present=4)
     if not passes:
         return None
 
@@ -228,7 +251,20 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
 
     Returns None if required metrics are unavailable.
     """
-    power_weights   = {"ISO_pct": 0.30, "HR_FB_pct": 0.25, "Barrel_pct": 0.25, "EV_90_pct": 0.20}
+    # Power score: 5 real metrics, all confirmed present in our data pipeline.
+    #   ISO_pct    — always available (BRef/FG); primary raw power signal
+    #   Barrel_pct — Statcast pct rank (300+ PA); hard contact quality
+    #   HardHit_pct— Statcast pct rank (300+ PA); hard contact rate
+    #   HR_FB_pct  — computed from raw Statcast bb_type (min 20 BIP); power purity
+    #   EV_avg     — Statcast avg exit velo pct rank (300+ PA), pool-ranked by us
+    # HR_FB_pct and EV_90_pct from the original spec were never in our data.
+    power_weights   = {
+        "ISO_pct":    0.35,
+        "Barrel_pct": 0.25,
+        "HardHit_pct":0.20,
+        "HR_FB_pct":  0.10,
+        "EV_avg":     0.10,
+    }
     # K_pct_raw is the non-inverted K% percentile (higher = more strikeouts).
     # The spectrum code inverts it below (100 - val) so higher raw K% → lower contact score.
     contact_weights = {"Contact_pct": 0.25, "K_pct_raw": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
@@ -455,17 +491,22 @@ def compute_plate_discipline(metrics: dict[str, float]) -> Optional[str]:
 
     if oswing is not None:
         score = float(bb_pct) * 0.60 + (100.0 - float(oswing)) * 0.40
+        if score >= DISCIPLINE_ELITE_THRESHOLD:
+            return "Elite Discipline"
+        if score >= DISCIPLINE_PATIENT_THRESHOLD:
+            return "Disciplined"
+        if score <= DISCIPLINE_FREE_SWINGER_THRESHOLD:
+            return "Free Swinger"
+        return None
     else:
-        # Chase not available — fall back to walk rate only
+        # Chase rate unavailable — walk rate only.
+        # Cap at "Disciplined": can't confirm Elite without knowing chase behavior.
         score = float(bb_pct)
-
-    if score >= DISCIPLINE_ELITE_THRESHOLD:
-        return "Elite Discipline"
-    if score >= DISCIPLINE_PATIENT_THRESHOLD:
-        return "Disciplined"
-    if score <= DISCIPLINE_FREE_SWINGER_THRESHOLD:
-        return "Free Swinger"
-    return None
+        if score >= DISCIPLINE_PATIENT_THRESHOLD:
+            return "Disciplined"
+        if score <= DISCIPLINE_FREE_SWINGER_THRESHOLD:
+            return "Free Swinger"
+        return None
 
 
 def compute_table_setter(

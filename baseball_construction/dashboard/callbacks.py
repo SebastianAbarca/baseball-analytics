@@ -491,13 +491,33 @@ clientside_callback(
 # ---------------------------------------------------------------------------
 
 def _build_cmp_portrait(team: str, season: int):
-    """Shared portrait builder for comparison tab (no running spinner)."""
+    """Shared portrait builder for comparison tab — checks disk cache first."""
     import dash_bootstrap_components as dbc
     from dash import html
+
+    cp = _cache_path(team, int(season))
+
+    if _cache_valid(cp, int(season)):
+        try:
+            cached_json = cp.read_text()
+            cached = json.loads(cached_json)
+            cov  = cached.get("data_coverage", 0.0)
+            banner = dbc.Alert(
+                [html.Strong(f"{team} {season}"), f" loaded · {cov:.0%} coverage · ⚡ cached"],
+                color="success", className="py-1 mb-0",
+            )
+            return cached_json, banner
+        except Exception as exc:
+            log.warning("Compare portrait disk cache read failed: %s", exc)
+
     try:
         statcast = pull_statcast_season(int(season))
         portrait = build_team_portrait(team, int(season), statcast=statcast)
         serialized = _serialize(portrait)
+        try:
+            cp.write_text(serialized)
+        except Exception as exc:
+            log.warning("Compare portrait disk cache write failed: %s", exc)
         cov = portrait.get("data_coverage", 0.0)
         banner = dbc.Alert(
             [html.Strong(f"{team} {season}"), f" loaded · {cov:.0%} coverage"],
