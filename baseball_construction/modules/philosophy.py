@@ -160,8 +160,8 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Youth and Development",
         "dimension": "roster",
         "weights": {
-            "AvgTenure_inv_pct":  0.50,  # PA-weighted avg MLB tenure, inverted (lower = more developmental)
-            "NewPlayerShare_pct": 0.50,  # share of players with <= 2 years in MLB
+            "AvgTenure_inv_pct": 0.50,  # PA-weighted avg Estimated Service Time, inverted
+            "PreArbShare_pct":   0.50,  # fraction of roster with EST < 3.0 (pre-arbitration)
         },
     },
 
@@ -169,8 +169,8 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Veteran Experience",
         "dimension": "roster",
         "weights": {
-            "AvgTenure_pct":   0.50,  # PA-weighted avg MLB tenure (higher = more experienced)
-            "VeteranShare_pct":0.50,  # share of players with >= 5 years in MLB
+            "AvgTenure_pct": 0.50,  # PA-weighted avg Estimated Service Time
+            "FAShare_pct":   0.50,  # fraction of roster with EST >= 6.0 (free agent eligible)
         },
     },
 }

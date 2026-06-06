@@ -1233,11 +1233,13 @@ METRIC_LABELS: dict[str, str] = {
     # C2
     "CoreRetention_pct":     "Core Player Retention",
     # C3
-    "AvgTenure_inv_pct":     "Avg MLB Tenure (inv.)",
-    "NewPlayerShare_pct":    "Rookies / Sophs Share (≤2 yrs)",
+    "AvgTenure_inv_pct":     "Avg Est. Service Time (inv.)",
+    "PreArbShare_pct":       "Pre-Arb Share (EST < 3.0 yrs)",
     # C4
-    "AvgTenure_pct":         "Avg MLB Tenure",
-    "VeteranShare_pct":      "Veteran Share (≥5 yrs)",
+    "AvgTenure_pct":         "Avg Est. Service Time",
+    "FAShare_pct":           "Free Agent Share (EST ≥ 6.0 yrs)",
+    # Additional EST metrics (informational)
+    "ArbShare_pct":          "Arb-Eligible Share (3.0 ≤ EST < 6.0)",
 }
 
 METRIC_MISSING_REASON: dict[str, str] = {

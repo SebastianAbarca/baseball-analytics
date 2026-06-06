@@ -59,7 +59,7 @@ from ingest import (
 )
 from database import (
     query_batting, query_pitching,
-    season_batting_seeded, query_debut_seasons,
+    season_batting_seeded, query_debut_seasons, query_estimated_service_time,
     query_seeded_seasons,
 )
 from spin_efficiency import build_pitcher_spin_profile
@@ -344,6 +344,7 @@ def _compute_cross_team_metrics(
     target_team: str,
     season: int,
     debut_seasons: dict[int, int],
+    est_service_time: dict[int, float],
 ) -> dict[str, float]:
     """
     Compute spread/concentration and tenure metrics for all 30 teams then
@@ -392,7 +393,8 @@ def _compute_cross_team_metrics(
                 ("pa_concentration","PA_concentration_pct",False),("war_concentration","WAR_concentration_pct",False),
                 ("war_variance","WAR_variance_inv_pct",True),("roster_floor","RosterFloor_pct",False),
                 ("avg_tenure","AvgTenure_inv_pct",True),("avg_tenure","AvgTenure_pct",False),
-                ("new_player_share","NewPlayerShare_pct",False),("veteran_share","VeteranShare_pct",False),
+                ("new_player_share","PreArbShare_pct",False),("veteran_share","FAShare_pct",False),
+                ("arb_share","ArbShare_pct",False),
                 ("hr_fb","HR_FB_pct",False),("team_hr","TeamHR_pct",False),
                 ("team_slg","TeamSLG_pct",False),("power_contributors","PowerContributors_pct",False),
                 ("team_barrel","TeamBarrel_pct",False),("team_xb_rate","TeamXB_pct",False),
@@ -453,31 +455,35 @@ def _compute_cross_team_metrics(
 
         war_variance = float(war.std()) if war.notna().sum() > 1 else np.nan
 
-        # MLB tenure per player = current season − first season in our DB
-        # Floored at 2015 (start of Statcast era in our data).
-        # A player with debut_season == season has tenure 0 (rookie year).
+        # Estimated Service Time (EST) per player — years.days float (e.g. 5.143).
+        # Uses exact MLB debut dates + actual IL deductions per season.
+        # Falls back to calendar-year tenure when EST is unavailable.
+        # CBA thresholds: <3.0 pre-arb · 3.0-5.999 arb-eligible · ≥6.0 free agent.
         mlbam_ids = tb["key_mlbam"].dropna().astype(int).tolist() if "key_mlbam" in tb.columns else list(ids)
-        tenures = []
-        pa_vals  = []
+        service_vals = []
+        pa_vals      = []
         for pid in mlbam_ids:
-            debut = debut_seasons.get(pid)
-            if debut is None:
-                continue
-            t = int(season) - int(debut)
-            # Find PA for this player
+            est = est_service_time.get(pid)
+            if est is None or (isinstance(est, float) and np.isnan(est)):
+                # Fallback: calendar years
+                debut = debut_seasons.get(pid)
+                if debut is None:
+                    continue
+                est = float(int(season) - int(debut))
             player_pa_series = pa[tb["key_mlbam"].astype(int) == pid] if "key_mlbam" in tb.columns else pd.Series([1])
             player_pa = float(player_pa_series.iloc[0]) if not player_pa_series.empty else 1.0
-            tenures.append(t)
+            service_vals.append(est)
             pa_vals.append(player_pa)
 
-        if tenures:
-            tenure_arr = np.array(tenures, dtype=float)
-            pa_arr     = np.array(pa_vals,  dtype=float)
-            avg_tenure      = float(np.average(tenure_arr, weights=pa_arr))
-            new_player_share = float((tenure_arr <= 2).sum() / len(tenure_arr))
-            veteran_share    = float((tenure_arr >= 5).sum() / len(tenure_arr))
+        if service_vals:
+            svc_arr = np.array(service_vals, dtype=float)
+            pa_arr  = np.array(pa_vals,      dtype=float)
+            avg_tenure       = float(np.average(svc_arr, weights=pa_arr))   # kept as avg_tenure for METRIC_MAP compat
+            new_player_share = float((svc_arr < 3.0).sum()  / len(svc_arr))  # pre-arb (< 3.000 EST)
+            veteran_share    = float((svc_arr >= 6.0).sum() / len(svc_arr))  # FA eligible (≥ 6.000 EST)
+            arb_share        = float(((svc_arr >= 3.0) & (svc_arr < 6.0)).sum() / len(svc_arr))
         else:
-            avg_tenure = new_player_share = veteran_share = np.nan
+            avg_tenure = new_player_share = veteran_share = arb_share = np.nan
 
         # HR/FB and raw HR count from Statcast for this team's batters
         team_sc    = statcast[statcast["batter"].isin(ids)]
@@ -522,9 +528,10 @@ def _compute_cross_team_metrics(
             "war_concentration":  war_concentration,
             "war_variance":       war_variance,
             "roster_floor":       roster_floor,
-            "avg_tenure":         avg_tenure,
-            "new_player_share":   new_player_share,
-            "veteran_share":      veteran_share,
+            "avg_tenure":         avg_tenure,        # PA-weighted avg EST (years)
+            "new_player_share":   new_player_share,  # fraction pre-arb (EST < 3.0)
+            "veteran_share":      veteran_share,     # fraction FA eligible (EST >= 6.0)
+            "arb_share":          arb_share,         # fraction arb-eligible (3.0 <= EST < 6.0)
             "hr_fb":              float(hr_count / fb_count)                 if fb_count > 0            else np.nan,
             # A4
             "team_hr":            float(hr_count),
@@ -581,8 +588,9 @@ def _compute_cross_team_metrics(
         ("roster_floor",      "RosterFloor_pct",       False),
         ("avg_tenure",        "AvgTenure_inv_pct",     True),
         ("avg_tenure",        "AvgTenure_pct",         False),
-        ("new_player_share",  "NewPlayerShare_pct",    False),
-        ("veteran_share",     "VeteranShare_pct",      False),
+        ("new_player_share",  "PreArbShare_pct",       False),  # pre-arb: EST < 3.0
+        ("veteran_share",     "FAShare_pct",           False),  # FA eligible: EST >= 6.0
+        ("arb_share",         "ArbShare_pct",          False),  # arb-eligible: 3.0 <= EST < 6.0
         ("hr_fb",             "HR_FB_pct",             False),
         ("team_hr",           "TeamHR_pct",            False),
         ("team_slg",          "TeamSLG_pct",           False),
@@ -1859,8 +1867,11 @@ def build_team_portrait(
     cross_team = {}
     _power_source_ratio: Optional[float] = None
     try:
-        debut_seasons = query_debut_seasons()
-        cross_team = _compute_cross_team_metrics(statcast, batting_full, team, season, debut_seasons)
+        debut_seasons    = query_debut_seasons()
+        all_hitter_ids   = list({int(p) for ids in _all_team_hitter_ids(statcast).values() for p in ids})
+        est_service_time = query_estimated_service_time(all_hitter_ids, season)
+        cross_team = _compute_cross_team_metrics(statcast, batting_full, team, season,
+                                                 debut_seasons, est_service_time)
         # Extract raw power_source_ratio for the target team from the cross frame
         # (it's display metadata — stored in team_metrics, not scored)
         _ps_cache = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"

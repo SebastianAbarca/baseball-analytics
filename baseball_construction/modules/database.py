@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -287,3 +290,249 @@ def query_debut_seasons() -> dict[int, int]:
              len(debut), len(chadwick_map),
              len(merged) - len(chadwick_map))
     return dict(zip(debut["key_mlbam"].astype(int), debut["debut_season"].astype(int)))
+
+
+# ---------------------------------------------------------------------------
+# Estimated Service Time
+# ---------------------------------------------------------------------------
+
+# CBA: 172 days of active-roster service = 1 service year
+_SERVICE_DAYS_PER_YEAR = 172
+
+# Approximate historical season dates for pre-2015 seasons (no Statcast).
+# Used only to compute pre-Statcast era calendar days for veterans.
+_PRE_2015_SEASON_DATES: dict[int, tuple[str, str]] = {
+    2000: ("2000-04-02", "2000-10-01"), 2001: ("2001-04-01", "2001-10-07"),
+    2002: ("2002-04-01", "2002-09-29"), 2003: ("2003-03-30", "2003-09-28"),
+    2004: ("2004-04-04", "2004-10-03"), 2005: ("2005-04-03", "2005-10-02"),
+    2006: ("2006-04-02", "2006-10-01"), 2007: ("2007-04-01", "2007-09-30"),
+    2008: ("2008-03-31", "2008-09-28"), 2009: ("2009-04-05", "2009-10-04"),
+    2010: ("2010-04-04", "2010-10-03"), 2011: ("2011-03-31", "2011-09-28"),
+    2012: ("2012-03-28", "2012-10-03"), 2013: ("2013-03-31", "2013-09-29"),
+    2014: ("2014-03-22", "2014-09-28"),
+}
+
+
+def _fetch_debut_dates(player_ids: list[int]) -> dict[int, str]:
+    """
+    Fetch exact mlbDebutDate strings ('YYYY-MM-DD') for a list of MLBAM IDs
+    from the MLB Stats API.  Batched in groups of 200.  Results cached to
+    data/processed/debut_dates.csv (no TTL — debut dates never change).
+
+    Returns {key_mlbam: debut_date_str}.
+    """
+    import requests
+    import time
+
+    cache_path = Path(__file__).resolve().parents[1] / "data" / "processed" / "debut_dates.csv"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing cache
+    known: dict[int, str] = {}
+    if cache_path.exists():
+        try:
+            df = pd.read_csv(cache_path)
+            known = dict(zip(df["key_mlbam"].astype(int), df["debut_date"].astype(str)))
+        except Exception:
+            pass
+
+    missing = [p for p in player_ids if p not in known]
+    if not missing:
+        return {p: known[p] for p in player_ids if p in known}
+
+    BATCH = 200
+    fetched: dict[int, str] = {}
+    for i in range(0, len(missing), BATCH):
+        batch = missing[i: i + BATCH]
+        ids_str = ",".join(str(p) for p in batch)
+        try:
+            r = requests.get(
+                f"https://statsapi.mlb.com/api/v1/people?personIds={ids_str}"
+                "&fields=people,id,mlbDebutDate",
+                timeout=15,
+            )
+            for person in r.json().get("people", []):
+                pid  = person.get("id")
+                date = person.get("mlbDebutDate")
+                if pid and date:
+                    fetched[int(pid)] = date
+        except Exception as exc:
+            log.warning("MLB Stats API debut date fetch failed (batch %d): %s", i // BATCH, exc)
+        time.sleep(0.2)   # polite rate limit
+
+    # Merge and persist
+    known.update(fetched)
+    rows = [{"key_mlbam": k, "debut_date": v} for k, v in known.items()]
+    pd.DataFrame(rows).to_csv(cache_path, index=False)
+    log.info("Debut dates: %d fetched, %d total cached", len(fetched), len(known))
+
+    return {p: known[p] for p in player_ids if p in known}
+
+
+def query_estimated_service_time(
+    player_ids: list[int],
+    through_season: int,
+) -> dict[int, float]:
+    """
+    Estimated Service Time (EST) for each player through the end of through_season.
+
+    Method:
+      For each player × season from their MLB debut to through_season:
+        active_days  = calendar days in that season the player was eligible
+                       (capped at season start if they debuted mid-season)
+        il_days      = days spent on any IL during that season
+        service_days = max(0, min(active_days - il_days, 172))
+      EST = sum(service_days) / 172   → expressed as years.days float
+            e.g. 5 years 86 days = (5 × 172 + 86) / 172 = 5.5
+
+    CBA reference: 172 active-roster days = 1 service year.
+    Thresholds: < 3.0 pre-arb · 3.0–5.999 arb-eligible · ≥ 6.0 free agent.
+
+    Pre-2015 seasons use calendar days with no IL deduction (no cached data).
+    2015+ seasons deduct actual IL days from pull_il_data.
+
+    Results are cached to data/processed/est_service_time_{through_season}.csv.
+    """
+    from datetime import date, datetime
+    from ingest import SEASON_DATES, pull_il_data
+
+    cache_path = (
+        Path(__file__).resolve().parents[1]
+        / "data" / "processed"
+        / f"est_service_time_{through_season}.csv"
+    )
+    if cache_path.exists():
+        try:
+            df = pd.read_csv(cache_path)
+            cached = dict(zip(df["key_mlbam"].astype(int), df["est_service_time"].astype(float)))
+            # Return only the requested IDs that are cached; compute missing below
+            missing_ids = [p for p in player_ids if p not in cached]
+            if not missing_ids:
+                return {p: cached[p] for p in player_ids if p in cached}
+        except Exception:
+            cached = {}
+            missing_ids = player_ids
+    else:
+        cached = {}
+        missing_ids = player_ids
+
+    # ── Fetch exact debut dates ───────────────────────────────────────────────
+    debut_dates = _fetch_debut_dates(missing_ids)
+
+    # ── Build IL lookup: {player_id: {season: [(placed_date, activated_date)]}} ─
+    all_seasons = list(dict.fromkeys(
+        SEASON_DATES.keys()
+    ))  # 2015 onward
+    statcast_seasons = [s for s in all_seasons if s <= through_season]
+
+    il_by_player: dict[int, dict[int, list[tuple[date, date]]]] = {}
+    for season in statcast_seasons:
+        try:
+            il_df = pull_il_data(season)
+            if il_df.empty:
+                continue
+            il_df["key_mlbam"] = pd.to_numeric(il_df["key_mlbam"], errors="coerce")
+            il_df["date"]      = pd.to_datetime(il_df["date"], errors="coerce")
+            il_df = il_df.dropna(subset=["key_mlbam", "date"])
+
+            # Match placed/activated pairs per player
+            for pid, grp in il_df.groupby("key_mlbam"):
+                pid = int(pid)
+                placed_dates:    list[date] = []
+                activated_dates: list[date] = []
+                for _, row in grp.sort_values("date").iterrows():
+                    if row["transaction"] == "placed":
+                        placed_dates.append(row["date"].date())
+                    elif row["transaction"] == "activated":
+                        activated_dates.append(row["date"].date())
+
+                # Pair up: each placed date with the next activated date
+                pairs: list[tuple[date, date]] = []
+                act_q = list(activated_dates)
+                _, s_end_str = SEASON_DATES.get(season, ("", ""))
+                s_end = datetime.strptime(s_end_str, "%Y-%m-%d").date() if s_end_str else date(season, 10, 1)
+
+                for p_date in placed_dates:
+                    # First activation after this placement
+                    matched = next((a for a in act_q if a >= p_date), None)
+                    if matched:
+                        act_q.remove(matched)
+                        pairs.append((p_date, matched))
+                    else:
+                        # Still on IL at season end
+                        pairs.append((p_date, s_end))
+
+                # Unmatched activations: on IL from season start
+                s_start_str, _ = SEASON_DATES.get(season, ("", ""))
+                s_start = datetime.strptime(s_start_str, "%Y-%m-%d").date() if s_start_str else date(season, 4, 1)
+                for a_date in act_q:
+                    pairs.append((s_start, a_date))
+
+                il_by_player.setdefault(pid, {})[season] = pairs
+        except Exception as exc:
+            log.debug("IL data for %d failed: %s", season, exc)
+
+    # ── Compute EST per player ────────────────────────────────────────────────
+    all_season_dates = {**_PRE_2015_SEASON_DATES, **SEASON_DATES}
+    results: dict[int, float] = {}
+
+    for pid in missing_ids:
+        debut_str = debut_dates.get(pid)
+        if not debut_str:
+            results[pid] = float("nan")
+            continue
+
+        try:
+            debut_date_obj = datetime.strptime(debut_str, "%Y-%m-%d").date()
+        except Exception:
+            results[pid] = float("nan")
+            continue
+
+        debut_year = debut_date_obj.year
+        total_service_days = 0
+
+        for season in range(debut_year, through_season + 1):
+            dates = all_season_dates.get(season)
+            if not dates:
+                continue
+            s_start = datetime.strptime(dates[0], "%Y-%m-%d").date()
+            s_end   = datetime.strptime(dates[1], "%Y-%m-%d").date()
+
+            # Player's effective start: max of season start and debut date
+            eff_start = max(s_start, debut_date_obj)
+            if eff_start > s_end:
+                continue   # debuted after season ended
+
+            calendar_days = (s_end - eff_start).days
+
+            # 2020 special case: CBA/MLBPA agreement granted all players 1.0 full
+            # service year for the 60-game COVID season, regardless of games played
+            # or IL time.  Only applies to players who were on an MLB roster in 2020.
+            if season == 2020 and debut_date_obj <= s_end:
+                total_service_days += _SERVICE_DAYS_PER_YEAR
+                continue
+
+            # IL deduction (only for 2015+ seasons where we have data)
+            il_days = 0
+            if season >= 2015:
+                for placed, activated in il_by_player.get(pid, {}).get(season, []):
+                    # Clip IL stint to the player's active window this season
+                    il_start = max(placed,    eff_start)
+                    il_end   = min(activated, s_end)
+                    if il_end > il_start:
+                        il_days += (il_end - il_start).days
+
+            service_days = max(0, min(calendar_days - il_days, _SERVICE_DAYS_PER_YEAR))
+            total_service_days += service_days
+
+        est = total_service_days / _SERVICE_DAYS_PER_YEAR
+        results[pid] = round(est, 3)
+
+    # ── Persist and return ───────────────────────────────────────────────────
+    merged = {**cached, **results}
+    rows = [{"key_mlbam": k, "est_service_time": v}
+            for k, v in merged.items() if not (isinstance(v, float) and pd.isna(v))]
+    pd.DataFrame(rows).to_csv(cache_path, index=False)
+    log.info("Estimated Service Time computed: %d players through %d", len(results), through_season)
+
+    return {p: results.get(p, cached.get(p, float("nan"))) for p in player_ids}

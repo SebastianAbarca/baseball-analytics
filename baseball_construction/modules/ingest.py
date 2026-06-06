@@ -914,17 +914,20 @@ def pull_il_data(season: int, force: bool = False) -> pd.DataFrame:
 
         for t in data.get("transactions", []):
             desc = t.get("description", "")
-            # Filter to IL-related transactions only
+            # Filter to IL/DL-related transactions only.
+            # Note: MLB renamed "disabled list" → "injured list" for the 2019 season.
+            # Pre-2019 transactions say "disabled list"; both must be accepted.
             desc_lower = desc.lower()
-            has_il = any(kw in desc_lower for kw in
-                         ["injured list", "10-day", "15-day", "60-day"])
+            _roster_list = "injured list" in desc_lower or "disabled list" in desc_lower
+            has_il = _roster_list or any(kw in desc_lower for kw in
+                                         ["10-day", "15-day", "60-day", "7-day"])
             if not has_il:
                 continue
 
-            # "placed [player] on the [X]-day injured list" — "placed" + "injured list" both present
-            is_placed    = ("placed" in desc_lower and "injured list" in desc_lower) \
-                           or "transferred to" in desc_lower
-            is_activated = "activated" in desc_lower and "injured list" in desc_lower
+            is_placed    = (
+                "placed" in desc_lower and _roster_list
+            ) or "transferred to" in desc_lower
+            is_activated = "activated" in desc_lower and _roster_list
 
             if not is_placed and not is_activated:
                 continue
@@ -959,6 +962,9 @@ def pull_il_data(season: int, force: bool = False) -> pd.DataFrame:
     df = pd.DataFrame(all_rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.sort_values(["team", "player_name", "date"]).reset_index(drop=True)
+    # Deduplicate: the API sometimes returns the same transaction multiple times
+    # (e.g. duplicate activations on the same date for the same player).
+    df = df.drop_duplicates(subset=["key_mlbam", "date", "transaction"], keep="first")
     df.to_csv(cache, index=False)
     log.info("IL data %d — %d transactions across %d teams",
              season, len(df), df["team"].nunique())
