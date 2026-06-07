@@ -423,3 +423,219 @@ def compute_pitch_aggregates(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     _CACHE[season] = (batter_agg, pitcher_agg)
     return batter_agg, pitcher_agg
+
+
+# ---------------------------------------------------------------------------
+# Batter L/R split stats
+# ---------------------------------------------------------------------------
+
+#: wOBA weights for computing from raw events (2023 CBA values)
+_WOBA_WEIGHTS = {
+    "walk":       0.690,
+    "intent_walk":0.690,
+    "hit_by_pitch":0.720,
+    "single":     0.880,
+    "double":     1.242,
+    "triple":     1.569,
+    "home_run":   2.004,
+}
+_WOBA_DENOM_EVENTS = {
+    "strikeout", "field_out", "force_out", "grounded_into_double_play",
+    "fielders_choice", "double_play", "fielders_choice_out",
+    "strikeout_double_play", "field_error", "truncated_pa",
+}
+
+def _split_stats(group: pd.DataFrame) -> dict:
+    """Compute AVG / OBP / SLG / OPS / wOBA for a subset of plate appearance rows."""
+    ev = group["events"].dropna()
+    if ev.empty:
+        return {}
+
+    singles  = (ev == "single").sum()
+    doubles  = (ev == "double").sum()
+    triples  = (ev == "triple").sum()
+    hrs      = (ev == "home_run").sum()
+    bb       = ev.isin(["walk", "intent_walk"]).sum()
+    hbp      = (ev == "hit_by_pitch").sum()
+    sf       = (ev == "sac_fly").sum()
+    hits     = singles + doubles + triples + hrs
+    ab_events = {"single","double","triple","home_run","strikeout","field_out",
+                 "force_out","grounded_into_double_play","fielders_choice",
+                 "double_play","fielders_choice_out","strikeout_double_play",
+                 "field_error","truncated_pa","fielders_choice_out"}
+    ab = ev.isin(ab_events).sum()
+    pa = ab + bb + hbp + sf
+
+    avg = hits / ab              if ab  > 0 else float("nan")
+    obp = (hits + bb + hbp) / (ab + bb + hbp + sf) if (ab + bb + hbp + sf) > 0 else float("nan")
+    tb  = singles + 2*doubles + 3*triples + 4*hrs
+    slg = tb / ab                if ab  > 0 else float("nan")
+    ops = (obp + slg)            if (not np.isnan(obp) and not np.isnan(slg)) else float("nan")
+
+    # wOBA
+    woba_num = sum(_WOBA_WEIGHTS.get(e, 0) for e in ev)
+    woba_den = ab + bb + hbp + sf
+    woba = woba_num / woba_den   if woba_den > 0 else float("nan")
+
+    return {
+        "pa": int(pa), "ab": int(ab),
+        "avg": round(avg, 3), "obp": round(obp, 3),
+        "slg": round(slg, 3), "ops": round(ops, 3),
+        "woba": round(woba, 3),
+    }
+
+
+def compute_batter_splits(
+    statcast: pd.DataFrame,
+    hitter_ids: set[int],
+    min_pa: int = 20,
+) -> dict[int, dict]:
+    """
+    Compute AVG / OBP / SLG / OPS / wOBA split by pitcher handedness (LHP vs RHP)
+    for each batter in hitter_ids.
+
+    Returns {batter_id: {"vs_lhp": {...}, "vs_rhp": {...}}}
+    Only includes splits where the player faced >= min_pa of that handedness.
+    """
+    needed = ["batter", "p_throws", "events"]
+    sc = statcast[
+        statcast["batter"].isin(hitter_ids) & statcast["events"].notna()
+    ][needed].copy()
+
+    if sc.empty:
+        return {}
+
+    results: dict[int, dict] = {}
+    for batter_id, grp in sc.groupby("batter"):
+        entry: dict = {}
+        for hand, label in [("L", "vs_lhp"), ("R", "vs_rhp")]:
+            subset = grp[grp["p_throws"] == hand]
+            stats  = _split_stats(subset)
+            if stats and stats.get("pa", 0) >= min_pa:
+                entry[label] = stats
+        if entry:
+            results[int(batter_id)] = entry
+
+    log.info("Batter splits computed — %d batters", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Team pitcher arsenal — per pitch type × pitcher trajectories
+# ---------------------------------------------------------------------------
+
+_PHYSICS_COLS = ["vx0", "vy0", "vz0", "ax", "ay", "az",
+                 "release_pos_x", "release_pos_y", "release_pos_z"]
+_HOME_PLATE_Y = 1.4167   # feet from back of home plate
+
+def compute_team_arsenal_trajectories(
+    statcast: pd.DataFrame,
+    pitcher_ids: set[int],
+    player_info: dict[int, dict],
+    min_pitches: int = 30,
+) -> dict:
+    """
+    For each pitch type thrown by pitchers in pitcher_ids, compute per-pitcher
+    average physics parameters sufficient to reconstruct the 3D flight path.
+
+    Returns:
+        {
+          "pitch_types": [sorted list of available pitch types],
+          "by_pitch_type": {
+              "4-Seam Fastball": [
+                  {
+                    "name": "Justin Verlander",
+                    "player_id": 434378,
+                    "p_throws": "R",
+                    "pitch_count": 450,
+                    "usage_pct": 0.45,
+                    "velo": 93.5,
+                    "whiff_rate": 0.28,
+                    "run_value_per100": -1.2,
+                    "vx0": ..., "vy0": ..., "vz0": ...,
+                    "ax": ..., "ay": ..., "az": ...,
+                    "release_x": ..., "release_y": ..., "release_z": ...,
+                  }, ...
+              ],
+              ...
+          }
+        }
+
+    Physics params allow trajectory reconstruction via:
+        pos(t) = release + v0·t + ½·a·t²
+    where t runs from 0 to time of flight (~0.4s).
+    ax/ay/az already incorporate Magnus force and aerodynamic drag.
+    """
+    needed = ["pitcher", "pitch_name", "p_throws", "release_speed",
+              "description", "delta_pitcher_run_exp"] + _PHYSICS_COLS
+    available = [c for c in needed if c in statcast.columns]
+
+    sc = statcast[
+        statcast["pitcher"].isin(pitcher_ids) & statcast["pitch_name"].notna()
+    ][available].copy()
+
+    if sc.empty:
+        return {"pitch_types": [], "by_pitch_type": {}}
+
+    sc["_whiff"] = sc["description"].isin(
+        ["swinging_strike", "swinging_strike_blocked", "foul_tip"]
+    )
+    sc["_rv"] = pd.to_numeric(sc.get("delta_pitcher_run_exp", pd.Series(dtype=float)),
+                              errors="coerce")
+
+    # Total pitches per pitcher (for usage %)
+    pitcher_totals = sc.groupby("pitcher").size().to_dict()
+
+    by_pitch: dict[str, list] = {}
+
+    for (pitcher_id, pitch_type), grp in sc.groupby(["pitcher", "pitch_name"]):
+        pitcher_id = int(pitcher_id)
+        if len(grp) < min_pitches:
+            continue
+
+        # Drop rows missing physics params
+        phys_grp = grp.dropna(subset=[c for c in _PHYSICS_COLS if c in grp.columns])
+        if len(phys_grp) < min_pitches // 2:
+            continue
+
+        info     = player_info.get(pitcher_id, {})
+        name     = info.get("name") or f"ID {pitcher_id}"
+        p_throws = grp["p_throws"].mode().iloc[0] if not grp["p_throws"].empty else "R"
+        total    = pitcher_totals.get(pitcher_id, 1)
+        usage    = len(grp) / total
+
+        velo      = float(phys_grp["release_speed"].mean())
+        whiff_rate= float(grp["_whiff"].mean())
+        rv_raw    = grp["_rv"].dropna()
+        rv_per100 = float(rv_raw.mean() * 100) if not rv_raw.empty else float("nan")
+
+        entry = {
+            "name":              name,
+            "player_id":         pitcher_id,
+            "p_throws":          str(p_throws),
+            "pitch_count":       len(grp),
+            "usage_pct":         round(usage, 3),
+            "velo":              round(velo, 1),
+            "whiff_rate":        round(whiff_rate, 3),
+            "run_value_per100":  round(rv_per100, 2) if not np.isnan(rv_per100) else None,
+            # Mean physics params for trajectory reconstruction
+            "vx0":  round(float(phys_grp["vx0"].mean()), 4),
+            "vy0":  round(float(phys_grp["vy0"].mean()), 4),
+            "vz0":  round(float(phys_grp["vz0"].mean()), 4),
+            "ax":   round(float(phys_grp["ax"].mean()),  4),
+            "ay":   round(float(phys_grp["ay"].mean()),  4),
+            "az":   round(float(phys_grp["az"].mean()),  4),
+            "release_x": round(float(phys_grp["release_pos_x"].mean()), 3),
+            "release_y": round(float(phys_grp["release_pos_y"].mean()), 3),
+            "release_z": round(float(phys_grp["release_pos_z"].mean()), 3),
+        }
+        by_pitch.setdefault(pitch_type, []).append(entry)
+
+    # Sort pitchers within each type by usage descending
+    for pt in by_pitch:
+        by_pitch[pt].sort(key=lambda e: -e["usage_pct"])
+
+    pitch_types = sorted(by_pitch.keys())
+    log.info("Arsenal trajectories: %d pitch types, %d pitcher×type combos",
+             len(pitch_types), sum(len(v) for v in by_pitch.values()))
+    return {"pitch_types": pitch_types, "by_pitch_type": by_pitch}

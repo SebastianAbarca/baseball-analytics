@@ -2077,6 +2077,27 @@ def build_team_portrait(
     except Exception as exc:
         log.warning("Spray data failed: %s", exc)
 
+    # ── 17. Batter L/R split stats ───────────────────────────────────────────
+    try:
+        from pitch_aggregates import compute_batter_splits
+        split_map = compute_batter_splits(statcast, hitter_ids, min_pa=20)
+        for hp in hitter_profiles:
+            pid = hp.get("player_id")
+            if pid and int(pid) in split_map:
+                hp["splits"] = split_map[int(pid)]
+    except Exception as exc:
+        log.warning("Batter splits failed: %s", exc)
+
+    # ── 18. Arsenal trajectories ─────────────────────────────────────────────
+    arsenal_trajectories: dict = {}
+    try:
+        from pitch_aggregates import compute_team_arsenal_trajectories
+        arsenal_trajectories = compute_team_arsenal_trajectories(
+            statcast, pitcher_ids, _get_player_info_map(), min_pitches=30
+        )
+    except Exception as exc:
+        log.warning("Arsenal trajectories failed: %s", exc)
+
     portrait = {
         "team":   team,
         "season": season,
@@ -2104,8 +2125,9 @@ def build_team_portrait(
             )
         },
         "data_coverage": coverage,
-        "spray_data":    spray_data,
-        "projected":     projected,
+        "spray_data":          spray_data,
+        "projected":           projected,
+        "arsenal_trajectories": arsenal_trajectories,
     }
 
     log.info(

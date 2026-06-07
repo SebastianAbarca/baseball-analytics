@@ -2061,3 +2061,319 @@ def hitter_vs_archetype_heatmap(portrait: dict) -> go.Figure:
         margin=dict(l=160, r=80, t=60, b=10),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Batter L/R split resistance heatmap
+# ---------------------------------------------------------------------------
+
+def batter_split_heatmap(portrait: dict) -> go.Figure:
+    """
+    Heatmap showing each hitter's AVG / OBP / SLG / OPS split between
+    LHP and RHP.  Cell colour = red intensity ∝ size of difference.
+    Larger gap = brighter red.  Hover shows both sides + gap.
+    """
+    hitters = portrait.get("players", {}).get("hitters", [])
+    if not hitters:
+        return empty_figure("No hitter data")
+
+    METRICS = [
+        ("avg",  "AVG"),
+        ("obp",  "OBP"),
+        ("slg",  "SLG"),
+        ("ops",  "OPS"),
+    ]
+
+    rows_with_splits = [
+        h for h in sorted(hitters, key=lambda h: -(h.get("pa") or 0))
+        if h.get("splits") and (
+            h["splits"].get("vs_lhp") or h["splits"].get("vs_rhp")
+        )
+    ]
+    if not rows_with_splits:
+        return empty_figure("No split data — requires Statcast season data")
+
+    col_labels  = [label for _, label in METRICS]
+    row_labels  = []
+    z_vals      = []
+    text_vals   = []
+    hover_vals  = []
+
+    for h in rows_with_splits:
+        name  = (h.get("name") or "").strip() or f"ID {h.get('player_id','?')}"
+        pa    = h.get("pa", 0)
+        splits = h.get("splits", {})
+        lhp   = splits.get("vs_lhp", {})
+        rhp   = splits.get("vs_rhp", {})
+
+        row_labels.append(f"{name} ({pa} PA)")
+        row_z, row_txt, row_hover = [], [], []
+
+        for metric, label in METRICS:
+            lv = lhp.get(metric)
+            rv = rhp.get(metric)
+
+            if lv is None and rv is None:
+                row_z.append(float("nan"))
+                row_txt.append("")
+                row_hover.append(f"{name}<br>{label}: no data")
+                continue
+
+            if lv is None or rv is None:
+                # Only one side available — show as grey
+                row_z.append(float("nan"))
+                side = "vs LHP" if lv is not None else "vs RHP"
+                val  = lv if lv is not None else rv
+                row_txt.append(f"{val:.3f}*")
+                row_hover.append(f"{name}<br>{label} {side}: {val:.3f} (one side only)")
+                continue
+
+            gap   = abs(rv - lv)        # absolute split gap
+            sign  = rv - lv             # positive = better vs RHP
+            fmt_lv = f"{lv:.3f}"
+            fmt_rv = f"{rv:.3f}"
+            fmt_gap = f"Δ {gap:.3f}"
+            direction = "vs RHP" if sign >= 0 else "vs LHP"
+
+            row_z.append(gap)           # heatmap intensity = size of gap
+            row_txt.append(f"Δ{gap:.3f}")
+            row_hover.append(
+                f"<b>{name}</b><br>"
+                f"{label} vs LHP: {fmt_lv} ({lhp.get('pa',0)} PA)<br>"
+                f"{label} vs RHP: {fmt_rv} ({rhp.get('pa',0)} PA)<br>"
+                f"{fmt_gap} — better {direction}"
+            )
+
+        z_vals.append(row_z)
+        text_vals.append(row_txt)
+        hover_vals.append(row_hover)
+
+    z_array = np.array([[v for v in row] for row in z_vals], dtype=float)
+
+    fig = go.Figure(go.Heatmap(
+        z=z_array,
+        x=col_labels,
+        y=row_labels,
+        text=text_vals,
+        texttemplate="%{text}",
+        hovertext=hover_vals,
+        hoverinfo="text",
+        colorscale=[
+            [0.0,  "#1f2937"],   # 0 gap → dark background (no split)
+            [0.2,  "#7f1d1d"],   # small gap → very muted red
+            [0.5,  "#dc2626"],   # moderate gap → bright red
+            [1.0,  "#fca5a5"],   # large gap → pale red (washed out at extremes)
+        ],
+        zmin=0,
+        zmax=0.100,             # >0.100 split is essentially the max you'd see
+        showscale=True,
+        colorbar=dict(
+            title=dict(text="Split gap", font=dict(color=COLORS["subtext"], size=10)),
+            tickfont=dict(color=COLORS["subtext"], size=9),
+            tickvals=[0, 0.025, 0.050, 0.075, 0.100],
+            ticktext=["0", ".025", ".050", ".075", "≥.100"],
+            len=0.6,
+        ),
+        textfont=dict(size=9, color="#f9fafb"),
+    ))
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        title=dict(
+            text="Batter Split Resistance — LHP vs RHP (gap size = red intensity)",
+            font=dict(size=13, color=COLORS["text"]), x=0.5,
+        ),
+        xaxis=dict(side="top", tickfont=dict(color=COLORS["text"], size=11)),
+        yaxis=dict(tickfont=dict(color=COLORS["text"], size=10), autorange="reversed"),
+        margin=dict(l=160, r=80, t=70, b=10),
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 3-D pitch arsenal trajectory chart
+# ---------------------------------------------------------------------------
+
+def _reconstruct_trajectory(
+    entry: dict, n_points: int = 30
+) -> tuple[list, list, list] | None:
+    """
+    Reconstruct 3-D flight path using Statcast kinematic parameters.
+    Returns (x_path, y_path, z_path) or None if physics are invalid.
+
+    Coordinate system:
+      x — horizontal (catcher's view: positive = catcher's right = RHP arm side)
+      y — distance from home plate (0 = plate, ~54 ft = release)
+      z — height above ground
+    """
+    try:
+        x0 = entry["release_x"]
+        y0 = entry["release_y"]
+        z0 = entry["release_z"]
+        vx0, vy0, vz0 = entry["vx0"], entry["vy0"], entry["vz0"]
+        ax_, ay_, az_ = entry["ax"], entry["ay"], entry["az"]
+
+        # Solve for time of flight: y0 + vy0·t + ½·ay·t² = 1.4167 (front of plate)
+        a_c = 0.5 * ay_
+        b_c = vy0
+        c_c = y0 - 1.4167
+        disc = b_c**2 - 4 * a_c * c_c
+        if disc < 0:
+            return None
+        t_flight = (-b_c - np.sqrt(disc)) / (2 * a_c)
+        if t_flight <= 0 or t_flight > 0.65:
+            return None
+
+        t = np.linspace(0, t_flight, n_points)
+        xs = (x0 + vx0 * t + 0.5 * ax_ * t**2).tolist()
+        ys = (y0 + vy0 * t + 0.5 * ay_ * t**2).tolist()
+        zs = (z0 + vz0 * t + 0.5 * az_ * t**2).tolist()
+        return xs, ys, zs
+    except Exception:
+        return None
+
+
+def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure:
+    """
+    3-D trajectory chart — one curve per pitcher for the selected pitch type.
+
+    x = horizontal position (ft, catcher's view)
+    y = distance from home plate (ft)
+    z = height (ft)
+    Colour ramp = whiff rate (darker = more swing-and-miss)
+    Line width  = proportional to usage %
+    """
+    arsenal = portrait.get("arsenal_trajectories", {})
+    by_type = arsenal.get("by_pitch_type", {})
+    available = arsenal.get("pitch_types", [])
+
+    if not by_type:
+        return empty_figure("No pitch trajectory data available")
+
+    # Default to first pitch type if none selected or invalid
+    if not pitch_type or pitch_type not in by_type:
+        pitch_type = available[0] if available else None
+    if not pitch_type:
+        return empty_figure("No pitch types found")
+
+    pitchers = by_type[pitch_type]
+    if not pitchers:
+        return empty_figure(f"No data for {pitch_type}")
+
+    fig = go.Figure()
+
+    # Whiff rate colour scale: 0 = muted, 1 = bright
+    whiff_rates = [p["whiff_rate"] for p in pitchers]
+    max_whiff   = max(whiff_rates) if whiff_rates else 0.40
+    min_whiff   = min(whiff_rates) if whiff_rates else 0.00
+
+    def _whiff_color(wr: float) -> str:
+        """Map whiff rate to a blue-green-yellow colour."""
+        t = (wr - min_whiff) / (max_whiff - min_whiff + 0.001)
+        # Interpolate: low whiff = steel blue, high whiff = bright yellow
+        r = int(30  + t * 225)
+        g = int(144 + t * 60)
+        b = int(255 - t * 200)
+        return f"rgb({r},{g},{b})"
+
+    for p in pitchers:
+        traj = _reconstruct_trajectory(p)
+        if traj is None:
+            continue
+        xs, ys, zs = traj
+
+        wr      = p["whiff_rate"]
+        usage   = p["usage_pct"]
+        color   = _whiff_color(wr)
+        lw      = max(2, min(8, int(usage * 16)))   # line width 2–8 px
+
+        label = (
+            f"<b>{p['name']}</b> ({p['p_throws']}HP)<br>"
+            f"Pitches: {p['pitch_count']}  Usage: {usage:.0%}<br>"
+            f"Velo: {p['velo']:.1f} mph<br>"
+            f"Whiff: {wr:.1%}<br>"
+            + (f"RV/100: {p['run_value_per100']:+.1f}" if p.get("run_value_per100") is not None else "")
+        )
+
+        # Draw trajectory as 3D line
+        fig.add_trace(go.Scatter3d(
+            x=xs, y=ys, z=zs,
+            mode="lines",
+            line=dict(color=color, width=lw),
+            name=p["name"],
+            hovertemplate=label + "<extra></extra>",
+            showlegend=True,
+        ))
+
+        # Mark release point
+        fig.add_trace(go.Scatter3d(
+            x=[xs[0]], y=[ys[0]], z=[zs[0]],
+            mode="markers",
+            marker=dict(size=4, color=color, symbol="circle"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+        # Mark plate crossing
+        fig.add_trace(go.Scatter3d(
+            x=[xs[-1]], y=[ys[-1]], z=[zs[-1]],
+            mode="markers",
+            marker=dict(size=6, color=color, symbol="square"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+    # Strike zone reference box at y=0 (home plate face)
+    sz_x = [-0.83, 0.83, 0.83, -0.83, -0.83]
+    sz_z = [1.50,  1.50,  3.50,  3.50,  1.50]
+    sz_y = [0.0] * 5
+    fig.add_trace(go.Scatter3d(
+        x=sz_x, y=sz_y, z=sz_z,
+        mode="lines",
+        line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dash"),
+        name="Strike Zone",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        paper_bgcolor=COLORS["background"],
+        plot_bgcolor=COLORS["background"],
+        font_color=COLORS["text"],
+        title=dict(
+            text=f"Pitch Trajectories — {pitch_type}",
+            font=dict(size=13, color=COLORS["text"]), x=0.5,
+        ),
+        scene=dict(
+            xaxis=dict(
+                title="Horizontal (ft)",
+                backgroundcolor=COLORS["surface"],
+                gridcolor=COLORS["border"],
+                tickfont=dict(color=COLORS["subtext"], size=9),
+            ),
+            yaxis=dict(
+                title="Distance to plate (ft)",
+                backgroundcolor=COLORS["surface"],
+                gridcolor=COLORS["border"],
+                tickfont=dict(color=COLORS["subtext"], size=9),
+                autorange="reversed",   # release at back, plate at front
+            ),
+            zaxis=dict(
+                title="Height (ft)",
+                backgroundcolor=COLORS["surface"],
+                gridcolor=COLORS["border"],
+                tickfont=dict(color=COLORS["subtext"], size=9),
+                range=[0, 7],
+            ),
+            camera=dict(
+                eye=dict(x=0.0, y=-1.8, z=0.5),   # roughly catcher's POV
+            ),
+            bgcolor=COLORS["surface"],
+        ),
+        legend=dict(
+            font=dict(color=COLORS["subtext"], size=10),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(l=0, r=0, t=40, b=0),
+        height=520,
+    )
+    return fig

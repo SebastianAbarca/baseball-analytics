@@ -435,6 +435,7 @@ def offense_tab() -> dbc.Tab:
         ]),
         _card("Batted Ball Profile", "spray-heatmap", height=580),
         _card("Hitters vs Archetype Historical Median", "hitter-heatmap", height=500),
+        _card("Batter Split Resistance — LHP vs RHP", "split-heatmap", height=520),
         _archetype_guide_card(),
         # ── Player comparison section ───────────────────────────────────────
         dbc.Card([
@@ -491,6 +492,40 @@ def pitching_tab() -> dbc.Tab:
             dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=320), md=5),
             dbc.Col(_card("Bullpen Roster Detail", "bullpen-table", height=420), md=7),
         ], className="mt-3"),
+        # ── Arsenal trajectory viewer ─────────────────────────────────────────
+        dbc.Card([
+            dbc.CardHeader(
+                dbc.Row([
+                    dbc.Col(
+                        html.Small("Pitch Arsenal — 3D Trajectories",
+                                   className="text-secondary fw-semibold text-uppercase",
+                                   style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                        width="auto", className="d-flex align-items-center",
+                    ),
+                    dbc.Col(
+                        dcc.Dropdown(
+                            id="arsenal-pitch-type-dropdown",
+                            options=[],
+                            value=None,
+                            clearable=False,
+                            placeholder="Load a portrait to see pitch types…",
+                            style={"backgroundColor": "#1f2937", "color": "#111827",
+                                   "minWidth": "220px"},
+                        ),
+                        width="auto",
+                    ),
+                ], className="g-2 align-items-center"),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                dcc.Graph(
+                    id="arsenal-3d-chart",
+                    config={"displayModeBar": True},
+                    style={"height": "520px"},
+                ),
+                style={"padding": "8px"},
+            ),
+        ], style=CARD_STYLE, className="mb-3 mt-3"),
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),

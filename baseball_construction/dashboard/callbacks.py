@@ -886,3 +886,44 @@ def cvr_radar(data):
 def cvr_archetypes(data):
     p = _deserialize(data)
     return charts.construction_vs_results_archetypes(p) if p else charts.empty_figure()
+
+
+# ---------------------------------------------------------------------------
+# Batter split resistance heatmap
+# ---------------------------------------------------------------------------
+
+@callback(Output("split-heatmap", "figure"), Input("portrait-store", "data"))
+def split_heatmap(data):
+    p = _deserialize(data)
+    return charts.batter_split_heatmap(p) if p else charts.empty_figure("Load a portrait to see split resistance")
+
+
+# ---------------------------------------------------------------------------
+# Arsenal 3D trajectory — populate dropdown + render chart
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("arsenal-pitch-type-dropdown", "options"),
+    Output("arsenal-pitch-type-dropdown", "value"),
+    Input("portrait-store", "data"),
+)
+def populate_arsenal_dropdown(data):
+    p = _deserialize(data)
+    if not p:
+        return [], None
+    pitch_types = p.get("arsenal_trajectories", {}).get("pitch_types", [])
+    options = [{"label": pt, "value": pt} for pt in pitch_types]
+    default = pitch_types[0] if pitch_types else None
+    return options, default
+
+
+@callback(
+    Output("arsenal-3d-chart", "figure"),
+    Input("arsenal-pitch-type-dropdown", "value"),
+    State("portrait-store", "data"),
+)
+def arsenal_3d(pitch_type, data):
+    p = _deserialize(data)
+    if not p:
+        return charts.empty_figure("Load a portrait to see pitch trajectories")
+    return charts.pitch_arsenal_3d(p, pitch_type)

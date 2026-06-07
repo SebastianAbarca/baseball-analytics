@@ -160,8 +160,9 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Youth and Development",
         "dimension": "roster",
         "weights": {
-            "AvgTenure_inv_pct": 0.50,  # PA-weighted avg Estimated Service Time, inverted
-            "PreArbShare_pct":   0.50,  # fraction of roster with EST < 3.0 (pre-arbitration)
+            "AvgTenure_inv_pct": 0.40,  # PA-weighted avg EST, inverted (lower = younger)
+            "PreArbShare_pct":   0.40,  # fraction with EST < 3.0 (pre-arb, team-controlled)
+            "ArbShare_pct":      0.20,  # fraction with EST 3.0-5.9 (still controlled, pipeline)
         },
     },
 
@@ -169,8 +170,9 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Veteran Experience",
         "dimension": "roster",
         "weights": {
-            "AvgTenure_pct": 0.50,  # PA-weighted avg Estimated Service Time
-            "FAShare_pct":   0.50,  # fraction of roster with EST >= 6.0 (free agent eligible)
+            "AvgTenure_pct": 0.40,  # PA-weighted avg EST (higher = more experienced)
+            "FAShare_pct":   0.40,  # fraction with EST >= 6.0 (FA-eligible veterans)
+            "ArbShare_pct":  0.20,  # fraction with EST 3.0-5.9 (experienced, still earning)
         },
     },
 }
