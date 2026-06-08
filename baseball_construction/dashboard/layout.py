@@ -415,6 +415,20 @@ def overview_tab() -> dbc.Tab:
             dbc.Col(_card("Park Factor — Pitcher Friendliness", "park-gauge", height=320), md=4),
             dbc.Col(_card("Team Spin Efficiency", "spin-bar", height=200), md=8),
         ]),
+        # ── Team Split Resistance ──────────────────────────────────────────
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Team Split Resistance — LHP vs RHP",
+                           className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                html.Div(id="team-split-card"),
+                style={"padding": "12px"},
+            ),
+        ], style=CARD_STYLE, className="mb-3"),
         # ── Construction vs Results ────────────────────────────────────────
         dbc.Row([
             dbc.Col(_card("Construction vs Results — Philosophy", "cvr-radar", height=480), md=6),

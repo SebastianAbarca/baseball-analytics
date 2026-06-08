@@ -889,6 +889,18 @@ def cvr_archetypes(data):
 
 
 # ---------------------------------------------------------------------------
+# Team split resistance card (Overview tab)
+# ---------------------------------------------------------------------------
+
+@callback(Output("team-split-card", "children"), Input("portrait-store", "data"))
+def team_split_card(data):
+    p = _deserialize(data)
+    if not p:
+        return "Load a portrait to see team split resistance."
+    return charts.team_split_card(p)
+
+
+# ---------------------------------------------------------------------------
 # Batter split resistance heatmap
 # ---------------------------------------------------------------------------
 

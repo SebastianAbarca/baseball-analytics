@@ -1582,6 +1582,141 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
     return fig
 
 
+def team_split_card(portrait: dict) -> html.Div:
+    """
+    Team Split Resistance — 4 mini-cards (AVG / OBP / SLG / OPS) showing
+    PA-weighted team performance vs LHP and RHP plus the gap.
+
+    Gap colour:
+      < .020  → muted green  (split-resistant team)
+      .020–.050 → amber      (moderate platoon split)
+      > .050  → bright red   (platoon-vulnerable team)
+    """
+    import dash_bootstrap_components as dbc
+
+    hitters = portrait.get("players", {}).get("hitters", [])
+    if not hitters:
+        return html.Div("No hitter data", className="text-secondary small p-2")
+
+    # PA-weighted aggregation of individual splits
+    lhp_totals: dict[str, float] = {"avg": 0, "obp": 0, "slg": 0, "ops": 0}
+    rhp_totals: dict[str, float] = {"avg": 0, "obp": 0, "slg": 0, "ops": 0}
+    lhp_pa = rhp_pa = 0.0
+
+    for h in hitters:
+        sp = h.get("splits", {})
+        lhp = sp.get("vs_lhp")
+        rhp = sp.get("vs_rhp")
+        if lhp:
+            pa = lhp.get("pa", 0)
+            lhp_pa += pa
+            for m in lhp_totals:
+                v = lhp.get(m)
+                if v is not None:
+                    lhp_totals[m] += v * pa
+        if rhp:
+            pa = rhp.get("pa", 0)
+            rhp_pa += pa
+            for m in rhp_totals:
+                v = rhp.get(m)
+                if v is not None:
+                    rhp_totals[m] += v * pa
+
+    if lhp_pa == 0 and rhp_pa == 0:
+        return html.Div("No split data available", className="text-secondary small p-2")
+
+    def _avg(totals: dict, pa: float, metric: str) -> float | None:
+        return (totals[metric] / pa) if pa > 0 else None
+
+    METRICS = [
+        ("avg", "AVG"),
+        ("obp", "OBP"),
+        ("slg", "SLG"),
+        ("ops", "OPS"),
+    ]
+
+    def _gap_color(gap: float) -> str:
+        if gap < 0.020:
+            return "#10b981"   # green — resistant
+        if gap < 0.050:
+            return "#f59e0b"   # amber — moderate
+        return "#ef4444"       # red — vulnerable
+
+    def _gap_label(gap: float) -> str:
+        if gap < 0.020: return "Resistant"
+        if gap < 0.050: return "Moderate"
+        return "Vulnerable"
+
+    def _mini_card(metric: str, label: str) -> dbc.Col:
+        lv = _avg(lhp_totals, lhp_pa, metric)
+        rv = _avg(rhp_totals, rhp_pa, metric)
+
+        if lv is None or rv is None:
+            body = html.Div("—", className="text-secondary")
+        else:
+            gap   = abs(rv - lv)
+            color = _gap_color(gap)
+            glabel = _gap_label(gap)
+            body = html.Div([
+                dbc.Row([
+                    dbc.Col(html.Small("vs LHP", className="text-secondary",
+                                       style={"fontSize": "0.65rem"}), width=6),
+                    dbc.Col(html.Span(f"{lv:.3f}",
+                                      style={"color": "#f9fafb", "fontSize": "0.95rem",
+                                             "fontWeight": "600"}), width=6),
+                ], className="g-0 mb-1"),
+                dbc.Row([
+                    dbc.Col(html.Small("vs RHP", className="text-secondary",
+                                       style={"fontSize": "0.65rem"}), width=6),
+                    dbc.Col(html.Span(f"{rv:.3f}",
+                                      style={"color": "#f9fafb", "fontSize": "0.95rem",
+                                             "fontWeight": "600"}), width=6),
+                ], className="g-0 mb-2"),
+                html.Hr(style={"borderColor": "#374151", "margin": "4px 0"}),
+                dbc.Row([
+                    dbc.Col(html.Small("Split Δ", className="text-secondary",
+                                       style={"fontSize": "0.65rem"}), width=6),
+                    dbc.Col(html.Span(f"{gap:.3f}",
+                                      style={"color": color, "fontSize": "0.95rem",
+                                             "fontWeight": "700"}), width=6),
+                ], className="g-0 mb-1"),
+                html.Div(html.Small(glabel,
+                                    style={"color": color, "fontSize": "0.65rem",
+                                           "fontWeight": "600",
+                                           "textTransform": "uppercase",
+                                           "letterSpacing": "0.05em"})),
+            ])
+
+        return dbc.Col(dbc.Card([
+            dbc.CardHeader(
+                html.Small(label, className="fw-bold text-uppercase",
+                           style={"fontSize": "0.75rem", "letterSpacing": "0.08em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233",
+                       "borderBottom": "1px solid #374151",
+                       "padding": "6px 12px"},
+            ),
+            dbc.CardBody(body, style={"padding": "10px 12px"}),
+        ], style={"backgroundColor": "#1f2937", "border": "1px solid #374151",
+                  "borderRadius": "6px"}),
+        md=3, xs=6, className="mb-2")
+
+    mini_cards = dbc.Row(
+        [_mini_card(m, lbl) for m, lbl in METRICS],
+        className="g-2",
+    )
+
+    # Footer: sample sizes
+    footer = html.Small(
+        f"vs LHP: {int(lhp_pa):,} PA  ·  vs RHP: {int(rhp_pa):,} PA  "
+        f"·  PA-weighted team averages",
+        className="text-secondary",
+        style={"fontSize": "0.65rem"},
+    )
+
+    return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
+
+
 def empty_figure(message: str = "No data") -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(
