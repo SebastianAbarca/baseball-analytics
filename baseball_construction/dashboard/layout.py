@@ -448,11 +448,9 @@ def identity_tab() -> dbc.Tab:
                 style={"padding": "14px"},
             ),
         ], style=CARD_STYLE, className="mb-3"),
-        dbc.Row([
-            dbc.Col(_card("The lineup — share of plate appearances", "hitter-pie", height=440), md=4),
-            dbc.Col(_card("The rotation — share of batters faced", "rotation-trait-density", height=440), md=4),
-            dbc.Col(_card("The bullpen — share of batters faced", "bullpen-trait-density", height=440), md=4),
-        ]),
+        _card("The lineup — share of plate appearances", "hitter-pie", height=520),
+        _card("The rotation — share of batters faced", "rotation-trait-density", height=520),
+        _card("The bullpen — share of batters faced", "bullpen-trait-density", height=520),
     ])
 
 
