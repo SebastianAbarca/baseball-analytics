@@ -10,11 +10,11 @@ Velocity routing rules (applied before scoring):
   K% > 65th                     → not eligible for P4
 
 Classification:
-  P1 — Power Ace          (high stuff + miss bats)
+  P1 — Power              (high stuff; Ks and contact-suppression scored, not gated)
   P2 — Craft Strikeout    (miss bats through deception, not velocity)
   P3 — Ground Ball Craftsman (weak contact, command-driven, low K)
   P4 — Stuff to Contact   (above-avg stuff → ground balls, not Ks)
-  P5 — Power Sinker       (elite GB% + above-avg velo + above-avg K; Framber Valdez type)
+  P5 — Power Contact      (elite GB% + above-avg velo + above-avg K; Framber Valdez type)
 
 Bullpen:
   Collective profile scored 0–100 on 7 dimensions vs league bullpens.
@@ -41,11 +41,21 @@ log = logging.getLogger(__name__)
 # Threshold / ceiling constants (percentile space, 0–100)
 # ---------------------------------------------------------------------------
 
-# P1 — Power Ace: minimum thresholds
-# SwStr is used in scoring but NOT a hard gate — K% already confirms miss-bat ability.
-# K gate lowered to 58 (above-average) to capture developing power pitchers with above-avg velo;
-# the scoring function still heavily rewards elite K% and SwStr, keeping true aces at the top.
-P1_MIN = {"avg_velo_pct": 60.0, "K_pct_pct": 58.0}
+# P1 — Power: minimum thresholds
+# Renamed from "Power Ace" — this archetype is about *style* (lives off velocity/stuff),
+# not a quality tier. "Ace"-level standing is now a separate cross-archetype modifier
+# (see compute_ace_tier) so elite pitchers keep their style label instead of being
+# forced into a binary "Ace or not" slot.
+#
+# K% hard floor removed (was 58.0): a league-wide audit found a cluster of hard-throwing
+# starters (e.g. Jack Leiter, Michael Kopech, Carlos Rodón's '23 return, Shane Baz,
+# Bryce Miller, Luis Patiño — avg_velo_pct 65-86 but K_pct_pct only ~20-56) who were
+# excluded from BOTH this archetype (K floor) and Craft Strikeout (velo ceiling),
+# landing in "Unclassified" despite sharing an obvious, nameable trait: they live by
+# velocity/stuff, whether or not it's missing bats yet. K% remains a heavily-weighted
+# *scored* component (_score_p1), so true bat-missing aces still rise to the top —
+# this just stops "stuff outpacing results" arms from falling through the cracks.
+P1_MIN = {"avg_velo_pct": 60.0}
 
 # P2 — Craft Strikeout: min thresholds + velocity CEILING
 # SwStr_pct is scored but NOT a hard gate (it can be missing from DB).
@@ -61,12 +71,16 @@ P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 # it drives the score rather than a binary ceiling gate.
 P3_MIN      = {"GB_pct_pct": 35.0}
 P3_K_CEILING = 65.0   # K_pct_pct must be AT OR BELOW — GB craftsmen are not K pitchers
+P3_K_CEILING_SOFT = 75.0   # raised ceiling when GB% is elite (see P3_ELITE_GB below)
+P3_ELITE_GB = 85.0         # GB% at/above this excuses a borderline-high K% —
+                           # an elite-groundball trait shouldn't be hidden behind
+                           # a razor-thin miss on the K ceiling (e.g. K%=65.3 vs 65.0)
 
 # P4 — Stuff to Contact: min thresholds + K% CEILING
 P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pct": 38.0}
 P4_K_CEILING = 65.0      # K_pct_pct must be AT OR BELOW
 
-# P5 — Power Sinker: elite GB% + above-avg velo + above-avg K (Framber Valdez type)
+# P5 — Power Contact: elite GB% + above-avg velo + above-avg K (Framber Valdez type)
 # These pitchers get Ks alongside extreme ground balls — not a "craftsman" per se.
 # Higher GB floor (65th) distinguishes from P4; no K ceiling unlike P3/P4.
 P5_MIN = {"avg_velo_pct": 55.0, "GB_pct_pct": 65.0, "K_pct_pct": 55.0}
@@ -87,6 +101,19 @@ ONE_DIMENSIONAL_COUNT  = 1
 
 # Confidence ceiling for pitcher archetypes
 PITCHER_CONFIDENCE_CEILING = 0.35
+
+# "Ace" tier — a cross-archetype quality badge (see compute_ace_tier).
+# Archetype answers HOW a pitcher gets outs; Ace answers whether they're
+# elite at it. Both Verlander-prime (Power) and peak-Maddux (Finesse Control)
+# were aces via opposite styles — Ace is layered on top, not a competing type.
+ACE_SCORE_THRESHOLD     = 78.0   # winning archetype's composite score floor
+ACE_DOMINANCE_KEYS      = [
+    "K_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
+    "SwStr_pct_pct", "GB_pct_pct", "CSW_pct_pct",
+]
+ACE_ELITE_TRAIT_PCT     = 80.0   # a trait counts as "elite" at/above this percentile
+ACE_MIN_ELITE_TRAITS    = 2      # need 2+ elite traits — guards against one big number
+                                 # propping up an otherwise-average season into "Ace"
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +173,30 @@ def _below_ceiling(
     return float(val) <= ceiling
 
 
+def _blend_confidence(margin: float, score: Optional[float]) -> float:
+    """
+    Blend gate-clearance margin with overall fit quality.
+
+    `margin` (mean distance above the qualifying threshold, /100) answers
+    "how comfortably did this pitcher clear the minimum bar to be considered
+    this archetype at all?" It does NOT capture how good a fit they are
+    overall — a pitcher can clear a single threshold by a mile while ranking
+    near the bottom of the league on other traits that define the archetype
+    (e.g. a "Ground Ball Craftsman" who easily clears the GB% floor but is a
+    2nd-percentile contact-suppressor, despite HardHit_allowed_pct being a
+    quarter of that archetype's score).
+
+    `score` is the weighted-composite fit (0-100, ~50 = league average).
+    We fold in how far above/below average that composite sits so that
+    "comfortably cleared the gate" + "below-average overall fit" doesn't
+    still read as ~100% confidence.
+    """
+    quality = 0.0 if score is None else max(-0.5, (score - 50.0) / 100.0)
+    return max(0.0, 0.5 * margin + 0.5 * quality)
+
+
 # ---------------------------------------------------------------------------
-# P1 — Power Ace
+# P1 — Power
 # ---------------------------------------------------------------------------
 
 def _score_p1(metrics: dict[str, float]) -> Optional[float]:
@@ -164,8 +213,12 @@ def _score_p1(metrics: dict[str, float]) -> Optional[float]:
 
 def classify_p1(metrics: dict[str, float]) -> Optional[dict]:
     """
-    Power Ace — must meet all P1_MIN thresholds.
-    No ceiling constraints.
+    Power — lives off velocity/stuff (avg_velo_pct >= 60th).
+    No ceiling constraints. K%, SwStr%, CSW%, and contact-suppression are
+    *scored* (see _score_p1) rather than gated, so this archetype spans
+    everything from "stuff that's translating into dominance" to "big arm,
+    results still developing" — both are the same style, differentiated by
+    score/confidence rather than forced into different labels.
     """
     passes, margin = _meets_thresholds(metrics, P1_MIN)
     if not passes:
@@ -176,11 +229,11 @@ def classify_p1(metrics: dict[str, float]) -> Optional[dict]:
         return None
 
     return {
-        "type":               "Power Ace",
+        "type":               "Power",
         "type_code":          "P1",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
@@ -229,8 +282,8 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
         "type":               "Craft Strikeout",
         "type_code":          "P2",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
@@ -257,9 +310,22 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
     HardHit_allowed_pct is Statcast's already-inverted rank (higher = better at
     preventing hard contact).  We use it directly in scoring rather than gating
     on a ceiling — the scoring naturally rewards strong contact suppression.
+
+    K% ceiling has a soft override: a pitcher with an elite (>=85th pct) GB%
+    is allowed up to P3_K_CEILING_SOFT instead of the normal ceiling. Without
+    this, a pitcher whose defining trait is a top-7% groundball rate could be
+    excluded from this archetype by missing the K ceiling by a fraction of a
+    percentile point — and end up labeled by a trait that isn't their game at
+    all (e.g. "Craft Strikeout"). Mirrors the soft-floor pattern used in P2.
     """
-    # K% ceiling — ground-ball craftsmen are not high-strikeout pitchers
-    if not _below_ceiling(metrics, "K_pct_pct", P3_K_CEILING):
+    # K% ceiling — ground-ball craftsmen are not high-strikeout pitchers,
+    # unless their groundball rate is so elite it defines them regardless.
+    gb_val = metrics.get("GB_pct_pct")
+    k_ceiling = P3_K_CEILING
+    if gb_val is not None and not (isinstance(gb_val, float) and np.isnan(gb_val)):
+        if float(gb_val) >= P3_ELITE_GB:
+            k_ceiling = P3_K_CEILING_SOFT
+    if not _below_ceiling(metrics, "K_pct_pct", k_ceiling):
         return None
 
     passes, margin = _meets_thresholds(metrics, P3_MIN)
@@ -274,8 +340,8 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
         "type":               "Ground Ball Craftsman",
         "type_code":          "P3",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
@@ -314,13 +380,13 @@ def classify_p4(metrics: dict[str, float]) -> Optional[dict]:
         "type":               "Stuff to Contact",
         "type_code":          "P4",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
 # ---------------------------------------------------------------------------
-# P5 — Power Sinker
+# P5 — Power Contact
 # ---------------------------------------------------------------------------
 
 def _score_p5(metrics: dict[str, float]) -> Optional[float]:
@@ -336,7 +402,7 @@ def _score_p5(metrics: dict[str, float]) -> Optional[float]:
 
 def classify_p5(metrics: dict[str, float]) -> Optional[dict]:
     """
-    Power Sinker — elite GB% (>=65th) + above-avg velo + above-avg K%.
+    Power Contact — elite GB% (>=65th) + above-avg velo + above-avg K%.
     Captures sinker-ballers like Framber Valdez who get Ks alongside
     extreme ground balls.  No K% ceiling (unlike P3/P4).
     """
@@ -349,11 +415,11 @@ def classify_p5(metrics: dict[str, float]) -> Optional[dict]:
         return None
 
     return {
-        "type":               "Power Sinker",
+        "type":               "Power Contact",
         "type_code":          "P5",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
@@ -399,8 +465,8 @@ def classify_p6(metrics: dict[str, float]) -> Optional[dict]:
         "type":               "Finesse Control",
         "type_code":          "P6",
         "score":              score,
-        "raw_confidence":     margin,
-        "display_confidence": display_confidence(margin, PITCHER_CONFIDENCE_CEILING),
+        "raw_confidence":     _blend_confidence(margin, score),
+        "display_confidence": display_confidence(_blend_confidence(margin, score), PITCHER_CONFIDENCE_CEILING),
     }
 
 
@@ -515,6 +581,47 @@ def compute_command_profile(metrics: dict[str, float]) -> str:
     return "Average"
 
 
+def compute_ace_tier(primary: Optional[dict], metrics: dict[str, float]) -> dict:
+    """
+    'Ace' tier — cross-archetype quality badge, layered on top of the
+    style archetype rather than competing with it.
+
+    Why a modifier and not its own archetype: classify_starter picks exactly
+    ONE winning style per pitcher. If "Ace" were its own archetype, an elite
+    pitcher would be forced into a binary "Ace or [style]" choice — losing
+    the description of HOW they dominate (Verlander-prime via swing-and-miss
+    Power, peak-Maddux via Finesse Control command — both aces, opposite
+    styles). Layering Ace on top preserves both signals: "Power · Ace" tells
+    you everything; "Power" alone or "Ace" alone tells you only half.
+
+    Requires BOTH:
+      - the winning archetype's composite score sits in the elite range
+        (>= ACE_SCORE_THRESHOLD), AND
+      - at least ACE_MIN_ELITE_TRAITS individual traits are independently
+        elite (>= ACE_ELITE_TRAIT_PCT) — guards against one big number
+        (e.g. a velocity outlier) propping an otherwise-average season into
+        "Ace" standing.
+
+    Returns {"tier": "Ace" | None, "elite_traits": [...]}
+    """
+    if primary is None or primary.get("score") is None:
+        return {"tier": None, "elite_traits": []}
+
+    score = primary["score"]
+    elite_traits = [
+        k for k in ACE_DOMINANCE_KEYS
+        if metrics.get(k) is not None
+        and not (isinstance(metrics[k], float) and np.isnan(metrics[k]))
+        and metrics[k] >= ACE_ELITE_TRAIT_PCT
+    ]
+
+    is_ace = score >= ACE_SCORE_THRESHOLD and len(elite_traits) >= ACE_MIN_ELITE_TRAITS
+    return {
+        "tier":         "Ace" if is_ace else None,
+        "elite_traits": elite_traits,
+    }
+
+
 def compute_arsenal_depth(
     pitch_type_run_values: dict[str, float],
     usage_threshold: float = 10.0,
@@ -567,6 +674,8 @@ def build_starter_profile(
     woba_vs_same:           Optional[float] = None,
     woba_vs_opposite:       Optional[float] = None,
     pitch_type_run_values:  Optional[dict[str, float]] = None,
+    season:                 Optional[int] = None,
+    pitch_mix_df=           None,
 ) -> dict:
     """
     Full starter classification for one pitcher × season.
@@ -578,12 +687,15 @@ def build_starter_profile(
         woba_vs_same:          wOBA allowed vs same-hand batters (raw)
         woba_vs_opposite:      wOBA allowed vs opposite-hand batters (raw)
         pitch_type_run_values: {pitch_type: run_value_per_100} for arsenal depth
+        season:                season year — used to load pitch mix for arsenal profile
+        pitch_mix_df:          pre-loaded pitch_mix DataFrame (avoids reload per-pitcher)
 
     Returns:
         {
             player_id, handedness,
-            primary: archetype dict,
-            modifiers: {platoon, command, arsenal},
+            primary:         outcome-based archetype dict (P1-P6, kept for compatibility)
+            arsenal_profile: weapon-based profile (fastball, out_pitch, approach, depth…)
+            modifiers:       {platoon, command, arsenal, ace}
         }
     """
     primary = classify_starter(metrics)
@@ -595,20 +707,43 @@ def build_starter_profile(
         platoon = {"vulnerable": None, "difference": None}
 
     command = compute_command_profile(metrics)
+    ace     = compute_ace_tier(primary, metrics)
 
     if pitch_type_run_values is not None:
         arsenal = compute_arsenal_depth(pitch_type_run_values)
     else:
         arsenal = {"above_avg_count": None, "label": None, "pitch_breakdown": {}}
 
+    # Weapon-based arsenal profile (Tier 2 — from Statcast pitch-type aggregation)
+    arsenal_profile = None
+    if season is not None:
+        try:
+            from pitch_mix import build_arsenal_profile, load_pitch_mix
+            pm = pitch_mix_df if pitch_mix_df is not None else load_pitch_mix(season)
+            arsenal_profile = build_arsenal_profile(
+                player_id, season, pm,
+                tunnel_pct=metrics.get("TunnelScore_pct"),
+            )
+            if arsenal_profile is not None:
+                # Don't store the raw DataFrame inside the portrait — too large
+                arsenal_profile = {k: v for k, v in arsenal_profile.items()
+                                   if k != "pitch_rows"}
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "arsenal_profile failed for %s season %s: %s", player_id, season, exc
+            )
+
     return {
-        "player_id":  player_id,
-        "handedness": handedness,
-        "primary":    primary,
+        "player_id":       player_id,
+        "handedness":      handedness,
+        "primary":         primary,
+        "arsenal_profile": arsenal_profile,
         "modifiers": {
             "platoon": platoon,
             "command": command,
             "arsenal": arsenal,
+            "ace":     ace,
         },
     }
 

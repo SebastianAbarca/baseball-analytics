@@ -42,6 +42,10 @@ from ingest import (
 
 log = logging.getLogger(__name__)
 
+_HERE = Path(__file__).parent
+PROCESSED_DIR = _HERE / "processed"
+PROCESSED_DIR.mkdir(exist_ok=True)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -341,4 +345,41 @@ def build_tunnel_profile(df: pd.DataFrame) -> pd.DataFrame:
 
     agg = apply_tunnel_reliability(agg)
     agg = normalize_tunnel_scores(agg)
+    return agg
+
+
+def load_league_tunnel(
+    season: int,
+    statcast: pd.DataFrame | None = None,
+    force: bool = False,
+) -> pd.DataFrame:
+    """
+    League-wide pitcher tunnel profile for one season, cached to parquet.
+
+    Unlike per-team build_tunnel_profile calls, this ranks tunnel_score_pct
+    against ALL pitchers in the season — required for any claim like
+    "this pitcher is a top-quartile tunneler" (approach labels, P2 scoring,
+    team-level tunnel percentiles).
+
+    Args:
+        season:   season year
+        statcast: pre-loaded full-season Statcast DataFrame (loaded via
+                  ingest.pull_statcast_season if omitted)
+        force:    rebuild even when the cache exists
+    """
+    cache = PROCESSED_DIR / f"tunnel_league_{season}.parquet"
+    if cache.exists() and not force:
+        log.info("tunnel_league %d: loading from cache", season)
+        return pd.read_parquet(cache)
+
+    if statcast is None:
+        from ingest import pull_statcast_season
+        statcast = pull_statcast_season(season)
+
+    log.info("tunnel_league %d: building from Statcast (%d pitches)…",
+             season, len(statcast))
+    agg = build_tunnel_profile(statcast)
+    if not agg.empty:
+        agg.to_parquet(cache, index=False)
+        log.info("tunnel_league %d: saved %d pitchers to cache", season, len(agg))
     return agg

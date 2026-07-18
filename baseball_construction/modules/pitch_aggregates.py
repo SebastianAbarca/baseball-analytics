@@ -15,6 +15,7 @@ merge functions both call compute_pitch_aggregates in the same seed run.
 
 from __future__ import annotations
 
+import collections
 import logging
 from pathlib import Path
 import sys
@@ -83,6 +84,13 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
     df["_is_swing"]      = df["description"].isin(_SWUNG)
     df["_is_swing_miss"] = df["description"].isin(_SWING_MISS)
 
+    # Chase (O-Swing) — swings at pitches outside Statcast zones 1–9.
+    # Computed here because the Savant chase_pct column is only ~34% populated;
+    # this fills the gap for plate-discipline traits downstream.
+    df["_has_zone"] = pd.to_numeric(df["zone"], errors="coerce").notna()
+    df["_oz"]       = df["_has_zone"] & ~df["_in_zone"]
+    df["_oz_swing"] = df["_oz"] & df["_is_swing"]
+
     # Aggregate counting stats per batter
     agg = df.groupby("batter", sort=False).agg(
         gb_n          = ("_is_gb",        "sum"),
@@ -94,6 +102,8 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
         zone_pitch_n  = ("_in_zone",      "sum"),
         swing_n       = ("_is_swing",     "sum"),
         swing_miss_n  = ("_is_swing_miss","sum"),
+        oz_n          = ("_oz",           "sum"),
+        oz_swing_n    = ("_oz_swing",     "sum"),
     )
 
     # PA count = distinct (game_pk, at_bat_number) per batter
@@ -112,8 +122,10 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
     agg["pitches_per_pa"] = np.where(agg["pa_n"] > 0,        agg["total_pitches"] / agg["pa_n"],                      np.nan)
     agg["zone_swing_pct"] = np.where(agg["zone_pitch_n"] > 0, agg["zone_swing_n"] / agg["zone_pitch_n"],              np.nan)
     agg["contact_pct"]    = np.where(agg["swing_n"] > 0,     (agg["swing_n"] - agg["swing_miss_n"]) / agg["swing_n"], np.nan)
+    agg["chase_sc_pct"]   = np.where(agg["oz_n"] > 0,        agg["oz_swing_n"] / agg["oz_n"],                         np.nan)
 
-    result = agg[["gb_pct", "fps_pct", "pitches_per_pa", "zone_swing_pct", "contact_pct"]].reset_index()
+    result = agg[["gb_pct", "fps_pct", "pitches_per_pa", "zone_swing_pct",
+                  "contact_pct", "chase_sc_pct"]].reset_index()
     result = result.rename(columns={"batter": "key_mlbam"})
     log.info("Batter pitch aggregates — %d players (min_pa=%d)", len(result), min_pa)
     return result
@@ -146,12 +158,16 @@ def _pitcher_aggregates(sc: pd.DataFrame, min_bf: int = 30) -> pd.DataFrame:
     df["_is_gb"]   = df["bb_type"] == "ground_ball"
     df["_has_bip"] = df["bb_type"].notna()
 
-    # Zone flag — use per-pitch sz_top/sz_bot, fall back to league averages
+    # Zone flag — use per-pitch sz_top/sz_bot, fall back to ABS-standard league averages
+    # ABS averages: top=3.38 ft, bot=1.59 ft, width=±0.833 ft (17" plate + ½ ball radius)
+    _ABS_TOP   = 3.38
+    _ABS_BOT   = 1.59
+    _ABS_WIDTH = 0.833
     plate_x = pd.to_numeric(df["plate_x"], errors="coerce")
     plate_z = pd.to_numeric(df["plate_z"], errors="coerce")
-    sz_top  = pd.to_numeric(df["sz_top"], errors="coerce").fillna(3.5)
-    sz_bot  = pd.to_numeric(df["sz_bot"], errors="coerce").fillna(1.5)
-    df["_in_zone"]      = (plate_x.abs() <= 0.83) & (plate_z >= sz_bot) & (plate_z <= sz_top)
+    sz_top  = pd.to_numeric(df["sz_top"], errors="coerce").fillna(_ABS_TOP)
+    sz_bot  = pd.to_numeric(df["sz_bot"], errors="coerce").fillna(_ABS_BOT)
+    df["_in_zone"]      = (plate_x.abs() <= _ABS_WIDTH) & (plate_z >= sz_bot) & (plate_z <= sz_top)
     df["_has_location"] = plate_x.notna() & plate_z.notna()
 
     # CSW flag
@@ -426,6 +442,442 @@ def compute_pitch_aggregates(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 # ---------------------------------------------------------------------------
+# Pitcher leverage exposure — |ΔWE| per plate appearance
+# ---------------------------------------------------------------------------
+
+_LEVERAGE_CACHE: dict[int, pd.DataFrame] = {}
+
+def compute_pitcher_leverage(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Empirical leverage proxy per pitcher: mean absolute home-win-expectancy
+    swing per plate appearance faced. A reliever used in tight late spots
+    lives in high-|ΔWE| PAs; a mop-up arm's PAs barely move the needle.
+
+    Computed entirely from statcast delta_home_win_exp (100% populated) —
+    no external leverage-index table needed.
+
+    Returns DataFrame: pitcher, n_pa, mean_abs_dwe
+    """
+    if season in _LEVERAGE_CACHE:
+        return _LEVERAGE_CACHE[season]
+
+    sc = statcast[["pitcher", "game_pk", "at_bat_number",
+                   "delta_home_win_exp"]].copy()
+    sc["_dwe"] = pd.to_numeric(sc["delta_home_win_exp"], errors="coerce").abs()
+    # One row per PA: the PA's total |ΔWE| is on its final pitch, but summing
+    # per-pitch |ΔWE| within the PA captures mid-PA swings too — use PA sum.
+    pa = (sc.groupby(["pitcher", "game_pk", "at_bat_number"])["_dwe"]
+            .sum().reset_index())
+    agg = pa.groupby("pitcher").agg(
+        n_pa=("_dwe", "count"),
+        mean_abs_dwe=("_dwe", "mean"),
+    ).reset_index()
+
+    _LEVERAGE_CACHE[season] = agg
+    log.info("Pitcher leverage computed — %d pitchers", len(agg))
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# Catcher framing — shadow-zone called-strike rate above league expectation
+# ---------------------------------------------------------------------------
+
+_FRAMING_CACHE: dict[int, pd.DataFrame] = {}
+
+# ABS-standard zone bounds (same convention as _pitcher_aggregates)
+_FR_TOP, _FR_BOT, _FR_W = 3.38, 1.59, 0.833
+_SHADOW_BAND = 0.25   # ft each side of the zone edge = the frameable region
+
+def compute_catcher_framing(statcast: pd.DataFrame, season: int,
+                            min_taken: int = 500) -> pd.DataFrame:
+    """
+    Framing proxy per catcher, computed from raw pitches (the Savant framing
+    endpoint is broken in pybaseball; this is the same idea from first
+    principles): on TAKEN pitches in the shadow band around the zone edge,
+    how far above/below the league called-strike rate does this catcher sit?
+
+    Returns DataFrame:
+        catcher (MLBAM), shadow_taken, cs_rate, league_cs_rate,
+        framing_above (cs_rate − league, in percentage points),
+        framing_pct (percentile among catchers with ≥ min_taken)
+    """
+    if season in _FRAMING_CACHE:
+        return _FRAMING_CACHE[season]
+
+    sc = statcast[["fielder_2", "description", "plate_x", "plate_z",
+                   "sz_top", "sz_bot"]].copy()
+    sc = sc[sc["description"].isin(["called_strike", "ball"])]
+
+    px = pd.to_numeric(sc["plate_x"], errors="coerce")
+    pz = pd.to_numeric(sc["plate_z"], errors="coerce")
+    top = pd.to_numeric(sc["sz_top"], errors="coerce").fillna(_FR_TOP)
+    bot = pd.to_numeric(sc["sz_bot"], errors="coerce").fillna(_FR_BOT)
+
+    # Distance outside the zone on each axis (0 inside); shadow = within the
+    # band of an edge, either side.
+    dx = (px.abs() - _FR_W).clip(lower=None)
+    dz_hi = pz - top
+    dz_lo = bot - pz
+    # Signed "distance from in-zone region": positive = outside
+    outside = pd.concat([dx, dz_hi, dz_lo], axis=1).max(axis=1)
+    shadow = outside.abs() <= _SHADOW_BAND
+    sc = sc[shadow & px.notna() & pz.notna()]
+
+    sc["_cs"] = sc["description"] == "called_strike"
+    league_rate = float(sc["_cs"].mean())
+
+    agg = sc.groupby("fielder_2").agg(
+        shadow_taken=("_cs", "count"),
+        cs_rate=("_cs", "mean"),
+    ).reset_index().rename(columns={"fielder_2": "catcher"})
+    agg["league_cs_rate"] = league_rate
+    agg["framing_above"] = (agg["cs_rate"] - league_rate) * 100.0
+
+    qual = agg[agg["shadow_taken"] >= min_taken].copy()
+    qual["framing_pct"] = qual["framing_above"].rank(pct=True) * 100.0
+    agg = agg.merge(qual[["catcher", "framing_pct"]], on="catcher", how="left")
+
+    _FRAMING_CACHE[season] = agg
+    log.info("Catcher framing computed — %d catchers (%d qualified), "
+             "league shadow CS rate %.1f%%",
+             len(agg), len(qual), league_rate * 100)
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# Catcher pop time (Savant leaderboard via pybaseball; cached to CSV)
+# ---------------------------------------------------------------------------
+
+def load_catcher_poptime(season: int) -> pd.DataFrame:
+    """
+    Pop time to 2B per catcher, cached to processed/poptime_{season}.csv.
+    Adds pop_pct — percentile among listed catchers (LOWER time = better,
+    so a low percentile = fast exchange).
+    Returns empty frame if the endpoint is unavailable (tags simply skip).
+    """
+    cache = _HERE / "processed" / f"poptime_{season}.csv"
+    if cache.exists():
+        return pd.read_csv(cache)
+    try:
+        import pybaseball
+        df = pybaseball.statcast_catcher_poptime(season)
+        df = df.rename(columns={"entity_id": "catcher"})
+        df["catcher"] = pd.to_numeric(df["catcher"], errors="coerce")
+        df["pop_2b"] = pd.to_numeric(df.get("pop_2b_sba"), errors="coerce")
+        df = df[df["catcher"].notna() & df["pop_2b"].notna()]
+        df["pop_pct"] = df["pop_2b"].rank(pct=True) * 100.0
+        out = df[["catcher", "pop_2b", "pop_pct"]].copy()
+        out.to_csv(cache, index=False)
+        log.info("Catcher poptime — %d catchers cached", len(out))
+        return out
+    except Exception as exc:
+        log.warning("Catcher poptime unavailable: %s", exc)
+        return pd.DataFrame(columns=["catcher", "pop_2b", "pop_pct"])
+
+
+# ---------------------------------------------------------------------------
+# Baserunning advancement — extra bases taken, from base-state transitions
+# ---------------------------------------------------------------------------
+
+_ADVANCE_CACHE: dict[int, "pd.DataFrame"] = {}
+
+def compute_batter_advancement(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Extra-bases-taken per RUNNER, from base-state transitions between
+    consecutive PAs (des narration is only ~26% populated — never use it).
+
+    Opportunities pooled across the three standard XBT situations:
+      • runner on 1B, batter singles  → did he reach 3B?
+      • runner on 2B, batter singles  → did he score?
+      • runner on 1B, batter doubles  → did he score?
+
+    A runner "scored" if he appears on no base in the next PA and the
+    half-inning continued with more runs than outs added... ambiguity is
+    expensive, so instead: advancement is credited from where the runner
+    IS next PA; runners absent from the next PA's bases in a continuing
+    half-inning with a run scored on the play are counted as scored
+    (delta home/away score check). PAs that end the half-inning are
+    dropped — conservative denominators beat guessed numerators.
+
+    Returns per-runner DataFrame:
+      key_mlbam, opps, advances, xbt_rate,
+      first_to_third_opps, first_to_third_n
+    """
+    if season in _ADVANCE_CACHE:
+        return _ADVANCE_CACHE[season]
+
+    cols = ["game_pk", "at_bat_number", "pitch_number", "inning", "inning_topbot",
+            "events", "on_1b", "on_2b", "on_3b", "post_bat_score", "bat_score"]
+    have = [c for c in cols if c in statcast.columns]
+    sc = statcast[have].copy()
+
+    # Final pitch of every PA (events non-null), plus each PA's FIRST pitch
+    # base state (the state the previous PA's runners ended in).
+    sc = sc.sort_values(["game_pk", "at_bat_number", "pitch_number"])
+    finals = sc[sc["events"].notna()].drop_duplicates(
+        ["game_pk", "at_bat_number"], keep="last")
+    firsts = sc.drop_duplicates(["game_pk", "at_bat_number"], keep="first")
+
+    first_state = firsts.set_index(["game_pk", "at_bat_number"])[
+        ["on_1b", "on_2b", "on_3b", "inning", "inning_topbot"]]
+
+    rows: dict[int, dict] = {}
+
+    def _bump(rid, kind, advanced):
+        r = rows.setdefault(int(rid), {"opps": 0, "advances": 0,
+                                       "ft_opps": 0, "ft_n": 0})
+        r["opps"] += 1
+        r["advances"] += int(advanced)
+        if kind == "1b_single":
+            r["ft_opps"] += 1
+            r["ft_n"] += int(advanced)
+
+    scored_ok = {"post_bat_score", "bat_score"} <= set(have)
+
+    for f in finals.itertuples():
+        ev = f.events
+        if ev not in ("single", "double"):
+            continue
+        nxt_key = (f.game_pk, f.at_bat_number + 1)
+        if nxt_key not in first_state.index:
+            continue  # end of half-inning (or data edge) — drop, don't guess
+        nxt = first_state.loc[nxt_key]
+        if nxt["inning"] != f.inning or nxt["inning_topbot"] != f.inning_topbot:
+            continue  # half-inning ended on the play — drop
+
+        nxt_bases = {int(x) for x in (nxt["on_1b"], nxt["on_2b"], nxt["on_3b"])
+                     if pd.notna(x)}
+        runs_scored = (int(f.post_bat_score) - int(f.bat_score)) if scored_ok else 0
+
+        def _resolve(rid, target_base_val, station_base_val):
+            """advanced if on target base next PA; scored counts as advanced;
+            on station base = held; otherwise ambiguous → drop."""
+            rid = int(rid)
+            if pd.notna(target_base_val) and int(target_base_val) == rid:
+                return True
+            if pd.notna(station_base_val) and int(station_base_val) == rid:
+                return False
+            if rid not in nxt_bases and runs_scored > 0:
+                return True   # off the bases in a continuing inning + run(s) home
+            return None       # forced out / pinch-runner / ambiguity — drop
+
+        if ev == "single":
+            if pd.notna(f.on_1b):
+                adv = _resolve(f.on_1b, nxt["on_3b"], nxt["on_2b"])
+                if adv is not None:
+                    _bump(f.on_1b, "1b_single", adv)
+            if pd.notna(f.on_2b):
+                adv = _resolve(f.on_2b, None, nxt["on_3b"])
+                # target for 2B runner on a single = home (absent + run scored)
+                rid = int(f.on_2b)
+                if pd.notna(nxt["on_3b"]) and int(nxt["on_3b"]) == rid:
+                    _bump(rid, "2b_single", False)
+                elif rid not in nxt_bases and runs_scored > 0:
+                    _bump(rid, "2b_single", True)
+        elif ev == "double":
+            if pd.notna(f.on_1b):
+                rid = int(f.on_1b)
+                if pd.notna(nxt["on_3b"]) and int(nxt["on_3b"]) == rid:
+                    _bump(rid, "1b_double", False)
+                elif rid not in nxt_bases and runs_scored > 0:
+                    _bump(rid, "1b_double", True)
+
+    out = pd.DataFrame([
+        {"key_mlbam": rid, "opps": r["opps"], "advances": r["advances"],
+         "xbt_rate": r["advances"] / r["opps"] if r["opps"] else float("nan"),
+         "first_to_third_opps": r["ft_opps"], "first_to_third_n": r["ft_n"]}
+        for rid, r in rows.items()
+    ])
+    _ADVANCE_CACHE[season] = out
+    log.info("Batter advancement — %d runners, %d opportunities",
+             len(out), int(out["opps"].sum()) if not out.empty else 0)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Position appearances — home position + versatility, from fielder_2..9
+# ---------------------------------------------------------------------------
+
+_POSITION_CACHE: dict[int, "pd.DataFrame"] = {}
+
+_POS_NAMES = {2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS",
+              7: "LF", 8: "CF", 9: "RF"}
+MIN_DEFENSIVE_PITCHES = 300   # below → home position "DH"
+POS_MIN_PITCHES       = 150   # a position "counts" at ≥ this OR ≥5% share
+
+def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Per player: defensive pitch counts by position (fielder_2..9 alignment
+    columns — verified 100% populated), home_position, and positions_played.
+
+    Returns: key_mlbam, home_position, positions_played, total_def_pitches,
+             pos_detail (dict pos → share)
+    """
+    if season in _POSITION_CACHE:
+        return _POSITION_CACHE[season]
+
+    counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
+    for n in range(2, 10):
+        col = f"fielder_{n}"
+        if col not in statcast.columns:
+            continue
+        vc = pd.to_numeric(statcast[col], errors="coerce").dropna().astype(int).value_counts()
+        for pid, c in vc.items():
+            counts[pid][_POS_NAMES[n]] += int(c)
+
+    rows = []
+    for pid, ctr in counts.items():
+        total = sum(ctr.values())
+        if total < MIN_DEFENSIVE_PITCHES:
+            home = "DH"
+            played = []
+        else:
+            home = ctr.most_common(1)[0][0]
+            played = [p for p, c in ctr.items()
+                      if c >= POS_MIN_PITCHES or c / total >= 0.05]
+        rows.append({"key_mlbam": pid, "home_position": home,
+                     "positions_played": len(played),
+                     "total_def_pitches": total,
+                     "pos_detail": {p: round(c / total, 3)
+                                    for p, c in ctr.most_common()}})
+    out = pd.DataFrame(rows)
+    _POSITION_CACHE[season] = out
+    log.info("Position appearances — %d players", len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Runner control — mid-PA advances allowed per pitcher (mechanism-agnostic)
+# ---------------------------------------------------------------------------
+
+_RUNNER_CTRL_CACHE: dict[int, "pd.DataFrame"] = {}
+
+def compute_runner_control(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Per pitcher: how often runners moved up a base BETWEEN pitches within a
+    PA (stolen bases, wild pitches, passed balls and balks collectively —
+    the base-state data cannot attribute mechanism, and the tag's evidence
+    says so). Opportunities = PAs with 1B occupied at any point.
+
+    Returns: pitcher, opps, advances_allowed, advance_rate
+    """
+    if season in _RUNNER_CTRL_CACHE:
+        return _RUNNER_CTRL_CACHE[season]
+
+    cols = ["pitcher", "game_pk", "at_bat_number", "pitch_number",
+            "on_1b", "on_2b", "on_3b"]
+    sc = statcast[[c for c in cols if c in statcast.columns]].copy()
+    sc = sc.sort_values(["game_pk", "at_bat_number", "pitch_number"])
+
+    for b in ("on_1b", "on_2b", "on_3b"):
+        sc[b] = pd.to_numeric(sc[b], errors="coerce")
+
+    grp_key = ["game_pk", "at_bat_number"]
+    # Advance detected when a runner id appears on a HIGHER base than the
+    # previous pitch of the same PA.
+    prev_1b = sc.groupby(grp_key)["on_1b"].shift()
+    same_pa = sc.groupby(grp_key)["pitch_number"].shift().notna()
+    moved_2b = same_pa & prev_1b.notna() & (sc["on_2b"] == prev_1b)
+    moved_3b = same_pa & prev_1b.notna() & (sc["on_3b"] == prev_1b)
+    prev_2b = sc.groupby(grp_key)["on_2b"].shift()
+    moved_23 = same_pa & prev_2b.notna() & (sc["on_3b"] == prev_2b)
+    sc["_adv"] = (moved_2b | moved_3b | moved_23)
+
+    pa = sc.groupby(["pitcher"] + grp_key).agg(
+        had_1b=("on_1b", lambda x: x.notna().any()),
+        advs=("_adv", "sum"),
+    ).reset_index()
+    qual = pa[pa["had_1b"].astype(bool)]
+    out = qual.groupby("pitcher").agg(
+        opps=("had_1b", "count"),
+        advances_allowed=("advs", "sum"),
+    ).reset_index()
+    out["advance_rate"] = out["advances_allowed"] / out["opps"]
+
+    _RUNNER_CTRL_CACHE[season] = out
+    log.info("Runner control — %d pitchers", len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Savant leaderboard CSVs — catcher blocking + pitch tempo (cached)
+# ---------------------------------------------------------------------------
+
+def load_catcher_blocking(season: int) -> pd.DataFrame:
+    """
+    Savant catcher-blocking leaderboard, cached to processed/blocking_{season}.csv.
+    blocking_pct = percentile of blocks_above_average among listed catchers.
+    Empty frame on fetch failure (tags simply skip).
+    """
+    cache = _HERE / "processed" / f"blocking_{season}.csv"
+    if cache.exists():
+        return pd.read_csv(cache)
+    try:
+        import requests, io
+        url = ("https://baseballsavant.mlb.com/leaderboard/catcher-blocking"
+               f"?game_type=Regular&season_end={season}&season_start={season}"
+               "&split=no&team=&type=Cat&with_team_only=1&csv=true")
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+        df = df.rename(columns={"player_id": "catcher"})
+        df["catcher"] = pd.to_numeric(df["catcher"], errors="coerce")
+        df["blocks_above_average"] = pd.to_numeric(
+            df["blocks_above_average"], errors="coerce")
+        df = df[df["catcher"].notna() & df["blocks_above_average"].notna()]
+        df["blocking_pct"] = df["blocks_above_average"].rank(pct=True) * 100.0
+        out = df[["catcher", "blocks_above_average", "n_pbwp", "blocking_pct"]].copy()
+        out.to_csv(cache, index=False)
+        log.info("Catcher blocking — %d catchers cached", len(out))
+        return out
+    except Exception as exc:
+        log.warning("Catcher blocking unavailable: %s", exc)
+        return pd.DataFrame(columns=["catcher", "blocks_above_average",
+                                     "n_pbwp", "blocking_pct"])
+
+
+def load_pitch_tempo(season: int, min_pitches: int = 300) -> pd.DataFrame:
+    """
+    Savant pitch-tempo leaderboard (empty-bases median seconds between
+    pitches), cached to processed/tempo_{season}.csv.
+
+    The raw CSV repeats column NAMES (total_pitches / median_seconds_empty
+    each appear twice) — columns are taken positionally.
+    tempo_pct = percentile of empty-bases tempo (higher = slower).
+    """
+    cache = _HERE / "processed" / f"tempo_{season}.csv"
+    if cache.exists():
+        return pd.read_csv(cache)
+    try:
+        import requests, io
+        url = ("https://baseballsavant.mlb.com/leaderboard/pitch-tempo"
+               f"?type=Pit&min_pitches=100&season_end={season}"
+               f"&season_start={season}&split_pitches=no&team="
+               "&with_team_only=1&csv=true")
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+        # Positional: 0 entity_id, 4 total_pitches, 6 total_pitches_empty,
+        # 7 median_seconds_empty (first occurrence)
+        df.columns = [f"c{i}" for i in range(len(df.columns))]
+        out = pd.DataFrame({
+            "pitcher":        pd.to_numeric(df["c0"], errors="coerce"),
+            "pitches_empty":  pd.to_numeric(df["c6"], errors="coerce"),
+            "tempo_empty_s":  pd.to_numeric(df["c7"], errors="coerce"),
+        })
+        out = out[out["pitcher"].notna() & out["tempo_empty_s"].notna()
+                  & (out["pitches_empty"] >= min_pitches)]
+        out["tempo_pct"] = out["tempo_empty_s"].rank(pct=True) * 100.0
+        out.to_csv(cache, index=False)
+        log.info("Pitch tempo — %d pitchers cached", len(out))
+        return out
+    except Exception as exc:
+        log.warning("Pitch tempo unavailable: %s", exc)
+        return pd.DataFrame(columns=["pitcher", "pitches_empty",
+                                     "tempo_empty_s", "tempo_pct"])
+
+
+# ---------------------------------------------------------------------------
 # Batter L/R split stats
 # ---------------------------------------------------------------------------
 
@@ -492,15 +944,18 @@ def compute_batter_splits(
 ) -> dict[int, dict]:
     """
     Compute AVG / OBP / SLG / OPS / wOBA split by pitcher handedness (LHP vs RHP)
-    for each batter in hitter_ids.
+    for each batter in hitter_ids, plus the batter's side profile.
 
-    Returns {batter_id: {"vs_lhp": {...}, "vs_rhp": {...}}}
+    Returns {batter_id: {"vs_lhp": {...}, "vs_rhp": {...},
+                          "bats": "L"|"R"|"S", "stand_l_share": float}}
     Only includes splits where the player faced >= min_pa of that handedness.
+    bats = "S" (switch) when the batter took ≥ 15% of PAs from each side.
     """
-    needed = ["batter", "p_throws", "events"]
+    needed = ["batter", "p_throws", "events", "stand",
+              "game_pk", "at_bat_number"]
     sc = statcast[
         statcast["batter"].isin(hitter_ids) & statcast["events"].notna()
-    ][needed].copy()
+    ][[c for c in needed if c in statcast.columns]].copy()
 
     if sc.empty:
         return {}
@@ -513,10 +968,75 @@ def compute_batter_splits(
             stats  = _split_stats(subset)
             if stats and stats.get("pa", 0) >= min_pa:
                 entry[label] = stats
+
+        # Batter side profile — per-PA stand distribution (switch detection)
+        if "stand" in grp.columns:
+            pa_rows = grp.drop_duplicates(["game_pk", "at_bat_number"]) \
+                if {"game_pk", "at_bat_number"}.issubset(grp.columns) else grp
+            stands = pa_rows["stand"].dropna()
+            if len(stands) > 0:
+                l_share = float((stands == "L").mean())
+                entry["stand_l_share"] = round(l_share, 3)
+                if 0.15 <= l_share <= 0.85:
+                    entry["bats"] = "S"
+                else:
+                    entry["bats"] = "L" if l_share > 0.85 else "R"
+
         if entry:
             results[int(batter_id)] = entry
 
     log.info("Batter splits computed — %d batters", len(results))
+    return results
+
+
+def compute_pitcher_splits(
+    statcast: pd.DataFrame,
+    pitcher_ids: set[int],
+    min_bf: int = 40,
+) -> dict[int, dict]:
+    """
+    Pitcher-side platoon splits: wOBA allowed vs LHH and vs RHH, plus how
+    the pitcher was DEPLOYED (share of batters faced who shared his hand —
+    high share on a reliever = matchup weapon usage).
+
+    Returns {pitcher_id: {"vs_lhh": {...}, "vs_rhh": {...},
+                           "p_throws": "L"|"R",
+                           "same_hand_bf_share": float}}
+    Splits included only when >= min_bf of that side was faced.
+    """
+    needed = ["pitcher", "stand", "p_throws", "events",
+              "game_pk", "at_bat_number", "batter"]
+    sc = statcast[
+        statcast["pitcher"].isin(pitcher_ids) & statcast["events"].notna()
+    ][[c for c in needed if c in statcast.columns]].copy()
+
+    if sc.empty:
+        return {}
+
+    results: dict[int, dict] = {}
+    for pitcher_id, grp in sc.groupby("pitcher"):
+        entry: dict = {}
+        throws = grp["p_throws"].mode()
+        throws = str(throws.iloc[0]) if not throws.empty else None
+        entry["p_throws"] = throws
+
+        for hand, label in [("L", "vs_lhh"), ("R", "vs_rhh")]:
+            subset = grp[grp["stand"] == hand]
+            stats  = _split_stats(subset)
+            if stats and stats.get("pa", 0) >= min_bf:
+                entry[label] = stats
+
+        # Deployment: same-hand share of BF (per-PA, not per-pitch)
+        pa_rows = grp.drop_duplicates(["game_pk", "at_bat_number"]) \
+            if {"game_pk", "at_bat_number"}.issubset(grp.columns) else grp
+        stands = pa_rows["stand"].dropna()
+        if throws and len(stands) > 0:
+            entry["same_hand_bf_share"] = round(float((stands == throws).mean()), 3)
+
+        if entry.get("vs_lhh") or entry.get("vs_rhh"):
+            results[int(pitcher_id)] = entry
+
+    log.info("Pitcher splits computed — %d pitchers", len(results))
     return results
 
 

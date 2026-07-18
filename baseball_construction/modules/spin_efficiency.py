@@ -280,3 +280,35 @@ def build_pitcher_spin_profile(
     agg = normalize_spin_efficiency(agg)
     summary = build_pitcher_summary(agg)
     return agg, summary
+
+
+def load_league_spin(
+    season: int,
+    statcast: pd.DataFrame | None = None,
+    force: bool = False,
+) -> pd.DataFrame:
+    """
+    League-wide pitcher spin-efficiency summary for one season, cached to
+    parquet. spin_efficiency_pct here is ranked against ALL pitchers in the
+    season — the per-team pipeline only ranks within one team's ~30 arms,
+    which is not valid for league-percentile claims (archetype scoring).
+    """
+    _here = Path(__file__).parent
+    processed = _here / "processed"
+    processed.mkdir(exist_ok=True)
+    cache = processed / f"spin_league_{season}.parquet"
+    if cache.exists() and not force:
+        log.info("spin_league %d: loading from cache", season)
+        return pd.read_parquet(cache)
+
+    if statcast is None:
+        from ingest import pull_statcast_season
+        statcast = pull_statcast_season(season)
+
+    log.info("spin_league %d: building from Statcast (%d pitches)…",
+             season, len(statcast))
+    _, summary = build_pitcher_spin_profile(statcast)
+    if not summary.empty:
+        summary.to_parquet(cache, index=False)
+        log.info("spin_league %d: saved %d pitchers to cache", season, len(summary))
+    return summary
