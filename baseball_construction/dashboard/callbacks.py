@@ -23,7 +23,7 @@ from dash import Input, Output, State, callback, no_update, MATCH, ctx, clientsi
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
-from team_portrait import build_team_portrait
+from team_portrait import build_team_portrait, PORTRAIT_SCHEMA_VERSION
 from ingest import pull_statcast_season
 import charts
 from layout import team_header
@@ -55,6 +55,11 @@ def _cache_valid(path: Path, season: int) -> bool:
     return (_time.time() - path.stat().st_mtime) < 86400
 
 
+def _schema_current(portrait: dict | None) -> bool:
+    """True if a (de)serialized portrait dict matches the current schema version."""
+    return bool(portrait) and portrait.get("schema_version") == PORTRAIT_SCHEMA_VERSION
+
+
 def _storage_download(team: str, season: int) -> str | None:
     """
     Try to fetch portrait JSON from Supabase Storage 'portraits' bucket.
@@ -70,6 +75,12 @@ def _storage_download(team: str, season: int) -> str | None:
         data = get_client().storage.from_("portraits").download(filename)
         if data:
             text = data.decode("utf-8") if isinstance(data, bytes) else data
+            if not _schema_current(json.loads(text)):
+                log.info(
+                    "Stale portrait in Supabase Storage (schema mismatch): %s %d — ignoring",
+                    team, season,
+                )
+                return None
             # Write to local cache so subsequent requests hit disk
             cp = _cache_path(team, int(season))
             cp.write_text(text)
@@ -174,16 +185,19 @@ def build_portrait(n_clicks, team: str, season: int):
             t0 = _time.perf_counter()
             cached_json = cp.read_text()
             cached = json.loads(cached_json)
-            elapsed = _time.perf_counter() - t0
-            mode = cached.get("temporal", {}).get("mode", "—")
-            cov  = cached.get("data_coverage", 0.0)
-            banner = dbc.Alert(
-                [html.Strong(f"{team} {season}"),
-                 f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
-                color="success", className="py-1 mb-0",
-            )
-            log.info("Portrait cache hit (disk): %s %d (%.2fs)", team, season, elapsed)
-            return cached_json, banner
+            if _schema_current(cached):
+                elapsed = _time.perf_counter() - t0
+                mode = cached.get("temporal", {}).get("mode", "—")
+                cov  = cached.get("data_coverage", 0.0)
+                banner = dbc.Alert(
+                    [html.Strong(f"{team} {season}"),
+                     f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
+                    color="success", className="py-1 mb-0",
+                )
+                log.info("Portrait cache hit (disk): %s %d (%.2fs)", team, season, elapsed)
+                return cached_json, banner
+            else:
+                log.info("Stale disk-cached portrait (schema mismatch): %s %d — rebuilding", team, season)
         except Exception as exc:
             log.warning("Portrait disk cache read failed: %s", exc)
 
@@ -294,6 +308,16 @@ def park_gauge(data):
 
 
 # ---------------------------------------------------------------------------
+# Callback 5b — Roster control chart
+# ---------------------------------------------------------------------------
+
+@callback(Output("roster-control-chart", "figure"), Input("portrait-store", "data"))
+def roster_control(data):
+    p = _deserialize(data)
+    return charts.roster_control_chart(p) if p else charts.empty_figure("No portrait loaded")
+
+
+# ---------------------------------------------------------------------------
 # Callback 6 — Spin efficiency
 # ---------------------------------------------------------------------------
 
@@ -320,7 +344,7 @@ def batting_bars(data):
 @callback(Output("hitter-pie", "figure"), Input("portrait-store", "data"))
 def hitter_pie(data):
     p = _deserialize(data)
-    return charts.hitter_archetype_pie(p) if p else charts.empty_figure()
+    return charts.hitter_trait_density(p) if p else charts.empty_figure()
 
 
 # ---------------------------------------------------------------------------
@@ -359,20 +383,38 @@ def bullpen_table(data):
     return charts.bullpen_detail_table(p) if p else charts.empty_figure()
 
 
+@callback(Output("bullpen-trait-density", "figure"), Input("portrait-store", "data"))
+def bullpen_trait_density_chart(data):
+    p = _deserialize(data)
+    return charts.bullpen_trait_density(p) if p else charts.empty_figure()
+
+
 # ---------------------------------------------------------------------------
-# Callback 9b — Hitter archetype affinity heatmap
+# Callback 9b — Hitter skill affinity heatmap
 # ---------------------------------------------------------------------------
 
 @callback(Output("hitter-heatmap", "figure"), Input("portrait-store", "data"))
 def hitter_heatmap(data):
     p = _deserialize(data)
-    return charts.hitter_vs_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see hitter benchmarks")
+    return charts.hitter_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see skill affinities")
 
 
 @callback(Output("spray-heatmap", "figure"), Input("portrait-store", "data"))
 def spray_heatmap(data):
     p = _deserialize(data)
-    return charts.team_spray_heatmap(p) if p else charts.empty_figure("Load a portrait to see batted ball profile")
+    if not p:
+        return charts.empty_figure("Load a portrait to see batted ball profile")
+    # Raw batted-ball points live in a sidecar file (portraits carry only the
+    # scalar spray summary since schema 13) — merge them in for the chart.
+    try:
+        sidecar = (_HERE.parent / "data" / "processed" / "spray"
+                   / f"{p.get('team')}_{p.get('season')}.json")
+        if sidecar.exists():
+            raw = json.loads(sidecar.read_text())
+            p = {**p, "spray_data": {**(p.get("spray_data") or {}), **raw}}
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Spray sidecar load failed: %s", exc)
+    return charts.team_spray_heatmap(p)
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +654,7 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
     import numpy as np
     from ingest import normalize_percentile, pull_fg_batting
     from database import query_batting
-    from hitter_archetypes import build_hitter_profile
+    from hitter_traits import build_hitter_traits
 
     if not n_clicks:
         return charts.empty_figure("Set filters and click Search"), ""
@@ -710,8 +752,7 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
                 att_pct_v = row.get("_att_rate_pct")
                 att_pct_v = float(att_pct_v) if att_pct_v is not None and not pd.isna(float(att_pct_v)) else None
 
-                p = build_hitter_profile(
-                    player_id=int(row.get("key_mlbam", 0) or 0),
+                traits, spectrum = build_hitter_traits(
                     metrics=metrics,
                     sprint_speed_raw=sprint_raw,
                     sb=int(row.get("sb", 0) or 0),
@@ -731,8 +772,8 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
                     "bb_rate": row.get("bb_rate"),
                     "xwoba":   row.get("xwoba"),
                     "war":     row.get("war"),
-                    "primary_type": p["primary"]["type"],
-                    "mods":    p["modifiers"],
+                    "tags":    {t["tag"] for t in traits},
+                    "spectrum": spectrum,
                     "sprint_raw": sprint_raw,
                 })
         except Exception as exc:
@@ -742,34 +783,22 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
         return (charts.empty_figure("No data for selected seasons"),
                 dbc.Alert("No players found.", color="warning", className="py-1"))
 
-    # ── Filter by archetype ───────────────────────────────────────────────────
+    # ── Filter by spectrum band ───────────────────────────────────────────────
     if archetype and archetype != "Any":
-        all_profiles = [p for p in all_profiles if p["primary_type"] == archetype]
+        def _in_band(p):
+            s = p.get("spectrum")
+            if s is None:
+                return False
+            if archetype == "power":
+                return s >= 60
+            if archetype == "contact":
+                return s <= 40
+            return 40 < s < 60   # balanced
+        all_profiles = [p for p in all_profiles if _in_band(p)]
 
-    # ── Filter by modifiers (player must have ALL selected) ──────────────────
-    def _has_modifier(p, mod):
-        mods = p["mods"]
-        m = mod.lower().replace(" ", "_")
-        # Speed tiers
-        if mod in ("Elite", "Fast", "Slow"):
-            return mods.get("speed") == mod
-        # Plate discipline
-        if mod in ("Elite Discipline", "Disciplined", "Free Swinger"):
-            return mods.get("plate_discipline") == mod
-        # Contact quality
-        if mod in ("Plus Contact", "Weak Contact"):
-            return mods.get("contact_quality") == mod
-        # Lucky/Unlucky
-        if mod in ("Lucky", "Unlucky"):
-            return mods.get("lucky_unlucky") == mod
-        # Disruptive/Chaotic
-        if mod in ("Disruptive", "Chaotic"):
-            return mods.get("disruptiveness", {}).get("modifier") == mod
-        # Boolean modifiers
-        return bool(mods.get(m.replace(" ", "_"), False))
-
-    for mod in modifiers:
-        all_profiles = [p for p in all_profiles if _has_modifier(p, mod)]
+    # ── Filter by traits (player must have ALL selected tags) ────────────────
+    for tag in modifiers:
+        all_profiles = [p for p in all_profiles if tag in p["tags"]]
 
     if not all_profiles:
         return (charts.empty_figure("No players match the selected criteria"),
@@ -798,24 +827,12 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
             return "—"
         return f"{float(v):{fmt}}"
 
-    def _mods_str(p):
-        mods = p["mods"]
-        tags = []
-        spd = mods.get("speed")
-        if spd in ("Elite", "Fast", "Slow"):  tags.append(spd)
-        lu = mods.get("lucky_unlucky")
-        if lu:                                 tags.append(lu)
-        cq = mods.get("contact_quality")
-        if cq:                                 tags.append(cq)
-        pd_ = mods.get("plate_discipline")
-        if pd_:                                tags.append(pd_)
-        if mods.get("table_setter"):           tags.append("Table Setter")
-        if mods.get("plus_power"):             tags.append("Plus Power")
-        if mods.get("gap_hitter"):             tags.append("Gap Hitter")
-        if mods.get("aggressive"):             tags.append("Aggressive")
-        dis = mods.get("disruptiveness", {}).get("modifier")
-        if dis:                                tags.append(dis)
-        return ", ".join(tags) or "—"
+    def _tags_str(p):
+        return ", ".join(sorted(p["tags"])) or "—"
+
+    def _spec_str(p):
+        s = p.get("spectrum")
+        return f"{s:.0f}" if s is not None else "—"
 
     n = len(all_profiles)
     COLORS_TBL = {"surface": "#1f2937", "background": "#111827",
@@ -828,8 +845,8 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
         columnwidth=[3, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2],
         header=dict(
             values=["<b>Player</b>", "<b>Yr</b>", "<b>PA</b>", "<b>WAR</b>",
-                    "<b>Archetype</b>", "<b>AVG</b>", "<b>OBP</b>",
-                    "<b>ISO</b>", "<b>K%</b>", "<b>BB%</b>", "<b>Modifiers</b>"],
+                    "<b>Spectrum</b>", "<b>AVG</b>", "<b>OBP</b>",
+                    "<b>ISO</b>", "<b>K%</b>", "<b>BB%</b>", "<b>Traits</b>"],
             fill_color=COLORS_TBL["surface"],
             font=dict(color=COLORS_TBL["subtext"], size=11),
             align=["left","center","center","center","left","center",
@@ -842,13 +859,13 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
                 [p["season"] for p in all_profiles],
                 [p["pa"] for p in all_profiles],
                 [_fmt(p.get("war"), ".1f") for p in all_profiles],
-                [p["primary_type"] for p in all_profiles],
+                [_spec_str(p) for p in all_profiles],
                 [_fmt(p.get("avg")) for p in all_profiles],
                 [_fmt(p.get("obp")) for p in all_profiles],
                 [_fmt(p.get("iso")) for p in all_profiles],
                 [_fmt(p.get("k_rate"), ".1%") for p in all_profiles],
                 [_fmt(p.get("bb_rate"), ".1%") for p in all_profiles],
-                [_mods_str(p) for p in all_profiles],
+                [_tags_str(p) for p in all_profiles],
             ],
             fill_color=[row_colors] * 11,
             font=dict(color=COLORS_TBL["text"], size=11),
@@ -865,7 +882,7 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
 
     status = dbc.Alert(
         f"{n} player{'s' if n != 1 else ''} matched · "
-        f"archetype={archetype} · modifiers={modifiers or 'any'} · "
+        f"spectrum={archetype} · traits={modifiers or 'any'} · "
         f"seasons {season_min}–{season_max} · min PA={min_pa}",
         color="success", className="py-1 mb-0",
     )
@@ -898,6 +915,22 @@ def team_split_card(data):
     if not p:
         return "Load a portrait to see team split resistance."
     return charts.team_split_card(p)
+
+
+@callback(Output("team-identity-card", "children"), Input("portrait-store", "data"))
+def team_identity_card(data):
+    p = _deserialize(data)
+    if not p:
+        return "Load a portrait to see team identity."
+    fingerprint = None
+    try:
+        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{p.get('season')}.json"
+        if path.exists():
+            league = json.loads(path.read_text())
+            fingerprint = (league.get(p.get("team")) or {}).get("fingerprint")
+    except Exception:
+        pass
+    return charts.team_identity_card(p, fingerprint=fingerprint)
 
 
 # ---------------------------------------------------------------------------
@@ -939,3 +972,114 @@ def arsenal_3d(pitch_type, data):
     if not p:
         return charts.empty_figure("Load a portrait to see pitch trajectories")
     return charts.pitch_arsenal_3d(p, pitch_type)
+
+
+# ---------------------------------------------------------------------------
+# League Identity Board
+# ---------------------------------------------------------------------------
+
+_LEAGUE_IDENTITY_DIR = _HERE.parent / "data" / "processed"
+
+
+@callback(
+    Output("league-board-table", "children"),
+    Input("league-board-season", "value"),
+)
+def league_identity_board(season):
+    if not season:
+        return "Select a season."
+
+    path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
+    if not path.exists():
+        return dbc_alert_no_data(season)
+
+    try:
+        league = json.loads(path.read_text())
+    except Exception as exc:
+        return f"Failed to load league identity data: {exc}"
+
+    if not league:
+        return dbc_alert_no_data(season)
+
+    rows = []
+    for team, identity in sorted(league.items()):
+        if team.startswith("_"):
+            continue
+        offense  = identity.get("offense") or {}
+        rotation = identity.get("rotation") or {}
+        bullpen  = identity.get("bullpen") or {}
+        fit      = identity.get("fit") or {}
+        mix = "—"
+        if offense.get("power_share") is not None:
+            mix = (f"P {offense.get('power_share', 0):.0%} · "
+                   f"C {offense.get('contact_share', 0):.0%} · "
+                   f"CH {offense.get('complete_share', 0):.0%}")
+        rot_density = rotation.get("trait_density") or {}
+        top_traits = " · ".join(f"{t} {v:.0%}"
+                                for t, v in list(rot_density.items())[:3]) or "—"
+        fp = identity.get("fingerprint") or {}
+        fp_items = []
+        for unit, prefix in [("offense", "O"), ("rotation", "R"), ("bullpen", "B")]:
+            for e in (fp.get(unit) or []):
+                fp_items.append((abs(e["deviation"]), 
+                                 f"{prefix}: {e['tag']} {e['deviation']*100:+.0f}"))
+        fp_items.sort(key=lambda x: -x[0])
+        fp_str = " · ".join(t for _, t in fp_items[:3]) or "league-typical"
+
+        rows.append({
+            "Team":              team,
+            "Fingerprint":       fp_str,
+            "Offense Identity":  offense.get("label", "—"),
+            "Pwr/Cnt/Complete":  mix,
+            "Rotation Identity": rotation.get("label", "—"),
+            "Top Rotation Traits": top_traits,
+            "Aces":              rotation.get("ace_count", 0),
+            "Bullpen Mechanism": bullpen.get("out_mechanism") or "—",
+            "Fit Notes":         " ".join(v for v in fit.values() if v) or "—",
+        })
+
+    columns = [
+        {"name": "Team",              "id": "Team"},
+        {"name": "Fingerprint",       "id": "Fingerprint"},
+        {"name": "Offense Identity",  "id": "Offense Identity"},
+        {"name": "Pwr/Cnt/Complete",  "id": "Pwr/Cnt/Complete"},
+        {"name": "Rotation Identity", "id": "Rotation Identity"},
+        {"name": "Top Rotation Traits", "id": "Top Rotation Traits"},
+        {"name": "Aces",              "id": "Aces"},
+        {"name": "Bullpen Mechanism", "id": "Bullpen Mechanism"},
+        {"name": "Fit Notes",         "id": "Fit Notes"},
+    ]
+
+    from dash import dash_table
+    return dash_table.DataTable(
+        data=rows,
+        columns=columns,
+        sort_action="native",
+        filter_action="native",
+        page_size=30,
+        style_table={"overflowX": "auto"},
+        style_header={
+            "backgroundColor": "#1a2233", "color": "#9ca3af",
+            "fontWeight": "600", "fontSize": "0.7rem",
+            "textTransform": "uppercase", "letterSpacing": "0.05em",
+            "border": "1px solid #374151",
+        },
+        style_cell={
+            "backgroundColor": "#1f2937", "color": "#f9fafb",
+            "fontSize": "0.8rem", "border": "1px solid #374151",
+            "padding": "6px 10px", "textAlign": "left",
+        },
+        style_data_conditional=[
+            {"if": {"column_id": "Fit Notes"}, "maxWidth": "420px",
+             "whiteSpace": "normal", "height": "auto"},
+        ],
+    )
+
+
+def dbc_alert_no_data(season):
+    import dash_bootstrap_components as dbc
+    return dbc.Alert(
+        f"No league identity data for {season}. Run "
+        f"'python3 scripts/build_league_identity.py {season}' to generate it.",
+        color="warning", className="py-2 mb-0",
+    )

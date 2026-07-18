@@ -7,7 +7,7 @@ All functions return Dash/DBC component trees. No callbacks here.
 from __future__ import annotations
 
 import dash_bootstrap_components as dbc
-from dash import dcc, html
+from dash import dcc, html, dash_table
 
 # ---------------------------------------------------------------------------
 # Theme constants
@@ -189,140 +189,175 @@ def _card(title: str, graph_id: str, height: int = 380) -> dbc.Card:
 
 def _archetype_guide_card() -> dbc.Card:
     """
-    Static reference card — archetype definitions + modifier explanations.
+    Static reference card — trait glossary, grouped by family.
     No callbacks needed; content never changes with portrait load.
     """
-    # ── Primary archetypes ────────────────────────────────────────────────────
+    # ── Hitter trait families ────────────────────────────────────────────────
     ARCHETYPES = [
         {
-            "code": "T1", "color": "#6366f1", "name": "Complete Hitter",
+            "code": "SPEC", "color": "#6366f1", "name": "Power–Contact Spectrum (continuous)",
             "desc": (
-                "Excels across every offensive dimension — on-base ability, power, patience, "
-                "and contact quality. The rarest archetype (~2% of regulars), reserved for "
-                "players who genuinely do everything well."
+                "Every hitter gets a 0–100 spectrum score: 0 = extreme contact "
+                "(Arraez), 100 = extreme power (Gallo). It is a ratio of power "
+                "production to contact production, shown as a number — not a box. "
+                "Tags mark only the tails, with absolute floors so the ratio "
+                "can't mislead."
             ),
             "gates": [
-                "xwOBA ≥ 70th pct — overall expected offensive quality",
-                "OBP ≥ 70th pct — elite on-base ability",
-                "ISO ≥ 70th pct — real power threat",
-                "BB% ≥ 65th pct — draws walks consistently",
-                "Barrel% ≥ 65th pct — consistent hard contact quality",
-                "AVG ≥ 75th pct — output is king; high contact rate with weak contact doesn't qualify",
-                "K% < 30% raw — extreme strikeout rates disqualify regardless of other gates",
+                "power bat — spectrum ≥ 60 with ISO ≥ 60th pct, OR ISO ≥ 85th pct outright",
+                "contact bat — spectrum ≤ 40 with AVG ≥ 50th pct",
+                "middle of the spectrum — no tag (a valid, ordinary state)",
             ],
-            "examples": "Juan Soto, Freddie Freeman, Yordan Álvarez, Kyle Tucker 2023",
+            "examples": "power bat: Austin Riley, d'Arnaud 2023 · contact bat: Dubón, Bregman 2023",
         },
         {
-            "code": "T2", "color": "#ef4444", "name": "Three True Outcomes",
+            "code": "BAT", "color": "#f97316", "name": "Bat traits",
+            "desc": "Production shape beyond the spectrum tails.",
+            "gates": [
+                "plus power — ISO ≥ 60th pct in a non-power-bat (suppressed by gap hitter)",
+                "gap hitter — spray-confirmed doubles/triples into the gaps (XB ≥ 60th + gap tendency ≥ 55th)",
+                "hard contact / weak contact — Barrel% + HardHit% composite top/bottom 30%",
+            ],
+            "examples": "gap hitter: Michael Harris 2023 · hard contact: Yordan, Ozuna 2023",
+        },
+        {
+            "code": "APPR", "color": "#22c55e", "name": "Approach traits",
+            "desc": "How the plate appearance is conducted.",
+            "gates": [
+                "walk machine — BB% ≥ 80th pct (absorbed into elite discipline when both fire)",
+                "high-K — strikeout rate ≥ 80th pct · rarely strikes out — ≤ 10th pct (min 200 PA)",
+                "elite discipline / free swinger — walk-rate + chase composite top/bottom tier",
+                "aggressive — first-pitch swing ≥ 65th pct AND chase ≥ 60th pct",
+            ],
+            "examples": "aggressive: Tucker, Acuña 2023 · walk machine: Soto",
+        },
+        {
+            "code": "COMP", "color": "#f59e0b", "name": "complete (collapse badge)",
             "desc": (
-                "Defined by strikeouts, walks, and home runs. Rarely puts the ball in play, "
-                "but commands the strike zone and makes pitchers work. High-variance, "
-                "high-upside approach that swings the stat line dramatically."
+                "When a hitter independently earns the power, on-base, discipline, "
+                "and hard-contact evidence (with K% under 30%), those tags collapse "
+                "into one `complete` badge — the constituents are listed in its "
+                "evidence. The presence of everything shows as one word."
             ),
             "gates": [
-                "K% ≥ 55th pct — above-average strikeout rate",
-                "BB% ≥ 65th pct — clearly above-average walk rate",
-                "ISO ≥ 65th pct — clearly above-average power",
+                "power bat or plus power",
+                "OBP ≥ 70th pct",
+                "elite discipline or walk machine",
+                "hard contact",
+                "K% ≤ 30% raw",
             ],
-            "examples": "Joey Gallo, Kyle Schwarber, Aaron Judge, Shohei Ohtani",
-        },
-        {
-            "code": "T3", "color": "#22c55e", "name": "Contact",
-            "desc": (
-                "Makes contact as the primary offensive weapon. Leans toward putting the "
-                "ball in play, reaching base via singles, and applying constant pressure "
-                "through volume and bat control. Pairs naturally with speed."
-            ),
-            "gates": ["Spectrum score < 45 (contact-leaning batted ball profile)"],
-            "examples": "Luis Arraez, Alex Bregman, Jeff McNeil, Nico Hoerner",
-        },
-        {
-            "code": "T4", "color": "#06b6d4", "name": "Balanced",
-            "desc": (
-                "No strong lean toward contact or power — sits in the middle of the spectrum. "
-                "Modifiers do the heavy lifting here: look at speed tier, discipline grade, "
-                "and baserunning tags to understand this hitter's real identity."
-            ),
-            "gates": ["Spectrum score 45–55 (no strong directional lean)"],
-            "examples": "José Abreu, Gleyber Torres, Ketel Marte (select seasons)",
-        },
-        {
-            "code": "T5", "color": "#f97316", "name": "Power",
-            "desc": (
-                "Swings for damage. Extra-base hits are the primary contribution — may carry "
-                "a higher strikeout rate but produces serious run value when they connect. "
-                "Barrel and hard-hit rates are the identity markers here."
-            ),
-            "gates": ["Spectrum score > 55 (power-leaning batted ball profile)"],
-            "examples": "Chas McCormick, Teoscar Hernández, Spencer Torkelson",
+            "examples": "2023: Acuña, Yordan, Tucker, Olson, Sean Murphy",
         },
     ]
 
-    # ── Modifiers ────────────────────────────────────────────────────────────
+    # ── Athleticism / luck + pitcher trait families ──────────────────────────
     MODIFIERS = [
         {
-            "tag": "Elite / Fast / Slow", "color": "#a78bfa",
+            "tag": "elite speed / fast / station-to-station / extra base taker / table setter / disruptive / chaotic / everyday player / super-utility", "color": "#a78bfa",
             "desc": (
-                "Sprint speed tier based on raw ft/sec from Statcast. "
-                "Elite ≥ 29.0 ft/s (top ~10%) — Fast ≥ 28.0 ft/s (top ~35%) — "
-                "Average 26.5–28.0 (no tag) — Slow < 26.5 ft/s (bottom ~25%)."
+                "Athleticism, baserunning and roster role. extra base taker = "
+                "top-15% rate of taking the extra base on hits (1st-to-3rd "
+                "counts in the evidence). super-utility = real innings at 4+ "
+                "positions; every hitter also carries a home position. "
+                "Speed tiers from raw sprint speed "
+                "(elite ≥ 29 ft/s, fast ≥ 28). table setter = on-base + speed without "
+                "power-threat ISO. disruptive = efficient, frequent steals (net positive); "
+                "chaotic = frequent but runs into outs."
             ),
-            "examples": "Elite: Bobby Witt Jr., Elly De La Cruz · Fast: Tommy Edman, Mauricio Dubón",
+            "examples": "elite speed: Witt Jr., Peña · disruptive: Acuña 2023 · chaotic: Peña 2023",
         },
         {
-            "tag": "Lucky / Unlucky", "color": "#fbbf24",
+            "tag": "lucky / unlucky", "color": "#fbbf24",
             "desc": (
-                "Compares actual wOBA to expected wOBA (xwOBA) via the luck delta. "
-                "Lucky = actual results significantly beat expected contact quality — "
-                "potential regression risk. Unlucky = hitting the ball better than "
-                "stats show — positive regression candidate."
+                "wOBA vs xwOBA gap, season decile tails only. lucky = results "
+                "outran the contact quality (regression risk); unlucky = contact "
+                "deserved better (positive regression candidate)."
             ),
-            "examples": "Lucky: Acuña 2023, Torres 2023 · Unlucky: Semien 2023, Olson 2023, Carroll 2023",
+            "examples": "lucky: Altuve 2023 · unlucky: Albies 2023",
         },
         {
-            "tag": "Plus Contact / Weak Contact", "color": "#34d399",
+            "tag": "Hitter: batted-ball family", "color": "#ec4899",
             "desc": (
-                "Batted ball quality tier — composite of Barrel% and Hard Hit% percentile ranks. "
-                "Plus Contact = top 30% of Statcast-tracked hitters. "
-                "Weak Contact = bottom 30%. Requires sufficient batted ball sample."
+                "Where the ball goes off the bat. pull-heavy / oppo bat "
+                "(directional BIP rate ≥ 85th pct), air-ball bat / ground-ball "
+                "bat (batter GB% bottom/top decile)."
             ),
-            "examples": "Plus Contact: Yordan Álvarez, Juan Soto · Weak Contact: low-exit-velo slap hitters",
+            "examples": "pull-heavy: Maldonado 2023 · ground-ball bat: Peña 2023",
         },
         {
-            "tag": "Elite Discipline / Disciplined / Free Swinger", "color": "#60a5fa",
+            "tag": "Hitter: platoon family", "color": "#14b8a6",
             "desc": (
-                "Plate approach grade — weighted composite of walk rate (60%) and "
-                "inverted chase rate (40%). Elite Discipline = top 25%, "
-                "Disciplined = top 45%, Free Swinger = bottom 35% of the composite."
+                "Handedness structure from statcast splits (min 50 PA each side). "
+                "switch hitter (≥15% of PAs from each side), platoon liability "
+                "(wOBA vs same-hand ≥ .060 below vs opposite — exploitable), "
+                "reverse split (better vs same-hand by ≥ .040 — matchup-proof "
+                "backwards)."
             ),
-            "examples": "Elite Discipline: Juan Soto, Bryce Harper · Free Swinger: Lane Thomas, Jazz Chisholm Jr.",
+            "examples": "platoon liability: Peña 2023 · reverse split: Bregman 2023 (crushed RHP, .215 vs LHP)",
         },
         {
-            "tag": "Table Setter", "color": "#10b981",
+            "tag": "Pitcher: role family", "color": "#84cc16",
             "desc": (
-                "Leadoff-type modifier: above-average on-base ability (OBP ≥ 65th pct) + "
-                "Fast or Elite speed + limited power output (ISO ≤ 45th pct). "
-                "These players live to get on base and create chaos on the basepaths."
+                "Usage shape vs the season's starter/reliever pools. workhorse "
+                "(starter BF ≥ 85th pct), short-outing starter (BF/start ≤ 15th "
+                "pct, non-workhorse), heavy usage (reliever appearances ≥ 85th), "
+                "multi-inning reliever (BF/appearance ≥ 85th), swingman (3+ "
+                "starts and 5+ relief outings)."
             ),
-            "examples": "Steven Kwan, Nico Hoerner, Myles Straw, Tommy Edman, Ha-Seong Kim",
+            "examples": "workhorse: Framber, Verlander 2023 · swingman: Urquidy 2023",
         },
         {
-            "tag": "Aggressive", "color": "#fb923c",
+            "tag": "Pitcher: platoon family", "color": "#f43f5e",
             "desc": (
-                "Attack-early approach — high first-pitch swing rate (FPS ≥ 65th pct) "
-                "AND high chase rate (OSwing ≥ 60th pct). These players initiate contact "
-                "regardless of count. Good hitters can still carry this tag."
+                "Splits + deployment (min 50 BF each side). platoon-vulnerable "
+                "(opp-hand hitters ≥ .060 better), reverse split (own-hand "
+                "hitters do more damage), platoon specialist (≥ 60% of BF vs "
+                "same-hand — sheltered/specialist usage)."
             ),
-            "examples": "Kyle Tucker, Freddie Freeman, Bryce Harper, George Springer",
+            "examples": "platoon-vulnerable: Javier 2023 · reverse split: Verlander 2023 · platoon specialist: Graveman 2023",
         },
         {
-            "tag": "Disruptive / Chaotic", "color": "#f472b6",
+            "tag": "Pitcher: mechanics family", "color": "#8b5cf6",
             "desc": (
-                "Baserunning personality. Disruptive = high-efficiency, frequent base stealers "
-                "who create net positive run value (sb% > 72%, positive efficiency score). "
-                "Chaotic = frequent but inefficient — high attempt rate, negative run value."
+                "Where the ball comes from. submarine (< 10° arm angle), sidearm "
+                "(10–25°), over-the-top (≥ 55°), deep/short extension (top/bottom "
+                "decile of release extension), wide release (cross-fire angle). "
+                "A normal three-quarters slot carries no tag. Also tempo: "
+                "quick pitcher / slow pitcher (fastest/slowest 15% between "
+                "pitches, bases empty)."
             ),
-            "examples": "Disruptive: Acuña 2023, Corbin Carroll · Chaotic: Jeremy Peña 2023",
+            "examples": "submarine: Ryan Thompson · sidearm: Cimber, Nola · over-the-top: Kershaw, Verlander",
+        },
+        {
+            "tag": "Pitcher: sequencing family", "color": "#06b6d4",
+            "desc": (
+                "How the arsenal is deployed. unpredictable / patterned (pitch-to-pitch "
+                "transition entropy, arsenal-size adjusted), count-shifter / steady mix "
+                "(how much the mix moves between ahead and behind counts), "
+                "first-pitch attacker (F-strike ≥ 90th pct)."
+            ),
+            "examples": "unpredictable: Cole, Kershaw 2023 · patterned: Gausman · count-shifter: Framber",
+        },
+        {
+            "tag": "Pitcher: deception family", "color": "#f59e0b",
+            "desc": (
+                "How the stuff plays beyond its raw quality. tunneler (league tunnel "
+                "score ≥ 75th pct), invisible ball (whiff rate above what velocity "
+                "predicts, ≥ 90th pct residual), high spin efficiency / gyro-heavy."
+            ),
+            "examples": "tunneler: Javier, Pressly 2023 · invisible ball: Luis García, Abreu 2023",
+        },
+        {
+            "tag": "Pitcher: arsenal + outcome families", "color": "#3b82f6",
+            "desc": (
+                "Arsenal: sinker-baller / ride four-seam / cutter-primary, the out "
+                "pitch, deep arsenal / two-pitch (starters only), velo tiers. Outcome: bat-misser / "
+                "pitch-to-contact, ground-baller / fly-ball prone, contact suppressor, "
+                "elite/plus command, walk prone, controls runners (fewest mid-PA "
+                "runner advances allowed — steals, WP and PB included), and the "
+                "ace badge (dominance composite ≥ 70 with 2+ elite traits)."
+            ),
+            "examples": "sinker-baller + ground-baller: Webb, Framber · ace: Pressly, Abreu, Maton 2023",
         },
     ]
 
@@ -348,7 +383,7 @@ def _archetype_guide_card() -> dbc.Card:
         )
 
     def _mod_item(m: dict) -> dbc.AccordionItem:
-        badge = dbc.Badge("MOD", pill=True,
+        badge = dbc.Badge("TAG", pill=True,
                           style={"backgroundColor": m["color"], "fontSize": "0.6rem",
                                  "color": "#fff", "fontWeight": "700"})
         return dbc.AccordionItem(
@@ -375,7 +410,7 @@ def _archetype_guide_card() -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.Span([
-                html.Small("Archetype Guide", className="fw-semibold text-uppercase",
+                html.Small("Trait Guide", className="fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
                                   "color": "#9ca3af"}),
                 html.Small(" — expand any row to see gates, examples, and definitions",
@@ -384,7 +419,7 @@ def _archetype_guide_card() -> dbc.Card:
             style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
         ),
         dbc.CardBody([
-            html.P("Primary Archetypes", className="mb-2",
+            html.P("Hitter Traits & Spectrum", className="mb-2",
                    style={"fontSize": "0.7rem", "textTransform": "uppercase",
                           "letterSpacing": "0.06em", "color": "#6b7280", "fontWeight": "600"}),
             dbc.Accordion(
@@ -392,7 +427,7 @@ def _archetype_guide_card() -> dbc.Card:
                 flush=True, always_open=False, style=_acc_style, className="mb-3",
             ),
             html.Hr(style={"borderColor": "#374151", "margin": "10px 0"}),
-            html.P("Modifiers", className="mb-2",
+            html.P("Athleticism, Luck & Pitcher Trait Families", className="mb-2",
                    style={"fontSize": "0.7rem", "textTransform": "uppercase",
                           "letterSpacing": "0.06em", "color": "#6b7280", "fontWeight": "600"}),
             dbc.Accordion(
@@ -407,6 +442,20 @@ def overview_tab() -> dbc.Tab:
     return dbc.Tab(label="Overview", tab_id="tab-overview", children=[
         html.Div(id="team-header", className="mb-3 p-3 rounded",
                  style={"backgroundColor": "#1f2937", "border": "1px solid #374151"}),
+        # ── Team Identity Synthesis ────────────────────────────────────────
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Team Identity",
+                           className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                html.Div(id="team-identity-card"),
+                style={"padding": "12px"},
+            ),
+        ], style=CARD_STYLE, className="mb-3"),
         dbc.Row([
             dbc.Col(_card("Philosophy Profile (All Dimensions)", "radar-all", height=420), md=6),
             dbc.Col(_card("Primary Philosophy by Dimension", "dim-bars", height=280), md=6),
@@ -444,11 +493,11 @@ def offense_tab() -> dbc.Tab:
             dbc.Col(_card("Team Batting Metrics (Percentile)", "batting-bars", height=380), md=7),
         ]),
         dbc.Row([
-            dbc.Col(_card("Hitter Archetype Distribution", "hitter-pie", height=340), md=5),
+            dbc.Col(_card("Hitter Trait Density", "hitter-pie", height=340), md=5),
             dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
         ]),
         _card("Batted Ball Profile", "spray-heatmap", height=580),
-        _card("Hitters vs Archetype Historical Median", "hitter-heatmap", height=500),
+        _card("Hitter Skill Affinity", "hitter-heatmap", height=500),
         _card("Batter Split Resistance — LHP vs RHP", "split-heatmap", height=520),
         _archetype_guide_card(),
         # ── Player comparison section ───────────────────────────────────────
@@ -506,6 +555,9 @@ def pitching_tab() -> dbc.Tab:
             dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=320), md=5),
             dbc.Col(_card("Bullpen Roster Detail", "bullpen-table", height=420), md=7),
         ], className="mt-3"),
+        dbc.Row([
+            dbc.Col(_card("Bullpen Trait Density", "bullpen-trait-density", height=380), md=12),
+        ], className="mt-3"),
         # ── Arsenal trajectory viewer ─────────────────────────────────────────
         dbc.Card([
             dbc.CardHeader(
@@ -551,6 +603,9 @@ def roster_tab() -> dbc.Tab:
     return dbc.Tab(label="Roster Construction", tab_id="tab-roster", children=[
         dbc.Row([
             dbc.Col(_card("Roster Philosophy Radar", "radar-roster", height=380), md=6),
+            dbc.Col(_card("Roster Control", "roster-control-chart", height=180), md=6),
+        ]),
+        dbc.Row([
             dbc.Col(
                 dbc.Card([
                     dbc.CardHeader(
@@ -561,10 +616,9 @@ def roster_tab() -> dbc.Tab:
                     dbc.CardBody([
                         dbc.Alert(
                             [
-                                html.Strong("Roster construction (C1–C4) requires external data sources:"),
+                                html.Strong("Some C-dimension metrics require external sources:"),
                                 html.Ul([
                                     html.Li("Payroll — Spotrac CSV (GAP 4)"),
-                                    html.Li("Service time — not publicly available (GAP 6)"),
                                     html.Li("Prospect pipeline — MLB Pipeline CSV (GAP 5)"),
                                 ], className="mt-2 mb-0"),
                             ],
@@ -573,9 +627,9 @@ def roster_tab() -> dbc.Tab:
                         ),
                     ]),
                 ], style=CARD_STYLE),
-                md=6,
+                md=12,
             ),
-        ]),
+        ], className="mt-3"),
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),
@@ -719,24 +773,57 @@ def compare_tab() -> dbc.Tab:
                 ),
             ], style=CARD_STYLE), md=5),
         ]),
+
+        # ── League Identity Board ──────────────────────────────────────────
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("League Identity Board", className="text-secondary fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Season", className="text-secondary small mb-1"),
+                        dbc.Select(
+                            id="league-board-season",
+                            options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
+                            value=2023,
+                        ),
+                    ], md=2),
+                ], className="mb-2"),
+                html.Div(id="league-board-table"),
+                html.Small(
+                    "Click a column header to sort. Generated by scripts/build_league_identity.py — "
+                    "run it to refresh or add a season.",
+                    className="text-secondary",
+                    style={"fontSize": "0.65rem"},
+                ),
+            ], style={"padding": "10px"}),
+        ], style=CARD_STYLE, className="mb-3 mt-3"),
     ])
 
 
 def scout_tab() -> dbc.Tab:
     """
-    Player profile search — find players matching archetype + modifier criteria
-    across all seeded seasons. Independent of any team portrait.
+    Player profile search — find players matching trait-tag criteria across
+    all seeded seasons. Independent of any team portrait.
     """
-    ARCHETYPES = ["Any", "Complete Hitter", "Three True Outcomes",
-                  "Contact", "Balanced", "Power"]
+    # Spectrum band replaces the old archetype box filter
+    SPECTRUM_BANDS = [
+        ("Any spectrum",        "Any"),
+        ("Power side (≥ 60)",   "power"),
+        ("Balanced (40–60)",    "balanced"),
+        ("Contact side (≤ 40)", "contact"),
+    ]
 
-    MODIFIERS = [
-        "Aggressive", "Gap Hitter", "Plus Power", "Table Setter",
-        "Elite Discipline", "Disciplined", "Free Swinger",
-        "Plus Contact", "Weak Contact",
-        "Lucky", "Unlucky",
-        "Elite", "Fast", "Slow",
-        "Disruptive", "Chaotic",
+    # Hitter trait tags (hitter_traits.py) — search requires ALL selected
+    TRAIT_TAGS = [
+        "complete", "power bat", "contact bat", "plus power", "gap hitter",
+        "hard contact", "weak contact",
+        "walk machine", "high-K", "elite discipline", "free swinger", "aggressive",
+        "elite speed", "fast", "table setter", "disruptive", "chaotic",
+        "lucky", "unlucky",
     ]
 
     return dbc.Tab(label="Scout", tab_id="tab-scout", children=[
@@ -750,10 +837,10 @@ def scout_tab() -> dbc.Tab:
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Archetype", className="text-secondary small mb-1"),
+                        html.Label("Spectrum", className="text-secondary small mb-1"),
                         dbc.Select(
                             id="scout-archetype",
-                            options=[{"label": a, "value": a} for a in ARCHETYPES],
+                            options=[{"label": l, "value": v} for l, v in SPECTRUM_BANDS],
                             value="Any",
                         ),
                     ], md=2),
@@ -799,14 +886,14 @@ def scout_tab() -> dbc.Tab:
                 ], className="mb-3 align-items-end"),
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Modifiers (must have ALL selected)",
+                        html.Label("Traits (must have ALL selected)",
                                    className="text-secondary small mb-1"),
                         dcc.Dropdown(
                             id="scout-modifiers",
-                            options=[{"label": m, "value": m} for m in MODIFIERS],
+                            options=[{"label": t, "value": t} for t in TRAIT_TAGS],
                             value=[],
                             multi=True,
-                            placeholder="Any modifiers…",
+                            placeholder="Any traits…",
                             style={"backgroundColor": "#1f2937", "color": "#111827"},
                         ),
                     ]),

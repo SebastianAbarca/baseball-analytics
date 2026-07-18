@@ -19,6 +19,17 @@ from dash import html
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
+# ---------------------------------------------------------------------------
+# ABS (Automated Ball-Strike) standardized strike zone
+# Width : ±0.833 ft  — 17" home plate + ½ ball radius (1.44" dia) each side
+# Top   :  3.38 ft  — league-average sz_top (~53.5 % of avg MLB height 6'1")
+# Bottom:  1.59 ft  — league-average sz_bot (~26.7 % of avg MLB height 6'1")
+# These replace the old round-number fallbacks of 3.5 / 1.5 ft.
+# ---------------------------------------------------------------------------
+ABS_SZ_TOP    = 3.38   # ft
+ABS_SZ_BOT    = 1.59   # ft
+ABS_SZ_WIDTH  = 0.833  # ft (half-width from center)
+
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     """Convert a 6-digit hex color to an rgba() string with the given alpha."""
@@ -56,7 +67,7 @@ COLORS = {
     "P2": "#8b5cf6",
     "P3": "#10b981",
     "P4": "#f59e0b",
-    "P5": "#06b6d4",   # cyan — Power Sinker (distinct from P3 green and P4 amber)
+    "P5": "#06b6d4",   # cyan — Power Contact (distinct from P3 green and P4 amber)
     "P6": "#ec4899",   # pink — Finesse Control (command/location-based)
     "Unclassified": "#6b7280",
 }
@@ -261,44 +272,79 @@ def dimension_confidence_bars(portrait: dict) -> go.Figure:
 # 3. Hitter archetype distribution
 # ---------------------------------------------------------------------------
 
-def hitter_archetype_pie(portrait: dict) -> go.Figure:
+# Trait family → display color (shared by trait charts and chips)
+TRAIT_FAMILY_COLORS = {
+    "bat":         "#f97316",   # orange
+    "approach":    "#22c55e",   # green
+    "athleticism": "#06b6d4",   # cyan
+    "luck":        "#6b7280",   # grey
+    "outcome":     "#f59e0b",   # amber (complete / ace badges)
+    "mechanics":   "#8b5cf6",   # purple
+    "sequencing":  "#06b6d4",   # cyan
+    "deception":   "#f59e0b",   # amber
+    "arsenal":     "#3b82f6",   # blue
+}
+
+
+def _pa_trait_density(players: list[dict], weight_key: str = "pa") -> dict[str, tuple[float, str]]:
     """
-    Pie chart of hitter archetype types on the roster.
+    Weighted share of PA/BF carried by players holding each trait tag.
+    Returns {tag: (share, family)}, sorted descending by share.
+    """
+    tag_w: dict[str, tuple[float, str]] = {}
+    total = 0.0
+    for p in players:
+        w = float(p.get(weight_key) or 0)
+        if w <= 0:
+            continue
+        total += w
+        for t in p.get("traits") or []:
+            tag = t.get("tag")
+            if tag:
+                prev = tag_w.get(tag, (0.0, t.get("family", "")))
+                tag_w[tag] = (prev[0] + w, prev[1])
+    if total <= 0:
+        return {}
+    return {k: (v / total, fam)
+            for k, (v, fam) in sorted(tag_w.items(), key=lambda kv: -kv[1][0])}
+
+
+def hitter_trait_density(portrait: dict) -> go.Figure:
+    """
+    Horizontal bars: PA-weighted share of the lineup carrying each trait tag.
+    The offense's shape IS this distribution — no archetype boxes.
     """
     hitters = portrait.get("players", {}).get("hitters", [])
+    density = _pa_trait_density(hitters)
 
-    counts: dict[str, int] = {}
-    for h in hitters:
-        t = h.get("primary", {}).get("type", "Undetermined")
-        counts[t] = counts.get(t, 0) + 1
+    if not density:
+        return empty_figure("No hitter trait data — rebuild this portrait")
 
-    if not counts:
-        fig = go.Figure()
-        fig.add_annotation(
-            text="No hitter data", xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False,
-            font=dict(color=COLORS["subtext"], size=14),
-        )
-        fig.update_layout(**_DARK_LAYOUT)
-        return fig
+    tags     = list(density.keys())
+    shares   = [density[t][0] * 100 for t in tags]
+    colors   = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
 
-    labels = list(counts.keys())
-    values = list(counts.values())
-    colors = [COLORS.get(l, COLORS["neutral"]) for l in labels]
-
-    fig = go.Figure(go.Pie(
-        labels=labels,
-        values=values,
-        marker=dict(colors=colors, line=dict(color=COLORS["background"], width=2)),
-        hovertemplate="<b>%{label}</b><br>%{value} players (%{percent})<extra></extra>",
-        textfont=dict(size=12, color=COLORS["text"]),
+    fig = go.Figure(go.Bar(
+        x=shares,
+        y=tags,
+        orientation="h",
+        marker_color=colors,
+        text=[f"{s:.0f}%" for s in shares],
+        textposition="outside",
+        textfont=dict(size=10, color=COLORS["subtext"]),
+        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of PA<extra></extra>",
     ))
     fig.update_layout(
-        **_DARK_LAYOUT,
-        showlegend=True,
-        legend=dict(font=dict(color=COLORS["subtext"])),
+        **{**_DARK_LAYOUT, "margin": dict(l=110, r=40, t=40, b=30)},
+        height=max(280, 22 * len(tags) + 70),
+        xaxis=dict(title="% of team PA", range=[0, max(shares) * 1.2],
+                   gridcolor=COLORS["border"],
+                   tickfont=dict(color=COLORS["subtext"]),
+                   title_font=dict(color=COLORS["subtext"], size=11)),
+        yaxis=dict(autorange="reversed",
+                   tickfont=dict(color=COLORS["text"], size=10)),
         title=dict(
-            text="Hitter Archetype Distribution",
+            text="Offense Trait Density (PA-weighted)",
             font=dict(size=14, color=COLORS["text"]),
             x=0.5,
         ),
@@ -312,7 +358,7 @@ def hitter_archetype_pie(portrait: dict) -> go.Figure:
 
 def hitter_archetype_table(portrait: dict) -> go.Figure:
     """
-    Table: one row per hitter with archetype, confidence, modifiers.
+    Table: one row per hitter with spectrum score and trait tags.
     """
     hitters = portrait.get("players", {}).get("hitters", [])
 
@@ -324,66 +370,44 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         fig.update_layout(**_DARK_LAYOUT)
         return fig
 
-    names, ages, pas, wars, types, modifiers_col = [], [], [], [], [], []
+    names, poss, ages, pas, wars, specs, traits_col = [], [], [], [], [], [], []
 
     for h in sorted(hitters, key=lambda x: -(x.get("pa") or 0)):
-        pri  = h.get("primary", {})
-        mod  = h.get("modifiers", {})
         name = (h.get("name") or "").strip() or f"ID {h.get('player_id', '?')}"
         war  = h.get("war")
 
         names.append(name)
+        poss.append(h.get("home_position") or "—")
         ages.append(str(h.get("age")) if h.get("age") else "—")
         pas.append(str(h.get("pa") or "—"))
         wars.append(f"{war:.1f}" if war is not None else "—")
-        types.append(pri.get("type") or "—")
 
-        # Build modifier string — order: speed | luck | contact | discipline | approach | baserunning
-        tags = []
-        speed = mod.get("speed")
-        if speed in ("Elite", "Fast", "Slow"):
-            tags.append(speed)
-        luck = mod.get("lucky_unlucky")
-        if luck:
-            tags.append(luck)
-        cq = mod.get("contact_quality")
-        if cq:
-            tags.append(cq)
-        pd_ = mod.get("plate_discipline")
-        if pd_:
-            tags.append(pd_)
-        if mod.get("table_setter"):
-            tags.append("Table Setter")
-        if mod.get("plus_power"):
-            tags.append("Plus Power")
-        if mod.get("gap_hitter"):
-            tags.append("Gap Hitter")
-        if mod.get("aggressive"):
-            tags.append("Aggressive")
-        disrupt = mod.get("disruptiveness", {}).get("modifier")
-        if disrupt:
-            tags.append(disrupt)
-        modifiers_col.append(", ".join(tags) if tags else "—")
+        # Spectrum: 0 = extreme contact, 100 = extreme power
+        spec = h.get("spectrum")
+        specs.append(f"{spec:.0f}" if spec is not None else "—")
+
+        tags = [t["tag"] for t in h.get("traits") or []]
+        traits_col.append(", ".join(tags) if tags else "—")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
 
     fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 2, 2],
+        columnwidth=[3, 0.8, 1, 1, 1, 1.2, 4],
         header=dict(
-            values=["<b>Player</b>", "<b>Age</b>", "<b>PA</b>",
-                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Modifiers</b>"],
+            values=["<b>Player</b>", "<b>Pos</b>", "<b>Age</b>", "<b>PA</b>",
+                    "<b>bWAR</b>", "<b>Spectrum</b>", "<b>Traits</b>"],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align=["left", "center", "center", "center", "left", "left"],
+            align=["left", "center", "center", "center", "center", "center", "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
-            values=[names, ages, pas, wars, types, modifiers_col],
-            fill_color=[row_colors] * 6,
+            values=[names, poss, ages, pas, wars, specs, traits_col],
+            fill_color=[row_colors] * 7,
             font=dict(color=COLORS["text"], size=11),
-            align=["left", "center", "center", "center", "left", "left"],
+            align=["left", "center", "center", "center", "center", "center", "left"],
             line_color=COLORS["border"],
             height=28,
         ),
@@ -467,12 +491,10 @@ def hitter_archetype_heatmap(portrait: dict) -> go.Figure:
     affinity_labels = [a[0] for a in _ARCHETYPE_AFFINITIES]
     player_labels   = []
     z_matrix        = []   # rows = players, cols = affinities
-    primary_types   = []
 
     for h in hitters_sorted:
         name    = (h.get("name") or f"ID {h.get('player_id', '?')}").strip()
         pa      = h.get("pa") or 0
-        arc     = h.get("primary", {}).get("type", "")
         metrics = h.get("metrics_pct", {})
 
         row = []
@@ -483,7 +505,6 @@ def hitter_archetype_heatmap(portrait: dict) -> go.Figure:
         # Only include players with at least one affinity score
         if any(v is not None for v in row):
             player_labels.append(f"{name}  ({pa} PA)")
-            primary_types.append(arc)
             z_matrix.append([v if v is not None else 0 for v in row])
 
     if not z_matrix:
@@ -553,7 +574,7 @@ def hitter_archetype_heatmap(portrait: dict) -> go.Figure:
             gridcolor=COLORS["border"],
         ),
         title=dict(
-            text="Hitter Archetype Affinity Scores  (0–100, historical percentile)",
+            text="Hitter Skill Affinity Scores  (0–100, historical percentile)",
             font=dict(size=14, color=COLORS["text"]),
             x=0.5,
         ),
@@ -606,10 +627,10 @@ def player_options_from_portrait(portrait: dict) -> list[dict]:
         pid  = h.get("player_id")
         name = (h.get("name") or "").strip() or f"ID {pid}"
         pa   = h.get("pa") or 0
-        arc  = h.get("primary", {}).get("type", "?")
+        arc  = next((t["tag"] for t in h.get("traits") or []), "")
         if pid is not None:
             options.append({
-                "label": f"{name}  ({arc}, {pa} PA)",
+                "label": f"{name}  ({arc + ', ' if arc else ''}{pa} PA)",
                 "value": str(pid),
             })
     return options
@@ -633,7 +654,7 @@ def player_metrics_radar(portrait: dict, selected_ids: list[str]) -> go.Figure:
             continue
         metrics = h.get("metrics_pct", {})
         name = (h.get("name") or f"ID {pid}").strip()
-        arc  = h.get("primary", {}).get("type", "")
+        arc  = next((t["tag"] for t in h.get("traits") or []), "")
 
         # Collect values in metric display order; skip entirely absent metrics
         labels, values = [], []
@@ -715,7 +736,7 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
         if h is None:
             continue
         name = (h.get("name") or f"ID {pid}").strip()
-        arc  = h.get("primary", {}).get("type", "")
+        arc  = next((t["tag"] for t in h.get("traits") or []), "")
         player_data.append((pid, f"{name} ({arc})", h.get("metrics_pct", {})))
 
     if not player_data:
@@ -769,56 +790,88 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
 
 def starter_archetype_bars(portrait: dict) -> go.Figure:
     """
-    Table: one row per starter with name, age, BF, archetype.
+    Table: one row per starter with name, age, BF, bWAR, arsenal display,
+    approach, ace badge, and trait tags. Trait-based — no archetype boxes.
     """
     starters = portrait.get("players", {}).get("starters", [])
 
     if not starters:
         return empty_figure("No starter data — load a full-season portrait")
 
-    CODE_NAMES = {
-        "P1": "Power Ace", "P2": "Craft Strikeout",
-        "P3": "GB Craftsman", "P4": "Stuff-to-Contact",
-        "P5": "Power Sinker", "P6": "Finesse Control", "U0": "Unclassified",
+    # Approach → short display label
+    _APPROACH_SHORT = {
+        "fastball-first":    "FB-first",
+        "secondary-led":     "2nd-led",
+        "balanced":          "Balanced",
+        "tunnel-dependent":  "Tunnel",
+        "knuckleball":       "Knuckleball",
     }
 
-    names, ages, bfs, wars, archetypes, commands = [], [], [], [], [], []
+    names, ages, bfs, wars = [], [], [], []
+    arsenals, approaches, aces, traits_col = [], [], [], []
 
     for s in sorted(starters, key=lambda x: -(x.get("bf") or 0)):
-        pri  = s.get("primary", {})
-        code = pri.get("type_code", "U0")
         name = (s.get("name") or "").strip() or f"ID {s.get('player_id', '?')}"
         war  = s.get("war")
+        ap   = s.get("arsenal_profile") or {}
+        traits = s.get("traits") or []
+
         names.append(name)
         ages.append(str(s.get("age")) if s.get("age") else "—")
         bfs.append(str(s.get("bf") or "—"))
         wars.append(f"{war:.1f}" if war is not None else "—")
-        archetypes.append(CODE_NAMES.get(code, code) or "—")
-        commands.append(s.get("modifiers", {}).get("command") or "—")
+
+        arsenals.append(ap.get("display") or "—")
+        approach_raw = ap.get("approach", "")
+        approaches.append(_APPROACH_SHORT.get(approach_raw, approach_raw or "—"))
+
+        tags = {t["tag"] for t in traits}
+        aces.append("★ Ace" if "ace" in tags else "—")
+
+        # Arsenal facts already have their own column; ace has its own badge
+        shown = [t["tag"] for t in traits
+                 if t.get("family") != "arsenal" and t["tag"] != "ace"]
+        traits_col.append(", ".join(shown) if shown else "—")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
+    ace_font_colors = ["#f59e0b" if a == "★ Ace" else COLORS["text"] for a in aces]
 
     fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 2, 1],
+        columnwidth=[3, 1, 1, 1, 2.5, 1.5, 1.2, 4],
         header=dict(
-            values=["<b>Pitcher</b>", "<b>Age</b>", "<b>BF</b>",
-                    "<b>bWAR</b>", "<b>Archetype</b>", "<b>Command</b>"],
+            values=[
+                "<b>Pitcher</b>", "<b>Age</b>", "<b>BF</b>", "<b>bWAR</b>",
+                "<b>Arsenal</b>", "<b>Approach</b>", "<b>Tier</b>", "<b>Traits</b>",
+            ],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align=["left", "center", "center", "center", "left", "center"],
+            align=["left", "center", "center", "center", "left", "center", "center", "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
-            values=[names, ages, bfs, wars, archetypes, commands],
-            fill_color=[row_colors] * 6,
-            font=dict(color=COLORS["text"], size=11),
-            align=["left", "center", "center", "center", "left", "center"],
+            values=[names, ages, bfs, wars, arsenals, approaches, aces, traits_col],
+            fill_color=[row_colors] * 8,
+            font=dict(
+                color=[
+                    [COLORS["text"]] * n,   # names
+                    [COLORS["subtext"]] * n, # ages
+                    [COLORS["subtext"]] * n, # bfs
+                    [COLORS["text"]] * n,    # wars
+                    [COLORS["text"]] * n,    # arsenals
+                    [COLORS["subtext"]] * n, # approaches
+                    ace_font_colors,         # ace — gold for Ace, dim otherwise
+                    [COLORS["text"]] * n,    # traits
+                ],
+                size=11,
+            ),
+            align=["left", "center", "center", "center", "left", "center", "center", "left"],
             line_color=COLORS["border"],
             height=28,
         ),
     ))
+
     tbl_layout = {**_DARK_LAYOUT, "margin": dict(l=0, r=0, t=40, b=0)}
     fig.update_layout(
         **tbl_layout,
@@ -853,10 +906,11 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
     rows = sorted(arms, key=lambda x: -(x.get("bf") or 0))
 
     names, ages, bfs, wars = [], [], [], []
-    velos, ks, whiffs, gbs, hcs, bars = [], [], [], [], [], []
+    velos, ks, whiffs, gbs, hcs, aces, traits_col = [], [], [], [], [], [], []
 
     for arm in rows:
         m = arm.get("metrics_pct", {})
+        traits = arm.get("traits") or []
         name = (arm.get("name") or "").strip() or f"ID {arm.get('player_id', '?')}"
         names.append(name)
         ages.append(str(arm.get("age")) if arm.get("age") else "—")
@@ -867,32 +921,43 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         whiffs.append(_fmt(m.get("SwStr_pct_pct")))
         gbs.append(_fmt(m.get("GB_pct_pct")))
         hcs.append(_fmt(m.get("HardHit_allowed_pct")))
-        bars.append(_fmt(m.get("Barrel_allowed_pct")))
+
+        tags = {t["tag"] for t in traits}
+        aces.append("★" if "ace" in tags else "—")
+        shown = [t["tag"] for t in traits if t["tag"] != "ace"]
+        traits_col.append(", ".join(shown) if shown else "—")
 
     n = len(rows)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
+    ace_font_colors = ["#f59e0b" if a == "★" else COLORS["subtext"] for a in aces]
 
     fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 1, 1, 1, 1, 1],
+        columnwidth=[2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 0.8, 1, 0.6, 4],
         header=dict(
             values=[
                 "<b>Reliever</b>", "<b>Age</b>", "<b>BF</b>", "<b>bWAR</b>",
                 "<b>Velo%</b>", "<b>K%</b>", "<b>Whiff%</b>",
-                "<b>GB%</b>", "<b>HC Supp%</b>",
+                "<b>GB%</b>", "<b>HC Supp%</b>", "<b>Ace</b>", "<b>Traits</b>",
             ],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
             align=["left", "center", "center", "center",
-                   "center", "center", "center", "center", "center"],
+                   "center", "center", "center", "center", "center",
+                   "center", "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
-            values=[names, ages, bfs, wars, velos, ks, whiffs, gbs, hcs],
-            fill_color=[row_colors] * 9,
-            font=dict(color=COLORS["text"], size=11),
+            values=[names, ages, bfs, wars, velos, ks, whiffs, gbs, hcs,
+                    aces, traits_col],
+            fill_color=[row_colors] * 11,
+            font=dict(
+                color=[[COLORS["text"]] * n] * 9 + [ace_font_colors, [COLORS["text"]] * n],
+                size=11,
+            ),
             align=["left", "center", "center", "center",
-                   "center", "center", "center", "center", "center"],
+                   "center", "center", "center", "center", "center",
+                   "center", "left"],
             line_color=COLORS["border"],
             height=26,
         ),
@@ -912,6 +977,49 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
     return fig
 
 
+def bullpen_trait_density(portrait: dict) -> go.Figure:
+    """
+    Horizontal bars: BF-weighted share of bullpen workload carrying each
+    trait tag — the pen's shape, same treatment as the offense density chart.
+    """
+    arms = portrait.get("players", {}).get("bullpen_arms", [])
+    density = _pa_trait_density(arms, weight_key="bf")
+
+    if not density:
+        return empty_figure("No bullpen trait data — rebuild this portrait")
+
+    tags   = list(density.keys())
+    shares = [density[t][0] * 100 for t in tags]
+    colors = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
+
+    fig = go.Figure(go.Bar(
+        x=shares,
+        y=tags,
+        orientation="h",
+        marker_color=colors,
+        text=[f"{s:.0f}%" for s in shares],
+        textposition="outside",
+        textfont=dict(size=10, color=COLORS["subtext"]),
+        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of bullpen BF<extra></extra>",
+    ))
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=120, r=40, t=40, b=30)},
+        height=max(280, 20 * len(tags) + 70),
+        xaxis=dict(title="% of bullpen BF", range=[0, max(shares) * 1.2],
+                   gridcolor=COLORS["border"],
+                   tickfont=dict(color=COLORS["subtext"]),
+                   title_font=dict(color=COLORS["subtext"], size=11)),
+        yaxis=dict(autorange="reversed",
+                   tickfont=dict(color=COLORS["text"], size=10)),
+        title=dict(
+            text="Bullpen Trait Density (BF-weighted)",
+            font=dict(size=14, color=COLORS["text"]),
+            x=0.5,
+        ),
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # 5c. Bullpen dimension bars (collective profile)
 # ---------------------------------------------------------------------------
@@ -921,7 +1029,9 @@ def bullpen_dimension_bars(portrait: dict) -> go.Figure:
     Horizontal bars showing the team's collective bullpen scores on each
     available dimension vs. the league.
     """
-    bp = portrait.get("players", {}).get("bullpen_profile", {})
+    # Team-level collective (top-level since schema 14; players-nested before)
+    bp = portrait.get("bullpen_collective") \
+        or portrait.get("players", {}).get("bullpen_profile", {})
 
     if not bp or not bp.get("scores"):
         return empty_figure("No bullpen profile — load a full-season portrait")
@@ -1005,6 +1115,149 @@ def bullpen_dimension_bars(portrait: dict) -> go.Figure:
         ),
         bargap=0.35,
     )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 6. Roster control / service-time breakdown
+# ---------------------------------------------------------------------------
+
+def roster_control_chart(portrait: dict) -> go.Figure:
+    """
+    Horizontal stacked bar showing the three service-time tiers:
+      Pre-Arb (< 3 yrs EST)  |  Arb-Eligible (3-6 yrs)  |  FA-Eligible (≥ 6 yrs)
+
+    Below the bar: player counts and a one-line identity label
+    ("Rebuilding", "Window", "Veteran-Heavy", "Transitioning").
+
+    Data lives in portrait["team_metrics"]["roster_control"] as raw fractions
+    populated by build_team_portrait() from the cross-team cache.
+    """
+    rc = (portrait.get("team_metrics") or {}).get("roster_control") or {}
+
+    pre_arb     = rc.get("pre_arb")
+    arb         = rc.get("arb")
+    fa_eligible = rc.get("fa_eligible")
+    avg_tenure  = rc.get("avg_tenure")
+
+    if pre_arb is None and arb is None and fa_eligible is None:
+        return empty_figure("Roster control data unavailable — rebuild portrait")
+
+    # Fill any single missing tier from the others (shares should sum to ~1)
+    shares = {"pre_arb": pre_arb, "arb": arb, "fa_eligible": fa_eligible}
+    known  = {k: v for k, v in shares.items() if v is not None}
+    if len(known) == 2:
+        missing_key = next(k for k in shares if k not in known)
+        shares[missing_key] = max(0.0, 1.0 - sum(known.values()))
+    elif len(known) < 2:
+        return empty_figure("Insufficient roster control data")
+
+    pre_arb     = shares["pre_arb"]
+    arb         = shares["arb"]
+    fa_eligible = shares["fa_eligible"]
+
+    # Total player count from hitter + starter lists (approx roster size for counts)
+    hitters  = portrait.get("players", {}).get("hitters", [])
+    starters = portrait.get("players", {}).get("starters", [])
+    arms     = portrait.get("players", {}).get("bullpen_arms", [])
+    n_total  = len(hitters) + len(starters) + len(arms)
+    if n_total == 0:
+        n_total = 26  # MLB active roster default
+
+    n_pre = round(pre_arb * n_total)
+    n_arb = round(arb * n_total)
+    n_fa  = round(fa_eligible * n_total)
+
+    # Identity label based on dominant tier and shape
+    if pre_arb >= 0.45:
+        identity = "Rebuilding"
+        identity_color = "#60a5fa"   # blue — future-oriented
+    elif fa_eligible >= 0.50:
+        identity = "Veteran-Heavy"
+        identity_color = "#f87171"   # red — aging/declining risk
+    elif arb >= 0.45:
+        identity = "Window"
+        identity_color = "#34d399"   # green — prime controlled years
+    elif pre_arb >= 0.30 and fa_eligible >= 0.30:
+        identity = "Transitioning"
+        identity_color = COLORS["warning"]
+    else:
+        identity = "Balanced"
+        identity_color = COLORS["subtext"]
+
+    # Tier colors
+    COL_PRE = "#60a5fa"   # blue  — youth/cheap
+    COL_ARB = "#34d399"   # green — window/controlled prime
+    COL_FA  = "#f87171"   # red   — veteran/expensive
+
+    # Labels with counts
+    label_pre = f"Pre-Arb<br><b>{n_pre}</b> players"
+    label_arb = f"Arb-Eligible<br><b>{n_arb}</b> players"
+    label_fa  = f"FA-Eligible<br><b>{n_fa}</b> players"
+
+    fig = go.Figure()
+
+    # Stacked horizontal bars — one trace per tier
+    for pct, label, color, customdata in [
+        (pre_arb * 100,     label_pre, COL_PRE, f"{pre_arb*100:.0f}% Pre-Arb · {n_pre} players"),
+        (arb * 100,         label_arb, COL_ARB, f"{arb*100:.0f}% Arb-Eligible · {n_arb} players"),
+        (fa_eligible * 100, label_fa,  COL_FA,  f"{fa_eligible*100:.0f}% FA-Eligible · {n_fa} players"),
+    ]:
+        fig.add_trace(go.Bar(
+            x=[pct],
+            y=["Roster"],
+            orientation="h",
+            marker_color=color,
+            text=f"{pct:.0f}%" if pct >= 10 else "",
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(size=12, color="#111827"),
+            customdata=[customdata],
+            hovertemplate="%{customdata}<extra></extra>",
+            name=label,
+            showlegend=True,
+        ))
+
+    # Average tenure annotation
+    tenure_text = f"Avg service time: <b>{avg_tenure:.1f} yrs</b>" if avg_tenure else ""
+
+    layout = {
+        **_DARK_LAYOUT,
+        "barmode": "stack",
+        "height": 180,
+        "margin": dict(l=16, r=16, t=52, b=16),
+        "xaxis": dict(
+            range=[0, 100],
+            showticklabels=False,
+            showgrid=False,
+            zeroline=False,
+        ),
+        "yaxis": dict(
+            showticklabels=False,
+            showgrid=False,
+        ),
+        "legend": dict(
+            orientation="h",
+            x=0.5, xanchor="center",
+            y=-0.08,
+            font=dict(size=10, color=COLORS["subtext"]),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        "plot_bgcolor":  COLORS["surface"],
+        "paper_bgcolor": COLORS["background"],
+        "title": dict(
+            text=(
+                f"Roster Control  ·  "
+                f"<span style='color:{identity_color}'><b>{identity}</b></span>"
+                + (f"  ·  {tenure_text}" if tenure_text else "")
+            ),
+            font=dict(size=13, color=COLORS["text"]),
+            x=0.5,
+        ),
+        "annotations": [],
+    }
+
+    fig.update_layout(**layout)
     return fig
 
 
@@ -1717,6 +1970,117 @@ def team_split_card(portrait: dict) -> html.Div:
     return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
 
 
+def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.Div:
+    """
+    Team Identity — three headline labels (Offense / Rotation / Bullpen)
+    synthesized from the per-player archetype distributions, plus a short
+    "fit" readout (rotation vs defense, bullpen complement).
+    """
+    import dash_bootstrap_components as dbc
+
+    identity = portrait.get("team_identity") or {}
+    offense  = identity.get("offense") or {}
+    rotation = identity.get("rotation") or {}
+    bullpen  = identity.get("bullpen") or {}
+    fit      = identity.get("fit") or {}
+
+    if not offense and not rotation:
+        return html.Div("No team identity data — rebuild this portrait to populate.",
+                         className="text-secondary small p-2")
+
+    def _identity_col(title: str, label: str | None, sub: str | None, color: str):
+        return dbc.Col(html.Div([
+            html.Small(title, className="text-secondary text-uppercase",
+                       style={"fontSize": "0.65rem", "letterSpacing": "0.08em"}),
+            html.Div(label or "—", style={"color": color, "fontSize": "1.05rem",
+                                           "fontWeight": "700", "marginTop": "2px"}),
+            html.Div(sub or "", className="text-secondary",
+                     style={"fontSize": "0.7rem", "marginTop": "2px"}),
+        ]), md=4, xs=12, className="mb-2")
+
+    offense_sub = None
+    if offense.get("power_share") is not None or offense.get("trait_density"):
+        # Show the raw share mix so the data speaks for itself —
+        # complete hitters are their own bucket, not folded into either side.
+        parts = [f"Power {offense.get('power_share', 0):.0%}",
+                 f"Contact {offense.get('contact_share', 0):.0%}"]
+        if offense.get("complete_share"):
+            parts.append(f"Complete {offense['complete_share']:.0%}")
+        offense_sub = " · ".join(parts) + " of PA"
+
+    rotation_sub = None
+    density = rotation.get("trait_density") or {}
+    if density:
+        # Top trait densities, e.g. "tunneler 52% · bat-misser 40%"
+        top = list(density.items())[:2]
+        ace_count = rotation.get("ace_count", 0)
+        ace_str = f" · {ace_count} Ace{'s' if ace_count != 1 else ''}" if ace_count else ""
+        rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in top) + ace_str
+    elif rotation.get("approach_dist"):
+        appr = rotation.get("dominant_approach")
+        share = rotation["approach_dist"].get(appr, 0)
+        rotation_sub = f"{appr} ({share:.0%} of BF)" if appr else None
+
+    bullpen_label = bullpen.get("out_mechanism")
+    bullpen_sub = bullpen.get("leverage_structure")
+
+    cols = dbc.Row([
+        _identity_col("Offense",  offense.get("label"),  offense_sub,  COLORS["offense"]),
+        _identity_col("Rotation", rotation.get("label"), rotation_sub, COLORS["pitching"]),
+        _identity_col("Bullpen",  bullpen_label,         bullpen_sub,  COLORS["roster"]),
+    ], className="g-3")
+
+    fit_notes = [v for v in fit.values() if v]
+    fit_block = None
+    if fit_notes:
+        fit_block = html.Div([
+            html.Hr(style={"borderColor": COLORS["border"], "margin": "10px 0"}),
+            *[html.Div(note, className="text-secondary mb-1",
+                       style={"fontSize": "0.75rem"}) for note in fit_notes],
+        ])
+
+    # ── Fingerprint — where this team deviates from the league ────────────
+    fp_block = None
+    if fingerprint:
+        unit_meta = [("offense", "Offense", COLORS["offense"]),
+                     ("rotation", "Rotation", COLORS["pitching"]),
+                     ("bullpen", "Bullpen", COLORS["roster"])]
+        lines = []
+        for unit, label, color in unit_meta:
+            for e in (fingerprint.get(unit) or []):
+                dev = e.get("deviation", 0) * 100
+                breadth = (f" · {e['carriers']}/{e['qualifiers']} regulars"
+                           if e.get("qualifiers") else "")
+                lines.append(html.Div([
+                    html.Span(label, style={"color": color, "fontWeight": "600",
+                                            "fontSize": "0.7rem",
+                                            "textTransform": "uppercase",
+                                            "letterSpacing": "0.05em",
+                                            "marginRight": "6px"}),
+                    html.Span(e.get("tag", ""), style={"color": "#f9fafb",
+                                                       "fontWeight": "600",
+                                                       "fontSize": "0.78rem"}),
+                    html.Span(f" {dev:+.0f} pts vs league{breadth}",
+                              className="text-secondary",
+                              style={"fontSize": "0.72rem"}),
+                ], className="mb-1"))
+        if lines:
+            fp_block = html.Div([
+                html.Hr(style={"borderColor": COLORS["border"], "margin": "10px 0"}),
+                html.Small("Fingerprint — what makes them this team",
+                           className="text-secondary text-uppercase d-block mb-2",
+                           style={"fontSize": "0.65rem", "letterSpacing": "0.08em"}),
+                *lines,
+            ])
+
+    children = [cols]
+    if fit_block:
+        children.append(fit_block)
+    if fp_block:
+        children.append(fp_block)
+    return html.Div(children)
+
+
 def empty_figure(message: str = "No data") -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(
@@ -1897,44 +2261,40 @@ def compare_batting_bars(portrait_a: dict | None, portrait_b: dict | None) -> go
 
 def compare_archetype_bars(portrait_a: dict | None, portrait_b: dict | None) -> go.Figure:
     """
-    Grouped bar chart showing hitter archetype mix (%) for both teams.
+    Grouped bar chart showing hitter trait density (% of PA) for both teams.
     """
     if not portrait_a and not portrait_b:
         return empty_figure("Load both teams to compare")
 
-    ARCH_ORDER = ["Complete Hitter", "Three True Outcomes", "Contact", "Balanced", "Power"]
-    arch_colors = {
-        "Complete Hitter": "#6366f1", "Three True Outcomes": "#ef4444",
-        "Contact": "#22c55e", "Balanced": "#06b6d4", "Power": "#f97316",
-    }
+    def _density(portrait: dict) -> dict[str, float]:
+        hitters = portrait.get("players", {}).get("hitters", [])
+        return {tag: share * 100
+                for tag, (share, _fam) in _pa_trait_density(hitters).items()}
+
+    dens_a = _density(portrait_a) if portrait_a else {}
+    dens_b = _density(portrait_b) if portrait_b else {}
+
+    # Tags worth comparing: union of each team's top tags, ordered by max share
+    all_tags = sorted(set(dens_a) | set(dens_b),
+                      key=lambda t: -max(dens_a.get(t, 0), dens_b.get(t, 0)))
+    tag_order = all_tags[:8]
+    if not tag_order:
+        return empty_figure("No hitter trait data — rebuild these portraits")
 
     fig = go.Figure()
-
-    def _arch_pct(portrait: dict) -> dict[str, float]:
-        hitters = portrait.get("players", {}).get("hitters", [])
-        if not hitters:
-            return {}
-        total = len(hitters)
-        from collections import Counter
-        c = Counter(h.get("primary", {}).get("type", "Other") for h in hitters)
-        return {t: (c.get(t, 0) / total * 100) for t in ARCH_ORDER}
-
-    labels = []
-    for portrait, bar_color, pattern in [
-        (portrait_a, _CMP_COLOR_A, ""),
-        (portrait_b, _CMP_COLOR_B, "/"),
+    for portrait, dens, bar_color in [
+        (portrait_a, dens_a, _CMP_COLOR_A),
+        (portrait_b, dens_b, _CMP_COLOR_B),
     ]:
         if not portrait:
             continue
-        pct = _arch_pct(portrait)
         lbl = _portrait_label(portrait)
-        labels.append(lbl)
         fig.add_trace(go.Bar(
-            x=ARCH_ORDER,
-            y=[pct.get(t, 0) for t in ARCH_ORDER],
+            x=tag_order,
+            y=[dens.get(t, 0) for t in tag_order],
             name=lbl,
             marker_color=bar_color,
-            hovertemplate="<b>%{x}</b><br>" + lbl + ": %{y:.1f}%<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>" + lbl + ": %{y:.1f}% of PA<extra></extra>",
         ))
 
     fig.update_layout(**{
@@ -1942,7 +2302,7 @@ def compare_archetype_bars(portrait_a: dict | None, portrait_b: dict | None) -> 
         "barmode": "group",
         "margin": dict(l=50, r=20, t=40, b=60),
         "bargap": 0.3, "bargroupgap": 0.1,
-        "yaxis": dict(title="% of roster", range=[0, 100], gridcolor="#374151",
+        "yaxis": dict(title="% of team PA", range=[0, 100], gridcolor="#374151",
                       tickfont=dict(color=COLORS["subtext"]),
                       title_font=dict(color=COLORS["subtext"])),
         "xaxis": dict(tickfont=dict(color=COLORS["text"], size=10)),
@@ -1989,28 +2349,82 @@ def construction_vs_results_radar(portrait: dict) -> go.Figure:
     # Projected (dotted amber)
     proj_metrics = proj.get("philosophy_metrics", {})
     prior        = proj.get("prior_season")
+    proj_dims: list[str] = []
+    proj_vals: list[float] = []
     if proj_metrics and prior:
         try:
             from philosophy import compute_all_philosophies
             proj_scores = compute_all_philosophies(proj_metrics)
-            proj_vals   = [float(proj_scores.get(d, {}).get("score") or 0) for d in DIMS]
         except Exception:
-            proj_vals = [0.0] * len(DIMS)
+            proj_scores = {}
 
-        proj_closed = proj_vals + [proj_vals[0]]
-        prior_str   = f"⚡ {prior}" if proj.get("prior_season_flag") else str(prior)
-        coverage    = proj.get("coverage", 0)
-        fig.add_trace(go.Scatterpolar(
-            r=proj_closed, theta=labels + [labels[0]],
-            fill="toself",
-            name=f"Projected (from {prior_str} · {coverage:.0%} PA)",
-            line=dict(color="#f59e0b", width=2, dash="dot"),
-            fillcolor=_hex_to_rgba("#f59e0b", 0.08),
-            hovertemplate="<b>%{theta}</b><br>Projected: %{r:.0f}<extra></extra>",
+        # The projection is built from prior-year hitter-side data only, so
+        # offense dims (A1-A4, PA-weighted) and now stuff/command dims
+        # (B1 fully, B2 partially — minus the team-aggregate TeamDefense_pct,
+        # BF-weighted) typically resolve to a real score. B3/B4 and the
+        # roster dims (C1-C4) are team/roster-construction constructs that
+        # can't be reconstructed from individual prior-year stats, so they
+        # stay unprojected. Plotting `None` as 0 would draw a misleading
+        # near-collapsed shape implying "projected to be terrible" rather
+        # than "not projectable" — so we only plot dimensions with a score.
+        proj_dims   = [d for d in DIMS if proj_scores.get(d, {}).get("score") is not None]
+        proj_vals   = [float(proj_scores[d]["score"]) for d in proj_dims]
+        proj_labels = [DIM_LABELS.get(d, d) for d in proj_dims]
+
+        if proj_vals:
+            proj_closed  = proj_vals + [proj_vals[0]]
+            theta_closed = proj_labels + [proj_labels[0]]
+            prior_str    = f"⚡ {prior}" if proj.get("prior_season_flag") else str(prior)
+            coverage     = proj.get("coverage", 0)
+            pitch_cov    = proj.get("pitching_coverage")
+            if len(proj_dims) < len(DIMS):
+                groups = []
+                if any(d.startswith("A") for d in proj_dims):
+                    groups.append("offense")
+                if any(d.startswith("B") for d in proj_dims):
+                    groups.append("stuff/command")
+                scope_note = " + ".join(groups) + " dims only" if groups else "partial"
+            else:
+                scope_note = ""
+            name = f"Projected (from {prior_str} · {coverage:.0%} PA"
+            if pitch_cov is not None:
+                name += f" · {pitch_cov:.0%} BF"
+            name += f" · {scope_note})" if scope_note else ")"
+            fig.add_trace(go.Scatterpolar(
+                r=proj_closed, theta=theta_closed,
+                fill="toself",
+                name=name,
+                line=dict(color="#f59e0b", width=2, dash="dot"),
+                fillcolor=_hex_to_rgba("#f59e0b", 0.08),
+                hovertemplate="<b>%{theta}</b><br>Projected: %{r:.0f}<extra></extra>",
+            ))
+
+    annotations = []
+    if proj_metrics and prior and proj_vals and len(proj_dims) < len(DIMS):
+        missing = [DIM_LABELS.get(d, d) for d in DIMS if d not in proj_dims]
+        annotations.append(dict(
+            text=("<b>Why is the projection incomplete?</b> Dimensions like "
+                  + ", ".join(missing) +
+                  " depend on team-level constructs — bWAR distribution, "
+                  "roster tenure/shares, spin-efficiency &amp; tunneling models, "
+                  "arsenal diversity, platoon/opener usage, OAA/DRS, park "
+                  "factors — that can't be rebuilt from one player's prior "
+                  "raw stats without re-running the full team pipeline on a "
+                  "hypothetical roster. Showing them as 0 would misleadingly "
+                  "imply \"projected to be terrible\" rather than \"not "
+                  "projectable\", so they're left off the projected trace."),
+            xref="paper", yref="paper",
+            x=0.5, y=-0.30, xanchor="center", yanchor="top",
+            showarrow=False, align="center",
+            font=dict(size=9, color=COLORS["subtext"]),
+            width=520,
         ))
 
+    _layout = dict(_DARK_LAYOUT)
+    if annotations:
+        _layout["margin"] = dict(l=24, r=24, t=40, b=120)
     fig.update_layout(
-        **_DARK_LAYOUT,
+        **_layout,
         polar=dict(
             radialaxis=dict(visible=True, range=[0,100],
                             tickfont=dict(size=9, color=COLORS["subtext"]),
@@ -2023,25 +2437,29 @@ def construction_vs_results_radar(portrait: dict) -> go.Figure:
         legend=dict(font=dict(color=COLORS["subtext"]), orientation="h", y=-0.14),
         title=dict(text=f"{team} {season} — Construction vs Results",
                    font=dict(size=13, color=COLORS["text"]), x=0.5),
+        annotations=annotations,
     )
     return fig
 
 
 def construction_vs_results_archetypes(portrait: dict) -> go.Figure:
-    """Grouped bars: projected vs actual hitter archetype distribution."""
+    """Grouped bars: projected vs actual hitter trait density (% of PA)."""
     proj    = portrait.get("projected", {})
     hitters = portrait.get("players", {}).get("hitters", [])
     team    = portrait.get("team", "")
     season  = portrait.get("season", "")
 
-    ARCH_ORDER = ["Complete Hitter","Three True Outcomes","Contact","Balanced","Power"]
-    from collections import Counter
-    actual_raw   = Counter(h["primary"]["type"] for h in hitters)
-    total_actual = max(sum(actual_raw.values()), 1)
-    actual_pct   = [actual_raw.get(a,0)/total_actual*100 for a in ARCH_ORDER]
+    actual_density = {tag: share * 100
+                      for tag, (share, _f) in _pa_trait_density(hitters).items()}
+    proj_density   = {tag: share * 100
+                      for tag, share in (proj.get("trait_density") or {}).items()}
 
-    proj_dist = proj.get("archetype_dist", {})
-    proj_pct  = [proj_dist.get(a,0)*100 for a in ARCH_ORDER]
+    all_tags = sorted(set(actual_density) | set(proj_density),
+                      key=lambda t: -max(actual_density.get(t, 0), proj_density.get(t, 0)))
+    tag_order = all_tags[:8]
+    if not tag_order:
+        return empty_figure("No trait data — rebuild this portrait")
+
     prior     = proj.get("prior_season")
     coverage  = proj.get("coverage", 0)
     excl      = proj.get("excluded_pa_pct", 0)
@@ -2049,16 +2467,17 @@ def construction_vs_results_archetypes(portrait: dict) -> go.Figure:
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=ARCH_ORDER, y=actual_pct, name=f"{season} Actual",
+        x=tag_order, y=[actual_density.get(t, 0) for t in tag_order],
+        name=f"{season} Actual",
         marker_color=COLORS["primary"],
-        hovertemplate="<b>%{x}</b><br>Actual: %{y:.1f}%<extra></extra>",
+        hovertemplate="<b>%{x}</b><br>Actual: %{y:.1f}% of PA<extra></extra>",
     ))
-    if prior and any(v > 0 for v in proj_pct):
+    if prior and proj_density:
         fig.add_trace(go.Bar(
-            x=ARCH_ORDER, y=proj_pct,
+            x=tag_order, y=[proj_density.get(t, 0) for t in tag_order],
             name=f"Projected (from {prior_str}, {coverage:.0%} PA)",
             marker_color="#f59e0b",
-            hovertemplate="<b>%{x}</b><br>Projected: %{y:.1f}%<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Projected: %{y:.1f}% of PA<extra></extra>",
         ))
 
     note = (f"Projection covers {coverage:.0%} of PA · "
@@ -2067,134 +2486,14 @@ def construction_vs_results_archetypes(portrait: dict) -> go.Figure:
     fig.update_layout(**{
         **_DARK_LAYOUT,
         "barmode":"group","bargap":0.3,"bargroupgap":0.1,
-        "title":dict(text=f"{team} {season} — Archetype Mix: Projected vs Actual<br>"
-                          f"<sup>{note}</sup>",
-                     font=dict(size=12, color=COLORS["text"]), x=0.5),
-        "yaxis":dict(title="% of roster", range=[0,100], gridcolor="#374151",
+        "title":dict(text=f"{team} {season}<br><sup>{note}</sup>",
+                     font=dict(size=12, color=COLORS["text"]), x=0.5, xanchor="center"),
+        "yaxis":dict(title="% of team PA", range=[0,100], gridcolor="#374151",
                      tickfont=dict(color=COLORS["subtext"]),
                      title_font=dict(color=COLORS["subtext"])),
         "xaxis":dict(tickfont=dict(color=COLORS["text"], size=10)),
         "legend":dict(font=dict(color=COLORS["subtext"]), orientation="h", y=1.1),
     })
-    return fig
-
-
-# ---------------------------------------------------------------------------
-# Hitter vs Archetype Benchmark heatmap
-# ---------------------------------------------------------------------------
-
-def hitter_vs_archetype_heatmap(portrait: dict) -> go.Figure:
-    """
-    Heatmap showing each hitter's performance vs the historical median
-    for their archetype.
-
-    Rows = players (by PA desc). Columns = key metrics.
-    Cell value = % above/below archetype historical median.
-    Green = above archetype par · Red = below archetype par · Grey = no data.
-
-    K% is inverted for display: lower K% = better → shown as green when below median.
-    """
-    hitters = portrait.get("players", {}).get("hitters", [])
-    if not hitters:
-        return empty_figure("No hitter data")
-
-    hitters_sorted = sorted(hitters, key=lambda h: -(h.get("pa") or 0))
-
-    # Columns: metric key → display label
-    METRICS = [
-        ("avg",          "AVG"),
-        ("obp",          "OBP"),
-        ("iso",          "ISO"),
-        ("k_rate",       "K%"),
-        ("bb_rate",      "BB%"),
-        ("barrel_pct",   "Barrel%"),
-        ("contact_pct",  "Contact%"),
-        ("sprint_speed", "Speed%"),
-        ("xwoba",        "xwOBA%"),
-    ]
-    # Metrics where LOWER is better (so invert for display coloring)
-    LOWER_IS_BETTER = {"k_rate"}
-
-    col_labels = [label for _, label in METRICS]
-    row_labels  = []
-    z_vals      = []
-    text_vals   = []
-    hover_vals  = []
-
-    for h in hitters_sorted:
-        name     = (h.get("name") or "").strip() or f"ID {h.get('player_id','?')}"
-        archetype = h.get("primary", {}).get("type", "?")
-        pa        = h.get("pa", 0)
-        vs_arch   = h.get("vs_archetype", {})
-
-        row_labels.append(f"{name} ({pa} PA)")
-        row_z, row_txt, row_hover = [], [], []
-
-        for metric, label in METRICS:
-            delta = vs_arch.get(metric)
-            if delta is None:
-                row_z.append(None)
-                row_txt.append("")
-                row_hover.append(f"{name}<br>{label}: no data")
-            else:
-                # Invert display coloring for lower-is-better metrics (K%)
-                # Text also inverted so green cells always show positive numbers
-                display = -delta if metric in LOWER_IS_BETTER else delta
-                pct_str = f"{display*100:+.1f}%"
-                row_z.append(display * 100)   # scale to ±% for colorscale
-                row_txt.append(pct_str)
-                row_hover.append(
-                    f"<b>{name}</b> ({archetype})<br>"
-                    f"{label}: {pct_str} vs {archetype} median"
-                    + (" (lower = better)" if metric in LOWER_IS_BETTER else "")
-                )
-        z_vals.append(row_z)
-        text_vals.append(row_txt)
-        hover_vals.append(row_hover)
-
-    # Replace None with NaN for Plotly
-    import numpy as _np
-    z_array = _np.array([[v if v is not None else float("nan")
-                           for v in row] for row in z_vals], dtype=float)
-
-    fig = go.Figure(go.Heatmap(
-        z=z_array,
-        x=col_labels,
-        y=row_labels,
-        text=text_vals,
-        texttemplate="%{text}",
-        hovertext=hover_vals,
-        hoverinfo="text",
-        colorscale=[
-            [0.0,  "#ef4444"],   # -30% or worse → red
-            [0.35, "#f97316"],
-            [0.5,  "#374151"],   # at par → neutral grey
-            [0.65, "#22c55e"],
-            [1.0,  "#16a34a"],   # +30% or better → green
-        ],
-        zmid=0,
-        zmin=-30, zmax=30,
-        showscale=True,
-        colorbar=dict(
-            title=dict(text="% vs archetype median", font=dict(color=COLORS["subtext"], size=10)),
-            tickfont=dict(color=COLORS["subtext"], size=9),
-            tickvals=[-30, -15, 0, 15, 30],
-            ticktext=["-30%", "-15%", "par", "+15%", "+30%"],
-            len=0.6,
-        ),
-        textfont=dict(size=9, color="#f9fafb"),
-    ))
-
-    fig.update_layout(
-        **_DARK_LAYOUT,
-        title=dict(
-            text="Hitters vs Archetype Historical Median",
-            font=dict(size=13, color=COLORS["text"]), x=0.5,
-        ),
-        xaxis=dict(side="top", tickfont=dict(color=COLORS["text"], size=10)),
-        yaxis=dict(tickfont=dict(color=COLORS["text"], size=10), autorange="reversed"),
-        margin=dict(l=160, r=80, t=60, b=10),
-    )
     return fig
 
 
@@ -2335,8 +2634,12 @@ def _reconstruct_trajectory(
     Reconstruct 3-D flight path using Statcast kinematic parameters.
     Returns (x_path, y_path, z_path) or None if physics are invalid.
 
-    Coordinate system:
-      x — horizontal (catcher's view: positive = catcher's right = RHP arm side)
+    Coordinate system (raw Statcast convention — catcher's/umpire's view,
+    i.e. standing behind home plate looking out toward the pitcher):
+      x — horizontal: positive = catcher's right / first-base side / LHP arm
+          side; negative = catcher's left / third-base side / RHP arm side
+          (confirmed empirically: RHP release_x ≈ -1.3 to -1.9 ft,
+          LHP release_x ≈ +1.3 to +2.2 ft, consistent across all pitch types)
       y — distance from home plate (0 = plate, ~54 ft = release)
       z — height above ground
     """
@@ -2457,9 +2760,9 @@ def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure
             hoverinfo="skip",
         ))
 
-    # Strike zone reference box at y=0 (home plate face)
-    sz_x = [-0.83, 0.83, 0.83, -0.83, -0.83]
-    sz_z = [1.50,  1.50,  3.50,  3.50,  1.50]
+    # Strike zone reference box at y=0 (home plate face) — ABS standard dimensions
+    sz_x = [-ABS_SZ_WIDTH, ABS_SZ_WIDTH, ABS_SZ_WIDTH, -ABS_SZ_WIDTH, -ABS_SZ_WIDTH]
+    sz_z = [ABS_SZ_BOT,    ABS_SZ_BOT,   ABS_SZ_TOP,   ABS_SZ_TOP,    ABS_SZ_BOT]
     sz_y = [0.0] * 5
     fig.add_trace(go.Scatter3d(
         x=sz_x, y=sz_y, z=sz_z,
@@ -2475,7 +2778,9 @@ def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure
         plot_bgcolor=COLORS["background"],
         font_color=COLORS["text"],
         title=dict(
-            text=f"Pitch Trajectories — {pitch_type}",
+            text=f"Pitch Trajectories — {pitch_type}<br>"
+                 f"<sup>Catcher's-eye view (behind home plate, looking out) — "
+                 f"LHP arm-side release appears right, RHP appears left</sup>",
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
         scene=dict(
@@ -2484,6 +2789,7 @@ def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure
                 backgroundcolor=COLORS["surface"],
                 gridcolor=COLORS["border"],
                 tickfont=dict(color=COLORS["subtext"], size=9),
+                autorange="reversed",   # flip so RHP arm-side renders on the right (pitcher's-eye view)
             ),
             yaxis=dict(
                 title="Distance to plate (ft)",
