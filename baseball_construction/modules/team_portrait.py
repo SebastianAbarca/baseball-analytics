@@ -910,13 +910,22 @@ def _classify_hitters(
     """
     from ingest import normalize_percentile
 
+    def _nz(v, default=0.0):
+        """NaN-safe coercion: NaN is truthy, so `NaN or 0` never falls back."""
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return default
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
     # Pre-compute cross-player attempt_rate percentile for Disruptive/Chaotic gate.
     # opportunities ≈ OBP * PA (times on base proxy — avoids needing raw H/BB/HBP counts).
     def _attempt_rate(row_) -> Optional[float]:
-        sb_ = float(row_.get("SB", 0) or 0)
-        cs_ = float(row_.get("CS", 0) or 0)
-        obp_= float(row_.get("OBP") or row_.get("obp") or 0)
-        pa_ = float(row_.get("PA") or row_.get("pa") or 1)
+        sb_ = _nz(row_.get("SB", 0))
+        cs_ = _nz(row_.get("CS", 0))
+        obp_= _nz(row_.get("OBP")) or _nz(row_.get("obp"))
+        pa_ = _nz(row_.get("PA")) or _nz(row_.get("pa"), 1)
         tob = obp_ * pa_
         if tob <= 0:
             return None
@@ -974,15 +983,15 @@ def _classify_hitters(
         att_pct = float(att_pct) if att_pct is not None and not np.isnan(att_pct) else None
 
         # SB/CS — available from BRef merge; Savant-only falls back to 0
-        obp_val = float(row.get("OBP") or row.get("obp") or 0)
-        pa_val  = float(row.get("PA") or row.get("pa") or 1)
+        obp_val = _nz(row.get("OBP")) or _nz(row.get("obp"))
+        pa_val  = _nz(row.get("PA")) or _nz(row.get("pa"), 1)
         profile: dict = {"player_id": int(player_id)}
         info = _get_player_info_map().get(int(player_id), {})
         profile["name"] = info.get("name")
         # Prefer DB age (BRef season-specific) over Chadwick today-computed age
         db_age = row.get("age") or row.get("Age")
         profile["age"]  = (int(db_age) if db_age is not None and not pd.isna(db_age) else None) or info.get("age")
-        profile["pa"]   = int(row.get("PA") or row.get("pa") or 0)
+        profile["pa"]   = int(_nz(row.get("PA")) or _nz(row.get("pa")))
         profile["home_position"] = ((positions_map or {}).get(int(player_id))
                                     or {}).get("home_position")
         war_raw = row.get("WAR_bat")
@@ -1002,8 +1011,8 @@ def _classify_hitters(
             profile["traits"], profile["spectrum"] = build_hitter_traits(
                 metrics=metrics,
                 sprint_speed_raw=sprint_raw,
-                sb=int(row.get("SB", 0) or 0),
-                cs=int(row.get("CS", 0) or 0),
+                sb=int(_nz(row.get("SB", 0))),
+                cs=int(_nz(row.get("CS", 0))),
                 opportunities=int(obp_val * pa_val),
                 attempt_rate_pct=att_pct,
                 season_metrics=season_metrics,
