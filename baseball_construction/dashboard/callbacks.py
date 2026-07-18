@@ -340,10 +340,32 @@ def batting_bars(data):
 # Callback 8 — Hitter archetype pie
 # ---------------------------------------------------------------------------
 
+_BASELINE_CACHE: dict[int, dict] = {}
+
+def _league_baselines(season) -> dict:
+    """League mean trait densities per unit, from league_identity_{season}.json."""
+    try:
+        season = int(season)
+    except (TypeError, ValueError):
+        return {}
+    if season in _BASELINE_CACHE:
+        return _BASELINE_CACHE[season]
+    try:
+        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
+        base = json.loads(path.read_text()).get("_baselines", {}) if path.exists() else {}
+    except Exception:
+        base = {}
+    _BASELINE_CACHE[season] = base
+    return base
+
+
 @callback(Output("hitter-pie", "figure"), Input("portrait-store", "data"))
 def hitter_pie(data):
     p = _deserialize(data)
-    return charts.hitter_trait_density(p) if p else charts.empty_figure()
+    if not p:
+        return charts.empty_figure()
+    base = _league_baselines(p.get("season")).get("offense")
+    return charts.hitter_trait_density(p, baseline=base)
 
 
 # ---------------------------------------------------------------------------
@@ -385,13 +407,19 @@ def bullpen_table(data):
 @callback(Output("bullpen-trait-density", "figure"), Input("portrait-store", "data"))
 def bullpen_trait_density_chart(data):
     p = _deserialize(data)
-    return charts.bullpen_trait_density(p) if p else charts.empty_figure()
+    if not p:
+        return charts.empty_figure()
+    base = _league_baselines(p.get("season")).get("bullpen")
+    return charts.bullpen_trait_density(p, baseline=base)
 
 
 @callback(Output("rotation-trait-density", "figure"), Input("portrait-store", "data"))
 def rotation_trait_density_chart(data):
     p = _deserialize(data)
-    return charts.rotation_trait_density(p) if p else charts.empty_figure()
+    if not p:
+        return charts.empty_figure()
+    base = _league_baselines(p.get("season")).get("rotation")
+    return charts.rotation_trait_density(p, baseline=base)
 
 
 # ---------------------------------------------------------------------------

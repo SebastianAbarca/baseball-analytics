@@ -309,42 +309,16 @@ def _pa_trait_density(players: list[dict], weight_key: str = "pa") -> dict[str, 
             for k, (v, fam) in sorted(tag_w.items(), key=lambda kv: -kv[1][0])}
 
 
-def hitter_trait_density(portrait: dict) -> go.Figure:
+def hitter_trait_density(portrait: dict, baseline: dict | None = None) -> go.Figure:
     """
-    Horizontal bars: PA-weighted share of the lineup carrying each trait tag.
-    The offense's shape IS this distribution — no archetype boxes.
+    Horizontal bars: PA-weighted share of the lineup carrying each trait tag,
+    over a ghosted league-average bar so every share reads against the norm.
     """
     hitters = portrait.get("players", {}).get("hitters", [])
-    density = _pa_trait_density(hitters)
-
-    if not density:
-        return empty_figure("No hitter trait data — rebuild this portrait")
-
-    tags     = list(density.keys())
-    shares   = [density[t][0] * 100 for t in tags]
-    colors   = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
-
-    fig = go.Figure(go.Bar(
-        x=shares,
-        y=tags,
-        orientation="h",
-        marker_color=colors,
-        text=[f"{s:.0f}%" for s in shares],
-        textposition="outside",
-        textfont=dict(size=10, color=COLORS["subtext"]),
-        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of PA<extra></extra>",
-    ))
-    # Card headers carry the titles on the identity tab — no internal title.
-    fig.update_layout(
-        **{**_DARK_LAYOUT, "margin": dict(l=110, r=42, t=12, b=30)},
-        xaxis=dict(title="% of team PA", range=[0, max(shares) * 1.25],
-                   gridcolor=COLORS["border"],
-                   tickfont=dict(color=COLORS["subtext"]),
-                   title_font=dict(color=COLORS["subtext"], size=11)),
-        yaxis=dict(autorange="reversed",
-                   tickfont=dict(color=COLORS["text"], size=10)),
-    )
-    return fig
+    return _unit_trait_density_figure(hitters, weight_key="pa",
+                                      x_title="% of team PA",
+                                      empty_msg="No hitter trait data",
+                                      baseline=baseline)
 
 
 # ---------------------------------------------------------------------------
@@ -973,8 +947,14 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
 
 
 def _unit_trait_density_figure(arms: list, weight_key: str,
-                               x_title: str, empty_msg: str) -> go.Figure:
-    """Shared horizontal-bar builder for the identity-tab density trio."""
+                               x_title: str, empty_msg: str,
+                               baseline: dict | None = None) -> go.Figure:
+    """
+    Shared horizontal-bar builder for the identity-tab density trio.
+
+    baseline — {tag: league mean density 0–1}. Rendered as a ghosted bar
+    behind the team's solid bar so every share reads against the league norm.
+    """
     density = _pa_trait_density(arms, weight_key=weight_key)
     if not density:
         return empty_figure(empty_msg)
@@ -983,19 +963,40 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     shares = [density[t][0] * 100 for t in tags]
     colors = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
 
-    fig = go.Figure(go.Bar(
-        x=shares,
-        y=tags,
-        orientation="h",
+    fig = go.Figure()
+    xmax = max(shares)
+
+    if baseline:
+        lg = [100 * float(baseline.get(t, 0) or 0) for t in tags]
+        xmax = max(xmax, max(lg) if lg else 0)
+        fig.add_trace(go.Bar(
+            x=lg, y=tags, orientation="h",
+            name="League average",
+            width=0.78,
+            marker_color="#9ca3af",
+            opacity=0.28,
+            hovertemplate="<b>%{y}</b><br>league average %{x:.1f}%<extra></extra>",
+        ))
+
+    fig.add_trace(go.Bar(
+        x=shares, y=tags, orientation="h",
+        name="This team",
+        width=0.5,
         marker_color=colors,
         text=[f"{s:.0f}%" for s in shares],
         textposition="outside",
         textfont=dict(size=10, color=COLORS["subtext"]),
         hovertemplate="<b>%{y}</b><br>%{x:.1f}" + f"{x_title[1:]}<extra></extra>",
     ))
+
     fig.update_layout(
-        **{**_DARK_LAYOUT, "margin": dict(l=118, r=42, t=12, b=30)},
-        xaxis=dict(title=x_title, range=[0, max(shares) * 1.25],
+        **{**_DARK_LAYOUT, "margin": dict(l=118, r=42, t=26, b=30)},
+        barmode="overlay",
+        showlegend=bool(baseline),
+        legend=dict(orientation="h", x=0, y=1.06,
+                    font=dict(size=10, color=COLORS["subtext"]),
+                    bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(title=x_title, range=[0, xmax * 1.25],
                    gridcolor=COLORS["border"],
                    tickfont=dict(color=COLORS["subtext"]),
                    title_font=dict(color=COLORS["subtext"], size=11)),
@@ -1005,20 +1006,22 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     return fig
 
 
-def rotation_trait_density(portrait: dict) -> go.Figure:
+def rotation_trait_density(portrait: dict, baseline: dict | None = None) -> go.Figure:
     """BF-weighted trait density for the rotation (identity-tab trio)."""
     starters = portrait.get("players", {}).get("starters", [])
     return _unit_trait_density_figure(starters, weight_key="bf",
                                       x_title="% of rotation BF",
-                                      empty_msg="No rotation trait data")
+                                      empty_msg="No rotation trait data",
+                                      baseline=baseline)
 
 
-def bullpen_trait_density(portrait: dict) -> go.Figure:
+def bullpen_trait_density(portrait: dict, baseline: dict | None = None) -> go.Figure:
     """BF-weighted trait density for the bullpen (identity-tab trio)."""
     arms = portrait.get("players", {}).get("bullpen_arms", [])
     return _unit_trait_density_figure(arms, weight_key="bf",
                                       x_title="% of bullpen BF",
-                                      empty_msg="No bullpen trait data")
+                                      empty_msg="No bullpen trait data",
+                                      baseline=baseline)
 
 
 # ---------------------------------------------------------------------------
