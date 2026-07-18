@@ -148,11 +148,11 @@ def _deserialize(data: str | None) -> dict | None:
 @callback(
     Output("portrait-store", "data"),
     Output("status-banner",  "children"),
-    Input("load-btn",        "n_clicks"),
-    State("team-dropdown",   "value"),
-    State("season-dropdown", "value"),
+    Input("team-dropdown",   "value"),
+    Input("season-dropdown", "value"),
     running=[
-        (Output("load-btn", "disabled"), True, False),
+        (Output("team-dropdown", "disabled"), True, False),
+        (Output("season-dropdown", "disabled"), True, False),
         (Output("status-banner", "children"),
          __import__("dash_bootstrap_components").Alert(
              [
@@ -161,15 +161,14 @@ def _deserialize(data: str | None) -> dict | None:
                      style={"width": "14px", "height": "14px"},
                      **{"role": "status"},
                  ),
-                 "Building portrait… this takes 10–30 seconds",
+                 "Loading team… a first-time build takes 10–30 seconds",
              ],
              color="primary", className="py-1 mb-0 d-flex align-items-center",
          ),
          no_update),
     ],
-    prevent_initial_call=True,
 )
-def build_portrait(n_clicks, team: str, season: int):
+def build_portrait(team: str, season: int):
     import dash_bootstrap_components as dbc
     from dash import html
 
@@ -387,6 +386,12 @@ def bullpen_table(data):
 def bullpen_trait_density_chart(data):
     p = _deserialize(data)
     return charts.bullpen_trait_density(p) if p else charts.empty_figure()
+
+
+@callback(Output("rotation-trait-density", "figure"), Input("portrait-store", "data"))
+def rotation_trait_density_chart(data):
+    p = _deserialize(data)
+    return charts.rotation_trait_density(p) if p else charts.empty_figure()
 
 
 # ---------------------------------------------------------------------------

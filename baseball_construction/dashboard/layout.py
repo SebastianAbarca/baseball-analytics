@@ -100,18 +100,12 @@ def controls_row() -> dbc.Row:
             dbc.Select(
                 id="season-dropdown",
                 options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
-                value="2023",
+                value="2025",
             ),
         ], md=2, xs=6),
         dbc.Col([
-            html.Label(" ", className="text-secondary small mb-1 d-block"),
-            dbc.Button(
-                "Load Portrait", id="load-btn", color="primary", className="w-100",
-            ),
-        ], md=2, xs=12),
-        dbc.Col([
             html.Div(id="status-banner", className="mt-1"),
-        ], md=5, xs=12),
+        ], md=7, xs=12),
     ], className="mb-3 align-items-end")
 
 
@@ -438,14 +432,12 @@ def _archetype_guide_card() -> dbc.Card:
     ], style=CARD_STYLE, className="mb-3")
 
 
-def overview_tab() -> dbc.Tab:
-    return dbc.Tab(label="Overview", tab_id="tab-overview", children=[
-        html.Div(id="team-header", className="mb-3 p-3 rounded",
-                 style={"backgroundColor": "#1f2937", "border": "1px solid #374151"}),
-        # ── Team Identity Synthesis ────────────────────────────────────────
+def identity_tab() -> dbc.Tab:
+    """Landing tab — the team's identity, fingerprint first."""
+    return dbc.Tab(label="Identity", tab_id="tab-identity", children=[
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Team Identity",
+                html.Small("Who this team is",
                            className="fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
                                   "color": "#9ca3af"}),
@@ -453,57 +445,28 @@ def overview_tab() -> dbc.Tab:
             ),
             dbc.CardBody(
                 html.Div(id="team-identity-card"),
-                style={"padding": "12px"},
+                style={"padding": "14px"},
             ),
         ], style=CARD_STYLE, className="mb-3"),
         dbc.Row([
-            dbc.Col(_card("Philosophy Profile (All Dimensions)", "radar-all", height=420), md=6),
-            dbc.Col(_card("Primary Philosophy by Dimension", "dim-bars", height=280), md=6),
-        ]),
-        dbc.Row([
-            dbc.Col(_card("Park Factor — Pitcher Friendliness", "park-gauge", height=320), md=4),
-            dbc.Col(_card("Team Spin Efficiency", "spin-bar", height=200), md=8),
-        ]),
-        # ── Team Split Resistance ──────────────────────────────────────────
-        dbc.Card([
-            dbc.CardHeader(
-                html.Small("Team Split Resistance — LHP vs RHP",
-                           className="fw-semibold text-uppercase",
-                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
-                                  "color": "#9ca3af"}),
-                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-            ),
-            dbc.CardBody(
-                html.Div(id="team-split-card"),
-                style={"padding": "12px"},
-            ),
-        ], style=CARD_STYLE, className="mb-3"),
-        # ── Construction vs Results ────────────────────────────────────────
-        dbc.Row([
-            dbc.Col(_card("Construction vs Results — Philosophy", "cvr-radar", height=480), md=6),
-            dbc.Col(_card("Construction vs Results — Archetype Mix", "cvr-archetypes", height=380), md=6),
+            dbc.Col(_card("The lineup — share of plate appearances", "hitter-pie", height=440), md=4),
+            dbc.Col(_card("The rotation — share of batters faced", "rotation-trait-density", height=440), md=4),
+            dbc.Col(_card("The bullpen — share of batters faced", "bullpen-trait-density", height=440), md=4),
         ]),
     ])
 
 
-def offense_tab() -> dbc.Tab:
-    return dbc.Tab(label="Offense", tab_id="tab-offense", children=[
+def players_tab() -> dbc.Tab:
+    """The people behind the identity — rosters with trait tags."""
+    return dbc.Tab(label="The Players", tab_id="tab-players", children=[
+        _card("The lineup", "hitter-table", height=520),
         dbc.Row([
-            dbc.Col(_card("Offensive Philosophy Radar", "radar-offense", height=380), md=5),
-            dbc.Col(_card("Team Batting Metrics (Percentile)", "batting-bars", height=380), md=7),
+            dbc.Col(_card("The rotation", "starter-bars", height=420), md=6),
+            dbc.Col(_card("The bullpen", "bullpen-table", height=420), md=6),
         ]),
-        dbc.Row([
-            dbc.Col(_card("Hitter Trait Density", "hitter-pie", height=340), md=5),
-            dbc.Col(_card("Hitter Roster Detail", "hitter-table", height=480), md=7),
-        ]),
-        _card("Batted Ball Profile", "spray-heatmap", height=580),
-        _card("Hitter Skill Affinity", "hitter-heatmap", height=500),
-        _card("Batter Split Resistance — LHP vs RHP", "split-heatmap", height=520),
-        _archetype_guide_card(),
-        # ── Player comparison section ───────────────────────────────────────
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Player Metrics Comparison", className="text-secondary fw-semibold text-uppercase",
+                html.Small("Compare hitters head-to-head", className="text-secondary fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
@@ -538,27 +501,49 @@ def offense_tab() -> dbc.Tab:
                 ]),
             ], style={"padding": "12px"}),
         ], style=CARD_STYLE, className="mb-3"),
-        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
-                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
-                       "textTransform": "uppercase"}),
-        *[_philosophy_collapse(c) for c in ["A1", "A2", "A3", "A4"]],
+        _archetype_guide_card(),
     ])
 
 
-def pitching_tab() -> dbc.Tab:
-    return dbc.Tab(label="Pitching", tab_id="tab-pitching", children=[
+def deep_tab() -> dbc.Tab:
+    """Analyst layer — philosophy scores, physics charts, raw percentiles."""
+    return dbc.Tab(label="Deep Data", tab_id="tab-deep", children=[
         dbc.Row([
-            dbc.Col(_card("Pitching Philosophy Radar", "radar-pitching", height=380), md=5),
-            dbc.Col(_card("Starter Roster Detail", "starter-bars", height=420), md=7),
+            dbc.Col(_card("Philosophy Profile (All Dimensions)", "radar-all", height=420), md=6),
+            dbc.Col(_card("Primary Philosophy by Dimension", "dim-bars", height=280), md=6),
         ]),
         dbc.Row([
-            dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=320), md=5),
-            dbc.Col(_card("Bullpen Roster Detail", "bullpen-table", height=420), md=7),
-        ], className="mt-3"),
+            dbc.Col(_card("Park Factor — Pitcher Friendliness", "park-gauge", height=320), md=4),
+            dbc.Col(_card("Team Spin Efficiency", "spin-bar", height=200), md=8),
+        ]),
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Team Split Resistance — LHP vs RHP",
+                           className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(
+                html.Div(id="team-split-card"),
+                style={"padding": "12px"},
+            ),
+        ], style=CARD_STYLE, className="mb-3"),
         dbc.Row([
-            dbc.Col(_card("Bullpen Trait Density", "bullpen-trait-density", height=380), md=12),
-        ], className="mt-3"),
-        # ── Arsenal trajectory viewer ─────────────────────────────────────────
+            dbc.Col(_card("Construction vs Results — Philosophy", "cvr-radar", height=480), md=6),
+            dbc.Col(_card("Construction vs Results — Archetype Mix", "cvr-archetypes", height=380), md=6),
+        ]),
+        dbc.Row([
+            dbc.Col(_card("Offensive Philosophy Radar", "radar-offense", height=380), md=5),
+            dbc.Col(_card("Team Batting Metrics (Percentile)", "batting-bars", height=380), md=7),
+        ]),
+        _card("Batted Ball Profile", "spray-heatmap", height=580),
+        _card("Hitter Skill Affinity", "hitter-heatmap", height=500),
+        _card("Batter Split Resistance — LHP vs RHP", "split-heatmap", height=520),
+        dbc.Row([
+            dbc.Col(_card("Pitching Philosophy Radar", "radar-pitching", height=380), md=6),
+            dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=380), md=6),
+        ]),
         dbc.Card([
             dbc.CardHeader(
                 dbc.Row([
@@ -592,15 +577,6 @@ def pitching_tab() -> dbc.Tab:
                 style={"padding": "8px"},
             ),
         ], style=CARD_STYLE, className="mb-3 mt-3"),
-        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
-                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
-                       "textTransform": "uppercase"}),
-        *[_philosophy_collapse(c) for c in ["B1", "B2", "B3", "B4"]],
-    ])
-
-
-def roster_tab() -> dbc.Tab:
-    return dbc.Tab(label="Roster Construction", tab_id="tab-roster", children=[
         dbc.Row([
             dbc.Col(_card("Roster Philosophy Radar", "radar-roster", height=380), md=6),
             dbc.Col(_card("Roster Control", "roster-control-chart", height=180), md=6),
@@ -633,7 +609,8 @@ def roster_tab() -> dbc.Tab:
         html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
                 style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
                        "textTransform": "uppercase"}),
-        *[_philosophy_collapse(c) for c in ["C1", "C2", "C3", "C4"]],
+        *[_philosophy_collapse(c) for c in
+          ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]],
     ])
 
 
@@ -921,8 +898,8 @@ def scout_tab() -> dbc.Tab:
 def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
-        active_tab="tab-overview",
-        children=[overview_tab(), offense_tab(), pitching_tab(), roster_tab(), compare_tab(), scout_tab()],
+        active_tab="tab-identity",
+        children=[identity_tab(), players_tab(), compare_tab(), scout_tab(), deep_tab()],
         className="mb-3",
     )
 
@@ -936,6 +913,8 @@ def full_layout() -> html.Div:
         navbar(),
         dbc.Container([
             controls_row(),
+            html.Div(id="team-header", className="mb-3 p-3 rounded",
+                     style={"backgroundColor": "#1f2937", "border": "1px solid #374151"}),
             dcc.Store(id="portrait-store"),
             dcc.Store(id="cmp-store-a"),
             dcc.Store(id="cmp-store-b"),

@@ -334,20 +334,15 @@ def hitter_trait_density(portrait: dict) -> go.Figure:
         textfont=dict(size=10, color=COLORS["subtext"]),
         hovertemplate="<b>%{y}</b><br>%{x:.1f}% of PA<extra></extra>",
     ))
+    # Card headers carry the titles on the identity tab — no internal title.
     fig.update_layout(
-        **{**_DARK_LAYOUT, "margin": dict(l=110, r=40, t=40, b=30)},
-        height=max(280, 22 * len(tags) + 70),
-        xaxis=dict(title="% of team PA", range=[0, max(shares) * 1.2],
+        **{**_DARK_LAYOUT, "margin": dict(l=110, r=42, t=12, b=30)},
+        xaxis=dict(title="% of team PA", range=[0, max(shares) * 1.25],
                    gridcolor=COLORS["border"],
                    tickfont=dict(color=COLORS["subtext"]),
                    title_font=dict(color=COLORS["subtext"], size=11)),
         yaxis=dict(autorange="reversed",
                    tickfont=dict(color=COLORS["text"], size=10)),
-        title=dict(
-            text="Offense Trait Density (PA-weighted)",
-            font=dict(size=14, color=COLORS["text"]),
-            x=0.5,
-        ),
     )
     return fig
 
@@ -977,18 +972,14 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
     return fig
 
 
-def bullpen_trait_density(portrait: dict) -> go.Figure:
-    """
-    Horizontal bars: BF-weighted share of bullpen workload carrying each
-    trait tag — the pen's shape, same treatment as the offense density chart.
-    """
-    arms = portrait.get("players", {}).get("bullpen_arms", [])
-    density = _pa_trait_density(arms, weight_key="bf")
-
+def _unit_trait_density_figure(arms: list, weight_key: str,
+                               x_title: str, empty_msg: str) -> go.Figure:
+    """Shared horizontal-bar builder for the identity-tab density trio."""
+    density = _pa_trait_density(arms, weight_key=weight_key)
     if not density:
-        return empty_figure("No bullpen trait data — rebuild this portrait")
+        return empty_figure(empty_msg)
 
-    tags   = list(density.keys())
+    tags   = list(density.keys())[:18]
     shares = [density[t][0] * 100 for t in tags]
     colors = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
 
@@ -1000,24 +991,34 @@ def bullpen_trait_density(portrait: dict) -> go.Figure:
         text=[f"{s:.0f}%" for s in shares],
         textposition="outside",
         textfont=dict(size=10, color=COLORS["subtext"]),
-        hovertemplate="<b>%{y}</b><br>%{x:.1f}% of bullpen BF<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>%{x:.1f}" + f"{x_title[1:]}<extra></extra>",
     ))
     fig.update_layout(
-        **{**_DARK_LAYOUT, "margin": dict(l=120, r=40, t=40, b=30)},
-        height=max(280, 20 * len(tags) + 70),
-        xaxis=dict(title="% of bullpen BF", range=[0, max(shares) * 1.2],
+        **{**_DARK_LAYOUT, "margin": dict(l=118, r=42, t=12, b=30)},
+        xaxis=dict(title=x_title, range=[0, max(shares) * 1.25],
                    gridcolor=COLORS["border"],
                    tickfont=dict(color=COLORS["subtext"]),
                    title_font=dict(color=COLORS["subtext"], size=11)),
         yaxis=dict(autorange="reversed",
                    tickfont=dict(color=COLORS["text"], size=10)),
-        title=dict(
-            text="Bullpen Trait Density (BF-weighted)",
-            font=dict(size=14, color=COLORS["text"]),
-            x=0.5,
-        ),
     )
     return fig
+
+
+def rotation_trait_density(portrait: dict) -> go.Figure:
+    """BF-weighted trait density for the rotation (identity-tab trio)."""
+    starters = portrait.get("players", {}).get("starters", [])
+    return _unit_trait_density_figure(starters, weight_key="bf",
+                                      x_title="% of rotation BF",
+                                      empty_msg="No rotation trait data")
+
+
+def bullpen_trait_density(portrait: dict) -> go.Figure:
+    """BF-weighted trait density for the bullpen (identity-tab trio)."""
+    arms = portrait.get("players", {}).get("bullpen_arms", [])
+    return _unit_trait_density_figure(arms, weight_key="bf",
+                                      x_title="% of bullpen BF",
+                                      empty_msg="No bullpen trait data")
 
 
 # ---------------------------------------------------------------------------
