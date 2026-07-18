@@ -959,7 +959,15 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     if not density:
         return empty_figure(empty_msg)
 
-    tags   = list(density.keys())[:18]
+    if baseline:
+        # Order by deviation from league: what most DEFINES this team at the
+        # top, what it most lacks at the bottom (top 13 over + 5 most under).
+        ranked = sorted(density.keys(),
+                        key=lambda t: density[t][0] - float(baseline.get(t, 0) or 0),
+                        reverse=True)
+        tags = ranked[:13] + (ranked[-5:] if len(ranked) > 18 else ranked[13:])
+    else:
+        tags = list(density.keys())[:18]
     shares = [density[t][0] * 100 for t in tags]
     colors = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
 
