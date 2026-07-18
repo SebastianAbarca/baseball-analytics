@@ -23,3 +23,8 @@ baseball_construction/data/processed/portraits/
 baseball_construction/data/processed/*.pkl
 baseball_construction/data/processed/*.parquet
 baseball_construction/data/processed/batting_prior_*.parquet
+
+# Derived caches — regenerable from statcast parquet + Savant (like portraits/)
+baseball_construction/modules/processed/
+baseball_construction/data/processed/spray/
+baseball_construction/data/processed/league_identity_*.json
