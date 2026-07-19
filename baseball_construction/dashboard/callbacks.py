@@ -340,6 +340,40 @@ def batting_bars(data):
 # Callback 8 — Hitter archetype pie
 # ---------------------------------------------------------------------------
 
+_LEAGUE_FILE_CACHE: dict[int, dict] = {}
+
+def _league_identity_file(season: int) -> dict:
+    if season in _LEAGUE_FILE_CACHE:
+        return _LEAGUE_FILE_CACHE[season]
+    try:
+        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        data = {}
+    _LEAGUE_FILE_CACHE[season] = data
+    return data
+
+
+@callback(
+    Output("drift-offense",  "figure"),
+    Output("drift-rotation", "figure"),
+    Output("drift-bullpen",  "figure"),
+    Input("team-dropdown", "value"),
+)
+def team_drift(team):
+    if not team:
+        empty = charts.empty_figure("Select a team")
+        return empty, empty, empty
+    seasons = {}
+    for yr in range(2015, 2027):
+        d = _league_identity_file(yr)
+        if d:
+            seasons[yr] = d
+    return (charts.team_drift_chart(team, "offense",  seasons),
+            charts.team_drift_chart(team, "rotation", seasons),
+            charts.team_drift_chart(team, "bullpen",  seasons))
+
+
 _BASELINE_CACHE: dict[int, dict] = {}
 
 def _league_baselines(season) -> dict:

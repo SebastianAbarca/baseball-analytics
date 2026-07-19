@@ -454,6 +454,21 @@ def identity_tab() -> dbc.Tab:
     ])
 
 
+def years_tab() -> dbc.Tab:
+    """Identity drift — the team's defining traits vs league, 2015–2026."""
+    return dbc.Tab(label="Through the Years", tab_id="tab-years", children=[
+        html.P(
+            "Each line is one of this franchise's defining traits — how far above "
+            "or below the league it sat, season by season. The dotted line is the "
+            "league average; identity is departure from it.",
+            className="text-secondary", style={"fontSize": "0.85rem"},
+        ),
+        _card("The lineup through the years", "drift-offense", height=430),
+        _card("The rotation through the years", "drift-rotation", height=430),
+        _card("The bullpen through the years", "drift-bullpen", height=430),
+    ])
+
+
 def players_tab() -> dbc.Tab:
     """The people behind the identity — rosters with trait tags."""
     return dbc.Tab(label="The Players", tab_id="tab-players", children=[
@@ -897,7 +912,7 @@ def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
         active_tab="tab-identity",
-        children=[identity_tab(), players_tab(), compare_tab(), scout_tab(), deep_tab()],
+        children=[identity_tab(), years_tab(), players_tab(), compare_tab(), scout_tab(), deep_tab()],
         className="mb-3",
     )
 

@@ -285,6 +285,11 @@ TRAIT_FAMILY_COLORS = {
     "arsenal":     "#3b82f6",   # blue
 }
 
+# tag → family color, populated lazily as density charts render (they see
+# tag+family together); drift charts fall back to a neutral palette for
+# tags not yet seen this process.
+TRAIT_TAG_COLORS: dict[str, str] = {}
+
 
 def _pa_trait_density(players: list[dict], weight_key: str = "pa") -> dict[str, tuple[float, str]]:
     """
@@ -303,6 +308,11 @@ def _pa_trait_density(players: list[dict], weight_key: str = "pa") -> dict[str, 
             if tag:
                 prev = tag_w.get(tag, (0.0, t.get("family", "")))
                 tag_w[tag] = (prev[0] + w, prev[1])
+                fam = t.get("family")
+                if fam and tag not in TRAIT_TAG_COLORS:
+                    c = TRAIT_FAMILY_COLORS.get(fam)
+                    if c:
+                        TRAIT_TAG_COLORS[tag] = c
     if total <= 0:
         return {}
     return {k: (v / total, fam)
@@ -1010,6 +1020,84 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
                    title_font=dict(color=COLORS["subtext"], size=11)),
         yaxis=dict(autorange="reversed",
                    tickfont=dict(color=COLORS["text"], size=10)),
+    )
+    return fig
+
+
+def team_drift_chart(team: str, unit: str,
+                     seasons_data: dict[int, dict]) -> go.Figure:
+    """
+    "Through the Years" — one unit's identity drift across seasons.
+
+    seasons_data — {year: league_identity dict for that season}. For each
+    season we compute deviation = team density − league baseline per tag,
+    then draw the team's most-defining tags (largest |deviation| anywhere
+    in the window) as lines against the league zero-line.
+    """
+    # Deviation matrix: tag -> {year: (dev_pp, density)}
+    dev: dict[str, dict[int, tuple[float, float]]] = {}
+    for yr, league in sorted(seasons_data.items()):
+        ident = (league.get(team) or {}).get(unit) or {}
+        density = ident.get("trait_density") or {}
+        base = (league.get("_baselines") or {}).get(unit) or {}
+        for tag in set(density) | set(base):
+            d = float(density.get(tag, 0) or 0)
+            b = float(base.get(tag, 0) or 0)
+            if d < 0.02 and b < 0.02:
+                continue   # micro-tags: noise, not identity
+            dev.setdefault(tag, {})[yr] = ((d - b) * 100, d * 100)
+
+    if not dev:
+        return empty_figure("No multi-season data for this team")
+
+    # The team's defining tags: largest |deviation| anywhere, seen ≥3 seasons
+    ranked = sorted(
+        (t for t in dev if len(dev[t]) >= 3),
+        key=lambda t: -max(abs(v[0]) for v in dev[t].values()),
+    )[:6]
+
+    years = sorted(seasons_data.keys())
+    fig = go.Figure()
+    fig.add_hline(y=0, line_color=COLORS["subtext"], line_width=1,
+                  line_dash="dot",
+                  annotation_text="league average",
+                  annotation_font=dict(size=10, color=COLORS["subtext"]),
+                  annotation_position="bottom right")
+
+    # Family color per tag — falls back to a rotating neutral-safe palette
+    _fallback = ["#60a5fa", "#f59e0b", "#34d399", "#a78bfa", "#f472b6", "#22d3ee"]
+    for i, tag in enumerate(ranked):
+        fam = None
+        # family isn't stored in the density map; color via known tag→family
+        color = TRAIT_TAG_COLORS.get(tag) or _fallback[i % len(_fallback)]
+        xs = [yr for yr in years if yr in dev[tag]]
+        ys = [dev[tag][yr][0] for yr in xs]
+        dens = [dev[tag][yr][1] for yr in xs]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines+markers", name=tag,
+            line=dict(color=color, width=2.4),
+            marker=dict(size=6),
+            connectgaps=False,
+            customdata=dens,
+            hovertemplate=(f"<b>{tag}</b> · %{{x}}<br>"
+                           "%{y:+.0f} pts vs league · %{customdata:.0f}% of unit"
+                           "<extra></extra>"),
+        ))
+
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=50, r=20, t=28, b=36)},
+        showlegend=True,
+        legend=dict(orientation="h", x=0, y=1.12,
+                    font=dict(size=11, color=COLORS["text"]),
+                    bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(tickmode="array", tickvals=years,
+                   tickfont=dict(color=COLORS["subtext"]),
+                   gridcolor=COLORS["border"]),
+        yaxis=dict(title="pts vs league",
+                   tickfont=dict(color=COLORS["subtext"]),
+                   title_font=dict(color=COLORS["subtext"], size=11),
+                   gridcolor=COLORS["border"], zeroline=False),
+        hovermode="x unified",
     )
     return fig
 
@@ -2623,14 +2711,13 @@ def batter_split_heatmap(portrait: dict) -> go.Figure:
         textfont=dict(size=9, color="#f9fafb"),
     ))
     fig.update_layout(
-        **_DARK_LAYOUT,
+        **{**_DARK_LAYOUT, "margin": dict(l=160, r=80, t=70, b=10)},
         title=dict(
             text="Batter Split Resistance — LHP vs RHP (gap size = red intensity)",
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
         xaxis=dict(side="top", tickfont=dict(color=COLORS["text"], size=11)),
         yaxis=dict(tickfont=dict(color=COLORS["text"], size=10), autorange="reversed"),
-        margin=dict(l=160, r=80, t=70, b=10),
     )
     return fig
 
