@@ -259,6 +259,86 @@ def _savant_pitching_aggregate(season: int, min_pa: int = 30) -> pd.DataFrame:
     return df
 
 
+# ---------------------------------------------------------------------------
+# Savant percentile columns → Statcast true rates
+# ---------------------------------------------------------------------------
+# The Savant leaderboard serves these columns as PERCENTILE RANKS (1–100), not
+# as rates or physical units — the same trap that had already been noticed for
+# k_percent/bb_percent and later for chase_percent. Measured across the whole
+# database, every one of them read min 1 / median ~50 / max 100: `exit_velocity`
+# had a median of 49 where it should be ~88 mph.
+#
+# Uniform percentiles are at least monotonic, so ranking survived — but any
+# ABSOLUTE threshold written against them is silently meaningless, which is
+# exactly how 26% of `elite speed` tags ended up on pitchers via sprint_speed.
+#
+# pitch_aggregates derives each one from raw Statcast as a true rate under an
+# `_sc` name; here the percentile version is dropped and the honest one takes
+# the canonical name, so the database and every downstream consumer get units
+# that mean what they say.
+_SC_REPLACEMENTS_BATTING: dict[str, str] = {
+    "exit_velo_sc":    "exit_velocity",
+    "hard_hit_sc_pct": "hard_hit_pct",
+    "barrel_sc_pct":   "barrel_pct",
+    "whiff_sc_pct":    "whiff_pct",
+    "chase_sc_pct":    "chase_pct",
+    "xwoba_sc":        "xwoba",
+    "xba_sc":          "xba",
+}
+_SAVANT_PERCENTILE_BATTING = [
+    "exit_velocity", "hard_hit_percent", "brl_percent", "whiff_percent",
+    "chase_percent", "xwoba", "xba",
+]
+
+_SC_REPLACEMENTS_PITCHING: dict[str, str] = {
+    "hard_hit_sc_pct":  "hard_hit_pct",
+    "barrel_sc_pct":    "barrel_pct",
+    "whiff_sc_pct":     "whiff_pct",
+    "xwoba_allowed_sc": "xwoba_allowed",
+    "fb_velo_sc":       "fb_velocity",
+}
+_SAVANT_PERCENTILE_PITCHING = [
+    "hard_hit_percent", "brl_percent", "whiff_percent", "fb_velocity", "xwoba",
+]
+
+# Statcast sprint speed is a running metric, not a pitch measurement, so it
+# cannot be re-derived from the pitch-level cache. It is also the one column
+# that is MIXED rather than uniformly converted: ~600 rows (pitchers who
+# batted, 2015–2020) hold a percentile while every other row holds ft/s.
+# Anything outside the physically possible band is therefore unrecoverable and
+# is nulled — those players simply miss the speed tags, which the `speed` tag
+# population already accounts for.
+SPRINT_SPEED_MIN_FTS = 20.0
+SPRINT_SPEED_MAX_FTS = 32.0
+
+
+def _apply_sc_replacements(df: pd.DataFrame, drop: list[str],
+                           rename: dict[str, str], label: str) -> pd.DataFrame:
+    """Drop the Savant percentile columns and promote the Statcast true-rate
+    `_sc` columns into their canonical names."""
+    present = [c for c in drop if c in df.columns]
+    df = df.drop(columns=present, errors="ignore")
+    usable = {src: dst for src, dst in rename.items() if src in df.columns}
+    df = df.rename(columns=usable)
+    log.info("%s — dropped %d Savant percentile cols, promoted %d Statcast rates",
+             label, len(present), len(usable))
+    return df
+
+
+def _sanitize_sprint_speed(df: pd.DataFrame) -> pd.DataFrame:
+    """Null sprint_speed values that cannot be feet per second."""
+    if "sprint_speed" not in df.columns:
+        return df
+    ss = pd.to_numeric(df["sprint_speed"], errors="coerce")
+    bad = ss.notna() & ~ss.between(SPRINT_SPEED_MIN_FTS, SPRINT_SPEED_MAX_FTS)
+    if bad.any():
+        log.warning("sprint_speed — nulled %d value(s) outside %.0f–%.0f ft/s "
+                    "(percentile contamination)",
+                    int(bad.sum()), SPRINT_SPEED_MIN_FTS, SPRINT_SPEED_MAX_FTS)
+    df["sprint_speed"] = ss.where(~bad)
+    return df
+
+
 def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
     """
     Merge Baseball Reference batting (traditional stats) with Baseball Savant
@@ -306,8 +386,12 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
         df = df.merge(batter_agg, on="key_mlbam", how="left")
         log.info("Pitch agg (batting) merged — %d / %d rows have gb_pct",
                  df["gb_pct"].notna().sum(), len(df))
+        df = _apply_sc_replacements(df, _SAVANT_PERCENTILE_BATTING,
+                                    _SC_REPLACEMENTS_BATTING, "batting")
     except Exception as exc:
         log.warning("Pitch aggregates (batting) unavailable: %s", exc)
+
+    df = _sanitize_sprint_speed(df)
 
     log.info("BRef+Savant batting %d — %d rows after merge", season, len(df))
     return df
@@ -367,6 +451,8 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30) -> pd.DataFrame:
         df = df.merge(pitcher_agg, on="key_mlbam", how="left")
         log.info("Pitch agg (pitching) merged — %d / %d rows have zone_pct",
                  df["zone_pct"].notna().sum(), len(df))
+        df = _apply_sc_replacements(df, _SAVANT_PERCENTILE_PITCHING,
+                                    _SC_REPLACEMENTS_PITCHING, "pitching")
     except Exception as exc:
         log.warning("Pitch aggregates (pitching) unavailable: %s", exc)
 

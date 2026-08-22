@@ -47,6 +47,67 @@ _SWING_MISS: frozenset[str] = frozenset({
     "swinging_strike", "swinging_strike_blocked", "missed_bunt",
 })
 
+# PA-ending events that are NOT at-bats — the xBA denominator excludes them.
+_NON_AB: frozenset[str] = frozenset({
+    "walk", "intent_walk", "hit_by_pitch", "sac_fly", "sac_bunt",
+    "catcher_interf", "sac_fly_double_play", "truncated_pa",
+})
+
+# Statcast's launch_speed_angle is a 1–6 batted-ball classification; 6 is the
+# barrel. Validated on 2023: 10,035 barrels / 123,874 BBE = 8.1%, which matches
+# the published league barrel rate.
+_BARREL_CODE = 6
+
+# Hard-hit is defined by MLB as an exit velocity of at least 95 mph.
+_HARD_HIT_MPH = 95.0
+
+# Pitch types counted as fastballs for fb_velocity. Cutters are deliberately
+# excluded — they run several mph below a pitcher's true fastball and would
+# drag the average for anyone who throws one.
+_FASTBALLS: frozenset[str] = frozenset({"FF", "SI", "FT"})
+
+
+def _contact_quality_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds the batted-ball and expected-outcome flag columns shared by the batter
+    and pitcher aggregates. Mutates and returns `df`.
+
+    These metrics exist because the Savant leaderboard columns of the same name
+    hold PERCENTILE RANKS (1–100), not rates — the same trap that made
+    `chase_percent` unusable. Everything computed here is a true rate or a real
+    physical unit, so absolute thresholds downstream are safe to write.
+    """
+    # A batted-ball event is a ball put IN PLAY. Statcast also records
+    # launch_speed on foul balls, which are weakly hit by nature — counting
+    # them drags average exit velocity ~6 mph below the published figure and
+    # roughly halves hard-hit and barrel rate. bb_type is the honest gate.
+    ls    = pd.to_numeric(df["launch_speed"], errors="coerce")
+    is_bb = df["bb_type"].notna() & ls.notna()
+    df["_bbe"]    = is_bb
+    df["_ls"]     = ls.where(is_bb)
+    df["_hard"]   = is_bb & (ls >= _HARD_HIT_MPH)
+    df["_barrel"] = pd.to_numeric(df["launch_speed_angle"], errors="coerce") == _BARREL_CODE
+
+    # xwOBA — Statcast's estimate on batted balls, the actual wOBA value on
+    # everything else (a strikeout is worth 0 and a walk ~0.69 no matter how
+    # they looked), summed over the standard wOBA denominator.
+    est_woba = pd.to_numeric(df["estimated_woba_using_speedangle"], errors="coerce")
+    act_woba = pd.to_numeric(df["woba_value"], errors="coerce")
+    den      = pd.to_numeric(df["woba_denom"], errors="coerce")
+    df["_woba_den"] = den.fillna(0.0)
+    df["_woba_num"] = (est_woba.fillna(act_woba).fillna(0.0)
+                       * (den.notna()).astype(float))
+
+    # xBA — expected hits over at-bats. A strikeout has no estimated_ba and
+    # correctly contributes 0.
+    events = df["events"].fillna("")
+    is_ab  = (events != "") & ~events.isin(_NON_AB)
+    df["_ab"]      = is_ab
+    df["_xba_num"] = (pd.to_numeric(df["estimated_ba_using_speedangle"],
+                                    errors="coerce").fillna(0.0)
+                      * is_ab.astype(float))
+    return df
+
 # ---------------------------------------------------------------------------
 # In-process cache keyed by season
 # ---------------------------------------------------------------------------
@@ -63,10 +124,20 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
     Per-batter aggregates from pitch-level Statcast.
 
     Returns DataFrame with columns:
-        key_mlbam, gb_pct, fps_pct, pitches_per_pa, zone_swing_pct, contact_pct
+        key_mlbam, gb_pct, fps_pct, pitches_per_pa, zone_swing_pct, contact_pct,
+        chase_sc_pct, exit_velo_sc, hard_hit_sc_pct, barrel_sc_pct,
+        whiff_sc_pct, xwoba_sc, xba_sc
+
+    The `_sc` suffix marks a metric derived here from raw Statcast, as opposed
+    to the identically-named Savant leaderboard column, which is a percentile
+    rank rather than a rate. seed.py maps the `_sc` columns into the database.
     """
     df = sc[["batter", "game_pk", "at_bat_number", "pitch_number",
-             "description", "bb_type", "zone"]].copy()
+             "description", "bb_type", "zone",
+             "launch_speed", "launch_speed_angle", "events", "woba_value",
+             "woba_denom", "estimated_woba_using_speedangle",
+             "estimated_ba_using_speedangle"]].copy()
+    df = _contact_quality_flags(df)
 
     # Ground ball flag
     df["_is_gb"]   = df["bb_type"] == "ground_ball"
@@ -104,6 +175,14 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
         swing_miss_n  = ("_is_swing_miss","sum"),
         oz_n          = ("_oz",           "sum"),
         oz_swing_n    = ("_oz_swing",     "sum"),
+        bbe_n         = ("_bbe",          "sum"),
+        ls_sum        = ("_ls",           "sum"),
+        hard_n        = ("_hard",         "sum"),
+        barrel_n      = ("_barrel",       "sum"),
+        woba_num      = ("_woba_num",     "sum"),
+        woba_den      = ("_woba_den",     "sum"),
+        xba_num       = ("_xba_num",      "sum"),
+        ab_n          = ("_ab",           "sum"),
     )
 
     # PA count = distinct (game_pk, at_bat_number) per batter
@@ -124,8 +203,18 @@ def _batter_aggregates(sc: pd.DataFrame, min_pa: int = 50) -> pd.DataFrame:
     agg["contact_pct"]    = np.where(agg["swing_n"] > 0,     (agg["swing_n"] - agg["swing_miss_n"]) / agg["swing_n"], np.nan)
     agg["chase_sc_pct"]   = np.where(agg["oz_n"] > 0,        agg["oz_swing_n"] / agg["oz_n"],                         np.nan)
 
+    # True rates / real units — see _contact_quality_flags.
+    agg["exit_velo_sc"]    = np.where(agg["bbe_n"]    > 0, agg["ls_sum"]   / agg["bbe_n"],   np.nan)
+    agg["hard_hit_sc_pct"] = np.where(agg["bbe_n"]    > 0, agg["hard_n"]   / agg["bbe_n"],   np.nan)
+    agg["barrel_sc_pct"]   = np.where(agg["bbe_n"]    > 0, agg["barrel_n"] / agg["bbe_n"],   np.nan)
+    agg["whiff_sc_pct"]    = np.where(agg["swing_n"]  > 0, agg["swing_miss_n"] / agg["swing_n"], np.nan)
+    agg["xwoba_sc"]        = np.where(agg["woba_den"] > 0, agg["woba_num"] / agg["woba_den"], np.nan)
+    agg["xba_sc"]          = np.where(agg["ab_n"]     > 0, agg["xba_num"]  / agg["ab_n"],    np.nan)
+
     result = agg[["gb_pct", "fps_pct", "pitches_per_pa", "zone_swing_pct",
-                  "contact_pct", "chase_sc_pct"]].reset_index()
+                  "contact_pct", "chase_sc_pct", "exit_velo_sc",
+                  "hard_hit_sc_pct", "barrel_sc_pct", "whiff_sc_pct",
+                  "xwoba_sc", "xba_sc"]].reset_index()
     result = result.rename(columns={"batter": "key_mlbam"})
     log.info("Batter pitch aggregates — %d players (min_pa=%d)", len(result), min_pa)
     return result
@@ -147,12 +236,32 @@ def _pitcher_aggregates(sc: pd.DataFrame, min_bf: int = 30) -> pd.DataFrame:
 
     Returns DataFrame with columns:
         key_mlbam, gb_pct, zone_pct, csw_pct, pitches_per_bf,
-        avg_spin_rate, arsenal_diversity
+        avg_spin_rate, arsenal_diversity, hard_hit_sc_pct, barrel_sc_pct,
+        whiff_sc_pct, xwoba_allowed_sc, fb_velo_sc
+
+    See _batter_aggregates for what the `_sc` suffix means.
     """
     df = sc[["pitcher", "game_pk", "at_bat_number", "batter",
              "pitch_number", "description", "bb_type",
              "plate_x", "plate_z", "sz_top", "sz_bot",
-             "release_spin_rate", "pitch_type"]].copy()
+             "release_spin_rate", "pitch_type",
+             "launch_speed", "launch_speed_angle", "events", "woba_value",
+             "woba_denom", "estimated_woba_using_speedangle",
+             "estimated_ba_using_speedangle", "release_speed"]].copy()
+    df = _contact_quality_flags(df)
+
+    # Swing / whiff counts (the batter aggregate computes these too, but the
+    # pitcher grouping needs its own).
+    df["_is_swing"]      = df["description"].isin(_SWUNG)
+    df["_is_swing_miss"] = df["description"].isin(_SWING_MISS)
+
+    # Fastball velocity in real mph — the Savant fb_velocity column is a
+    # percentile rank, so `elite velo` / `soft tosser` had no honest unit to
+    # gate on.
+    _rs = pd.to_numeric(df["release_speed"], errors="coerce")
+    _is_fb = df["pitch_type"].isin(_FASTBALLS) & _rs.notna()
+    df["_fb_velo"] = _rs.where(_is_fb)
+    df["_is_fb"]   = _is_fb
 
     # Ground ball flag
     df["_is_gb"]   = df["bb_type"] == "ground_ball"
@@ -186,6 +295,15 @@ def _pitcher_aggregates(sc: pd.DataFrame, min_bf: int = 30) -> pd.DataFrame:
         total_pitches = ("pitch_number",  "count"),
         spin_sum      = ("_spin",         "sum"),
         spin_n        = ("_has_spin",     "sum"),
+        swing_n       = ("_is_swing",     "sum"),
+        swing_miss_n  = ("_is_swing_miss","sum"),
+        bbe_n         = ("_bbe",          "sum"),
+        hard_n        = ("_hard",         "sum"),
+        barrel_n      = ("_barrel",       "sum"),
+        woba_num      = ("_woba_num",     "sum"),
+        woba_den      = ("_woba_den",     "sum"),
+        fb_velo_sum   = ("_fb_velo",      "sum"),
+        fb_n          = ("_is_fb",        "sum"),
     )
 
     # BF count = distinct (game_pk, at_bat_number, batter) per pitcher
@@ -205,12 +323,21 @@ def _pitcher_aggregates(sc: pd.DataFrame, min_bf: int = 30) -> pd.DataFrame:
     agg["pitches_per_bf"] = np.where(agg["bf_n"]        > 0, agg["total_pitches"] / agg["bf_n"],              np.nan)
     agg["avg_spin_rate"]  = np.where(agg["spin_n"]      > 0, agg["spin_sum"] / agg["spin_n"],                 np.nan)
 
+    # True rates / real units — see _contact_quality_flags.
+    agg["hard_hit_sc_pct"]   = np.where(agg["bbe_n"]    > 0, agg["hard_n"]   / agg["bbe_n"],   np.nan)
+    agg["barrel_sc_pct"]     = np.where(agg["bbe_n"]    > 0, agg["barrel_n"] / agg["bbe_n"],   np.nan)
+    agg["whiff_sc_pct"]      = np.where(agg["swing_n"]  > 0, agg["swing_miss_n"] / agg["swing_n"], np.nan)
+    agg["xwoba_allowed_sc"]  = np.where(agg["woba_den"] > 0, agg["woba_num"] / agg["woba_den"], np.nan)
+    agg["fb_velo_sc"]        = np.where(agg["fb_n"]     > 0, agg["fb_velo_sum"] / agg["fb_n"], np.nan)
+
     # Arsenal diversity — Shannon entropy of pitch mix
     entropy = _arsenal_entropy(df)
     agg = agg.join(entropy, how="left")
 
     result = agg[["gb_pct", "zone_pct", "csw_pct", "pitches_per_bf",
-                  "avg_spin_rate", "arsenal_diversity"]].reset_index()
+                  "avg_spin_rate", "arsenal_diversity", "hard_hit_sc_pct",
+                  "barrel_sc_pct", "whiff_sc_pct", "xwoba_allowed_sc",
+                  "fb_velo_sc"]].reset_index()
     result = result.rename(columns={"pitcher": "key_mlbam"})
     log.info("Pitcher pitch aggregates — %d pitchers (min_bf=%d)", len(result), min_bf)
     return result

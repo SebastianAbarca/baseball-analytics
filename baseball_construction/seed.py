@@ -70,12 +70,16 @@ BATTING_COL_MAP = {
     "BB_rate":          "bb_rate",
     "SB":               "sb",
     "CS":               "cs",
+    # These arrive already canonicalised by ingest._apply_sc_replacements —
+    # Statcast true rates under the Savant columns' old names. Do NOT point
+    # these back at the Savant column names (hard_hit_percent, brl_percent,
+    # whiff_percent, chase_percent, ...): those are percentile ranks, not rates.
     "xwoba":            "xwoba",
     "xba":              "xba",
-    "hard_hit_percent": "hard_hit_pct",
-    "brl_percent":      "barrel_pct",
-    "whiff_percent":    "whiff_pct",
-    "chase_percent":    "chase_pct",
+    "hard_hit_pct":     "hard_hit_pct",
+    "barrel_pct":       "barrel_pct",
+    "whiff_pct":        "whiff_pct",
+    "chase_pct":        "chase_pct",
     "sprint_speed":     "sprint_speed",
     "exit_velocity":    "exit_velocity",
     "join_source":      "join_source",
@@ -97,10 +101,11 @@ PITCHING_COL_MAP = {
     "BF":               "bf",
     "K_rate_pitch":     "k_rate",
     "BB_rate_pitch":    "bb_rate",
-    "xwoba":            "xwoba_allowed",
-    "hard_hit_percent": "hard_hit_pct",
-    "brl_percent":      "barrel_pct",
-    "whiff_percent":    "whiff_pct",
+    # As with batting — canonicalised upstream to Statcast true rates.
+    "xwoba_allowed":    "xwoba_allowed",
+    "hard_hit_pct":     "hard_hit_pct",
+    "barrel_pct":       "barrel_pct",
+    "whiff_pct":        "whiff_pct",
     "fb_velocity":      "fb_velocity",
     "join_source":      "join_source",
     # Statcast pitch aggregates + BRef WAR/FIP
