@@ -21,7 +21,8 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 import numpy as np
 import pandas as pd
 
-from team_portrait import build_team_portrait, PORTRAIT_SCHEMA_VERSION  # noqa: E402
+from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,  # noqa: E402
+                           TAG_POPULATION, POP_ALL)
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -70,6 +71,12 @@ _FP_UNITS = [
     ("bullpen",  "bullpen_arms", "bf", 60),
 ]
 _FP_MIN_DEV = 0.08   # |deviation| floor to count as identity-defining
+# A team needs a real eligible pool before a tag can define it. Without this,
+# a reliever who is the only arm with tempo data reads as "slow pitcher, 84%
+# above league" off a population of one. Either the pool is big enough to mean
+# something, or more than one player carries the tag.
+_FP_MIN_QUALIFIERS = 3
+_FP_MIN_CARRIERS_SMALL_POOL = 2
 _FP_TOP_N   = 3      # max fingerprint tags per unit
 
 
@@ -80,7 +87,7 @@ def _compute_fingerprints(league: dict[str, dict],
     top-level "_baselines" entry (league mean density per tag per unit).
     A team with an empty fingerprint is league-typical — that is itself
     information, not a failure.
-    rosters — {team: {unit: [(tag_set, weight), ...]}} for breadth counts.
+    rosters — {team: {unit: [(tag_set, weight, population_set), ...]}}.
     """
     baselines: dict[str, dict[str, float]] = {}
     teams = [t for t in league if not t.startswith("_")]
@@ -98,29 +105,114 @@ def _compute_fingerprints(league: dict[str, dict],
         baselines[unit] = {k: round(v, 4) for k, v in
                            sorted(base.items(), key=lambda kv: -kv[1])}
 
+        # Spread of each tag ACROSS teams. Raw deviations are not comparable
+        # between tags: a catcher tag is measured on ~3 players per team and
+        # swings ±0.8, while a lineup-wide tag moves ±0.15. Ranking on raw
+        # deviation therefore hands every fingerprint to the smallest
+        # populations. Dividing by the tag's own cross-team spread asks the
+        # only question that transfers: how unusual is this team FOR THIS TAG.
+        sd: dict[str, float] = {}
+        for tag in all_tags:
+            vals = [float(((league[t].get(unit) or {}).get("trait_density") or {})
+                          .get(tag, 0.0)) for t in teams]
+            mu = sum(vals) / len(vals)
+            sd[tag] = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
+
         for team in teams:
             ident = league[team]
             dens = (ident.get(unit) or {}).get("trait_density") or {}
+            roster = (rosters.get(team) or {}).get(unit) or []
             devs = []
             for tag in all_tags:
                 d = float(dens.get(tag, 0.0)) - base[tag]
-                if abs(d) < _FP_MIN_DEV:
+                if abs(d) < _FP_MIN_DEV or not sd[tag]:
                     continue
-                roster = (rosters.get(team) or {}).get(unit) or []
-                qual = [(tags, w) for tags, w in roster if w >= w_floor]
-                carriers = sum(1 for tags, _ in qual if tag in tags)
+                # Breadth is counted within the tag's ELIGIBLE population —
+                # "0 of 13 regulars are good blockers" is meaningless when 11
+                # of those 13 never crouch behind the plate.
+                pop = TAG_POPULATION.get(tag, POP_ALL)
+                qual = [r for r in roster
+                        if r[1] >= w_floor and (pop == POP_ALL or pop in r[2])]
+                carriers = sum(1 for r in qual if tag in r[0])
+                if not carriers:
+                    continue   # a fingerprint names what a team HAS
+                if (len(qual) < _FP_MIN_QUALIFIERS
+                        and carriers < _FP_MIN_CARRIERS_SMALL_POOL):
+                    continue   # population of one is coverage, not identity
                 devs.append({
                     "tag":        tag,
                     "density":    round(float(dens.get(tag, 0.0)), 4),
                     "baseline":   round(base[tag], 4),
                     "deviation":  round(d, 4),
+                    "z":          round(d / sd[tag], 3),
                     "carriers":   carriers,
                     "qualifiers": len(qual),
                 })
-            devs.sort(key=lambda x: -abs(x["deviation"]))
+            devs.sort(key=lambda x: -abs(x["z"]))
             ident.setdefault("fingerprint", {})[unit] = devs[:_FP_TOP_N]
 
     league["_baselines"] = baselines
+
+
+_POS_TOP_N = 3   # neighbours reported per unit
+
+
+def _compute_positions(league: dict[str, dict]) -> None:
+    """
+    Mutates `league`: adds per-team `neighbours[unit]` and `uniqueness[unit]`.
+
+    This is what replaced the headline labels. A label assigned a team to a
+    bucket using a hand-chosen cutoff ("power_share >= 0.40 → Power-Driven
+    Lineup"); position says where the team actually sits relative to everyone
+    else, with no thresholds at all.
+
+    Each team is a vector of per-tag DEVIATIONS from the league mean (the same
+    quantity the fingerprint reports, but over the full tag vocabulary rather
+    than the top 3). Similarity is cosine — it asks whether two teams deviate
+    in the same DIRECTION, not whether they deviate by the same amount, so a
+    mild contact team and an extreme one read as similar in kind.
+
+    `uniqueness` is 1 − (mean cosine similarity to every other team), scaled to
+    0–100 across the league: a team nobody resembles scores high. Both are
+    descriptive positions, not rankings of quality.
+    """
+    teams = [t for t in league if not t.startswith("_")]
+    baselines = league.get("_baselines") or {}
+
+    for unit, _pk, _wk, _wf in _FP_UNITS:
+        base = baselines.get(unit) or {}
+        tags = sorted(base)
+        if not tags or len(teams) < 2:
+            continue
+
+        vecs: dict[str, np.ndarray] = {}
+        for t in teams:
+            dens = (league[t].get(unit) or {}).get("trait_density") or {}
+            vecs[t] = np.array([float(dens.get(tag, 0.0)) - float(base[tag])
+                                for tag in tags], dtype=float)
+
+        def _cos(a: np.ndarray, b: np.ndarray) -> float:
+            na, nb = np.linalg.norm(a), np.linalg.norm(b)
+            return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
+
+        sims = {t: {o: _cos(vecs[t], vecs[o]) for o in teams if o != t}
+                for t in teams}
+        mean_sim = {t: (sum(s.values()) / len(s)) if s else 0.0
+                    for t, s in sims.items()}
+
+        raw = {t: 1.0 - mean_sim[t] for t in teams}
+        lo, hi = min(raw.values()), max(raw.values())
+        span = (hi - lo) or 1.0
+
+        for t in teams:
+            near = sorted(sims[t].items(), key=lambda kv: -kv[1])[:_POS_TOP_N]
+            league[t].setdefault("neighbours", {})[unit] = [
+                {"team": o, "similarity": round(s, 4)} for o, s in near
+            ]
+            league[t].setdefault("uniqueness", {})[unit] = {
+                "score":    round((raw[t] - lo) / span * 100.0, 1),
+                "mean_sim": round(mean_sim[t], 4),
+            }
 
 
 def main(season: int):
@@ -166,13 +258,15 @@ def main(season: int):
             rosters[team] = {
                 unit: [
                     ({t.get("tag") for t in (pl.get("traits") or [])},
-                     float(pl.get(weight_key) or 0))
+                     float(pl.get(weight_key) or 0),
+                     set(pl.get("populations") or [POP_ALL]))
                     for pl in (players.get(players_key) or [])
                 ]
                 for unit, players_key, weight_key, _ in _FP_UNITS
             }
 
     _compute_fingerprints(league, rosters)
+    _compute_positions(league)
 
     out_path = Path(str(_LEAGUE_CACHE).format(season=season))
     out_path.write_text(json.dumps(league, indent=2, default=str))

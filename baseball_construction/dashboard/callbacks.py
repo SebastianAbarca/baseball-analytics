@@ -1076,11 +1076,6 @@ def league_identity_board(season):
         rotation = identity.get("rotation") or {}
         bullpen  = identity.get("bullpen") or {}
         fit      = identity.get("fit") or {}
-        mix = "—"
-        if offense.get("power_share") is not None:
-            mix = (f"P {offense.get('power_share', 0):.0%} · "
-                   f"C {offense.get('contact_share', 0):.0%} · "
-                   f"CH {offense.get('complete_share', 0):.0%}")
         rot_density = rotation.get("trait_density") or {}
         top_traits = " · ".join(f"{t} {v:.0%}"
                                 for t, v in list(rot_density.items())[:3]) or "—"
@@ -1093,14 +1088,18 @@ def league_identity_board(season):
         fp_items.sort(key=lambda x: -x[0])
         fp_str = " · ".join(t for _, t in fp_items[:3]) or "league-typical"
 
+        # Headline labels retired — a team is described by where it sits
+        # relative to the league, not by which bucket a cutoff assigned it to.
+        nb = (identity.get("neighbours") or {}).get("offense") or []
+        uq = (identity.get("uniqueness") or {}).get("offense") or {}
         rows.append({
             "Team":              team,
             "Fingerprint":       fp_str,
-            "Offense Identity":  offense.get("label", "—"),
-            "Pwr/Cnt/Complete":  mix,
-            "Rotation Identity": rotation.get("label", "—"),
+            "Plays Like":        ", ".join(x["team"] for x in nb[:2]) or "—",
+            "Distinctiveness":   uq.get("score"),
+            "Power Share":       (f"{offense['power_share']:.0%}"
+                                  if offense.get("power_share") is not None else "—"),
             "Top Rotation Traits": top_traits,
-            "Aces":              rotation.get("ace_count", 0),
             "Bullpen Mechanism": bullpen.get("out_mechanism") or "—",
             "Fit Notes":         " ".join(v for v in fit.values() if v) or "—",
         })
@@ -1108,11 +1107,10 @@ def league_identity_board(season):
     columns = [
         {"name": "Team",              "id": "Team"},
         {"name": "Fingerprint",       "id": "Fingerprint"},
-        {"name": "Offense Identity",  "id": "Offense Identity"},
-        {"name": "Pwr/Cnt/Complete",  "id": "Pwr/Cnt/Complete"},
-        {"name": "Rotation Identity", "id": "Rotation Identity"},
+        {"name": "Plays Like",        "id": "Plays Like"},
+        {"name": "Distinctiveness",   "id": "Distinctiveness"},
+        {"name": "Power Share",       "id": "Power Share"},
         {"name": "Top Rotation Traits", "id": "Top Rotation Traits"},
-        {"name": "Aces",              "id": "Aces"},
         {"name": "Bullpen Mechanism", "id": "Bullpen Mechanism"},
         {"name": "Fit Notes",         "id": "Fit Notes"},
     ]

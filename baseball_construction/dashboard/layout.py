@@ -198,21 +198,22 @@ def _archetype_guide_card() -> dbc.Card:
                 "can't mislead."
             ),
             "gates": [
-                "power bat — spectrum ≥ 60 with ISO ≥ 60th pct, OR ISO ≥ 85th pct outright",
-                "contact bat — spectrum ≤ 40 with AVG ≥ 50th pct",
-                "middle of the spectrum — no tag (a valid, ordinary state)",
+                "no tags come off the spectrum — a ratio cannot describe a hitter "
+                "who is moderate in both, which is where doubles hitters live",
+                "kept as a continuous field for the Scout search band",
             ],
-            "examples": "power bat: Austin Riley, d'Arnaud 2023 · contact bat: Dubón, Bregman 2023",
+            "examples": "0 = Arraez · 100 = Gallo · doubles hitters sit near the middle",
         },
         {
             "code": "BAT", "color": "#f97316", "name": "Bat traits",
-            "desc": "Production shape beyond the spectrum tails.",
+            "desc": "Production shape, measured directly rather than as a ratio.",
             "gates": [
+                "power bat — ISO ≥ 85th pct (absorbs the old hard contact tag, which it contained 82% of)",
                 "plus power — ISO ≥ 60th pct in a non-power-bat (suppressed by gap hitter)",
-                "gap hitter — spray-confirmed doubles/triples into the gaps (XB ≥ 60th + gap tendency ≥ 55th)",
-                "hard contact / weak contact — Barrel% + HardHit% composite top/bottom 30%",
+                "gap hitter — doubles/triples into the gaps WITHOUT home-run power (XB ≥ 60th + gap tendency ≥ 55th + HR/FB ≤ 70th)",
+                "weak contact — Barrel% + HardHit% composite bottom 30%",
             ],
-            "examples": "gap hitter: Michael Harris 2023 · hard contact: Yordan, Ozuna 2023",
+            "examples": "gap hitter now means doubles, not homers",
         },
         {
             "code": "APPR", "color": "#22c55e", "name": "Approach traits",
@@ -247,18 +248,19 @@ def _archetype_guide_card() -> dbc.Card:
     # ── Athleticism / luck + pitcher trait families ──────────────────────────
     MODIFIERS = [
         {
-            "tag": "elite speed / fast / station-to-station / extra base taker / table setter / disruptive / chaotic / everyday player / super-utility", "color": "#a78bfa",
+            "tag": "elite speed / fast / station-to-station / high|low steal attempts / high|low steal rate / extra base taker / everyday player / super-utility", "color": "#a78bfa",
             "desc": (
-                "Athleticism, baserunning and roster role. extra base taker = "
-                "top-15% rate of taking the extra base on hits (1st-to-3rd "
-                "counts in the evidence). super-utility = real innings at 4+ "
-                "positions; every hitter also carries a home position. "
-                "Speed tiers from raw sprint speed "
-                "(elite ≥ 29 ft/s, fast ≥ 28). table setter = on-base + speed without "
-                "power-threat ISO. disruptive = efficient, frequent steals (net positive); "
-                "chaotic = frequent but runs into outs."
+                "Speed is a tool; running is a choice; getting there safely is a "
+                "result — so they are separate tags. steal attempts = how often he "
+                "goes (top/bottom 15% of attempt rate). steal rate = how often he "
+                "makes it (≥80% / ≤65%, min 10 attempts). The old disruptive / "
+                "chaotic pair blended the two. extra base taker = top-15% rate of "
+                "taking the extra base on hits; runners thrown out are not "
+                "recorded, so it measures willingness rather than success. "
+                "Speed tiers from raw sprint speed (elite ≥ 29 ft/s, fast ≥ 28). "
+                "super-utility = real innings at 4+ positions."
             ),
-            "examples": "elite speed: Witt Jr., Peña · disruptive: Acuña 2023 · chaotic: Peña 2023",
+            "examples": "elite speed: Witt Jr., Peña",
         },
         {
             "tag": "lucky / unlucky", "color": "#fbbf24",
@@ -809,11 +811,19 @@ def scout_tab() -> dbc.Tab:
 
     # Hitter trait tags (hitter_traits.py) — search requires ALL selected
     TRAIT_TAGS = [
-        "complete", "power bat", "contact bat", "plus power", "gap hitter",
-        "hard contact", "weak contact",
-        "walk machine", "high-K", "elite discipline", "free swinger", "aggressive",
-        "elite speed", "fast", "table setter", "disruptive", "chaotic",
-        "lucky", "unlucky",
+        "power bat", "plus power", "gap hitter", "weak contact",
+        "high-K", "rarely strikes out",
+        "patient", "free swinger", "walk machine", "aggressive",
+        "pull-heavy", "oppo bat", "air-ball bat", "ground-ball bat",
+        "elite speed", "fast", "station-to-station",
+        "high steal attempts", "low steal attempts",
+        "high steal rate", "low steal rate", "extra base taker",
+        "elite defender", "plus defender", "defensive liability",
+        "cannon arm", "super-utility",
+        "elite framer", "poor framer", "good blocker", "bad blocker", "quick pop",
+        "left-handed hitter", "right-handed hitter", "switch hitter",
+        "platoon liability", "reverse split",
+        "everyday player", "lucky", "unlucky",
     ]
 
     return dbc.Tab(label="Scout", tab_id="tab-scout", children=[

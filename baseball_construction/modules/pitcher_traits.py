@@ -125,7 +125,7 @@ def _trait(tag: str, family: str, value: float, pct: Optional[float],
     return {
         "tag":      tag,
         "family":   family,
-        "value":    round(float(value), 2),
+        "value":    round(float(value), 2) if value is not None else None,
         "pct":      round(float(pct), 1) if pct is not None else None,
         "evidence": evidence,
     }
@@ -389,10 +389,8 @@ def deception_traits(
                 traits.append(_trait("high spin efficiency", "deception", eff, ep,
                                      f"spin efficiency {ep:.0f}th pct — movement "
                                      "extracts nearly all of the raw spin"))
-            elif float(ep) <= GYRO_HEAVY_PCT:
-                traits.append(_trait("gyro-heavy", "deception", eff, ep,
-                                     f"spin efficiency {ep:.0f}th pct — bullet-spin "
-                                     "profile (late, depth-y break)"))
+            # `gyro-heavy` retired: P(slider out pitch | gyro-heavy) = 0.79 —
+            # gyro spin IS slider spin, so the tag mostly restated the pitch.
 
     return traits
 
@@ -563,15 +561,10 @@ def outcome_traits(metrics: Optional[dict]) -> list[dict]:
     # Ace badge — elite across the board, not one loud number
     vals = {key: _get(key) for key in ACE_KEYS}
     present = {key: v for key, v in vals.items() if v is not None}
-    if len(present) >= 4:
-        composite = float(np.mean(list(present.values())))
-        elite = [key for key, v in present.items() if v >= ACE_ELITE_TRAIT_PCT]
-        if composite >= ACE_COMPOSITE_MIN and len(elite) >= ACE_MIN_ELITE:
-            traits.append(_trait("ace", "outcome", composite, composite,
-                                 f"dominance composite {composite:.0f} with "
-                                 f"{len(elite)} elite traits "
-                                 f"({', '.join(e.replace('_pct','') for e in elite)})"))
-
+    # `ace` retired: an evaluative verdict rather than a description, and it
+    # fired on 10.8% of relievers against 8.2% of starters — more "aces" in
+    # bullpens than rotations. The dominance evidence lives in the individual
+    # outcome tags it was composited from.
     return traits
 
 
@@ -680,6 +673,13 @@ def platoon_traits(splits: Optional[dict]) -> list[dict]:
     if throws not in ("L", "R"):
         return traits
 
+    # Handedness is an ATTRIBUTE — meaningless alone, but a staff's L/R mix is
+    # a real roster-construction fact that was previously invisible.
+    traits.append(_trait(
+        "left-handed pitcher" if throws == "L" else "right-handed pitcher",
+        "handedness", None, None,
+        f"throws {'left' if throws == 'L' else 'right'}-handed"))
+
     same_lbl = "vs_lhh" if throws == "L" else "vs_rhh"
     opp_lbl  = "vs_rhh" if throws == "L" else "vs_lhh"
     same, opp = sp.get(same_lbl) or {}, sp.get(opp_lbl) or {}
@@ -775,11 +775,11 @@ def build_pitcher_traits(
     if tp is not None and not (isinstance(tp, float) and np.isnan(tp)):
         secs = t.get("tempo_empty_s")
         if float(tp) <= QUICK_PITCHER_PCT:
-            traits.append(_trait("quick pitcher", "mechanics", secs, tp,
+            traits.append(_trait("quick pitcher", "sequencing", secs, tp,
                                  f"{secs:.1f}s between pitches, bases empty — "
                                  "among the fastest workers"))
         elif float(tp) >= SLOW_PITCHER_PCT:
-            traits.append(_trait("slow pitcher", "mechanics", secs, tp,
+            traits.append(_trait("slow pitcher", "sequencing", secs, tp,
                                  f"{secs:.1f}s between pitches, bases empty — "
                                  "among the slowest workers"))
 
@@ -790,7 +790,7 @@ def build_pitcher_traits(
             and rc.get("opps", 0) >= CONTROLS_RUNNERS_MIN_OPPS
             and float(rcp) <= CONTROLS_RUNNERS_PCT):
         rate = rc.get("advance_rate") or 0
-        traits.append(_trait("controls runners", "outcome", rate, rcp,
+        traits.append(_trait("controls runners", "running-game", rate, rcp,
                              f"runners moved mid-PA on just {rate:.1%} of "
                              f"{rc.get('opps', 0)} chances (steals, WP and PB "
                              "included)"))

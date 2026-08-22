@@ -46,7 +46,7 @@ sys.path.insert(0, str(_HERE))
 # Bump whenever the shape of the portrait dict returned by build_team_portrait
 # changes (new top-level keys, renamed fields, etc.) — callers use this to
 # detect and discard stale cached/stored portraits built against an older shape.
-PORTRAIT_SCHEMA_VERSION = 16
+PORTRAIT_SCHEMA_VERSION = 18
 
 from ingest import (
     pull_statcast_range,
@@ -1020,11 +1020,26 @@ def _classify_hitters(
                 catching=(catcher_map or {}).get(int(player_id)),
                 advancement=(advancement_map or {}).get(int(player_id)),
                 positions=(positions_map or {}).get(int(player_id)),
-                pa=int(row.get("PA") or row.get("pa") or 0),
+                pa=int(_nz(row.get("PA")) or _nz(row.get("pa"))),
             )
         except Exception as _ht_exc:
             log.warning("hitter traits failed for %s: %s", player_id, _ht_exc)
             profile["traits"], profile["spectrum"] = [], None
+
+        # Eligible-population membership — the denominator each tag is scored
+        # against in _trait_density (see TAG_POPULATION).
+        profile["populations"] = _hitter_populations(
+            sprint_raw=sprint_raw,
+            season_metrics=season_metrics,
+            catching=(catcher_map or {}).get(int(player_id)),
+            advancement=(advancement_map or {}).get(int(player_id)),
+            splits=(split_map or {}).get(int(player_id)),
+            positions=(positions_map or {}).get(int(player_id)),
+            pa=int(_nz(row.get("PA")) or _nz(row.get("pa"))),
+            metrics=metrics,
+            attempt_rate_pct=att_pct,
+            attempts=int(_nz(row.get("SB", 0))) + int(_nz(row.get("CS", 0))),
+        )
 
         # Store curated percentile metrics for the interactive player chart.
         # Each raw_key is the exact key that _classify_hitters puts in `metrics`
@@ -1238,6 +1253,12 @@ def _classify_pitchers(
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
                 profile["traits"] = []
+            profile["populations"] = _pitcher_populations(
+                player_id, True, league_mechanics,
+                tempo=(tempo_map or {}).get(player_id),
+                splits=(pitcher_splits or {}).get(player_id),
+                runner_control=(runner_ctrl_map or {}).get(player_id),
+            )
             # Archetype boxes retired — traits are the identity layer now.
             # modifiers (platoon/command/arsenal/ace) is fully redundant with
             # the trait families and is dropped from the portrait.
@@ -1304,6 +1325,12 @@ def _classify_pitchers(
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
                 bullpen_arms[-1]["traits"] = []
+            bullpen_arms[-1]["populations"] = _pitcher_populations(
+                player_id, False, league_mechanics,
+                tempo=(tempo_map or {}).get(player_id),
+                splits=(pitcher_splits or {}).get(player_id),
+                runner_control=(runner_ctrl_map or {}).get(player_id),
+            )
 
     # Build collective bullpen profile from BF-weighted mean metrics
     bullpen_profile: dict = {}
@@ -1904,8 +1931,8 @@ def _compute_pitching_projection(
 #   complete— PA share carrying `complete` (the collapse badge; counts toward
 #             neither side so power/contact stay pure signals)
 _OFFENSE_POWER_TAGS   = {"power bat", "plus power"}
-_OFFENSE_CONTACT_TAGS = {"contact bat"}
-_OFFENSE_COMPLETE_TAGS = {"complete"}
+# _OFFENSE_CONTACT_TAGS / _OFFENSE_COMPLETE_TAGS retired with `contact bat`
+# and `complete`; the shares they fed were only used by the label layer.
 
 # Rotation out-mechanism now reads outcome-tag densities (pitcher_traits.py):
 # `bat-misser` share vs `ground-baller` share, with a margin before either
@@ -1915,27 +1942,198 @@ _MECHANISM_MARGIN = 0.15
 _TUNNEL_ROTATION_SHARE = 0.50
 
 
+# ---------------------------------------------------------------------------
+# Tag populations — the eligible denominator for each tag
+# ---------------------------------------------------------------------------
+# Most tags can fire for anyone, so their denominator is the whole unit. But
+# population-gated tags can only fire for a subset (catchers, players with an
+# OAA reading, pitchers with a tempo sample...). Dividing those by the whole
+# unit's PA/BF understates them by roughly the subset's share — an elite
+# framer on a team whose catchers take 12% of the PA reads as 0.12 density no
+# matter how good he is, which is why catcher and fielding tags could never
+# surface in a team fingerprint. Each tag is divided by the weight of the
+# players who could actually have earned it.
+POP_ALL = "all"
+
+TAG_POPULATION: dict[str, str] = {
+    # catcher craft — only catchers with a qualifying sample
+    "elite framer": "catchers", "poor framer": "catchers",
+    "good blocker": "catchers", "bad blocker": "catchers",
+    "quick pop":    "catchers",
+    # fielding — needs an OAA / arm-strength reading (DHs and most catchers
+    # have neither)
+    "elite defender":      "fielders_oaa",
+    "plus defender":       "fielders_oaa",
+    "defensive liability": "fielders_oaa",
+    "cannon arm":          "fielders_arm",
+    # speed tags need a sprint-speed reading (nulled in unseeded seasons)
+    "elite speed": "speed", "fast": "speed", "station-to-station": "speed",
+    # baserunning advancement needs XBT opportunities
+    "extra base taker": "xbt",
+    # platoon — needs statcast splits; the gap tags additionally need a
+    # qualifying sample from both sides
+    "switch hitter":      "splits",
+    "platoon liability":  "splits_qual",
+    "reverse split":      "splits_qual",
+    "platoon-vulnerable": "splits_qual",
+    "platoon specialist": "splits_qual",
+    # handedness is known only where splits are
+    "left-handed hitter":  "splits", "right-handed hitter":  "splits",
+    "left-handed pitcher": "splits_qual", "right-handed pitcher": "splits_qual",
+    # zone-judgment tags need pitch-level chase data (~80% of hitters)
+    "patient": "chase", "free swinger": "chase", "aggressive": "chase",
+    # gap hitter needs spray data (hc_x/hc_y)
+    "gap hitter": "spray",
+    # running game — the decision to run is scored against runners with
+    # opportunities, the result of running against those who actually went
+    "high steal attempts": "steal_opps", "low steal attempts": "steal_opps",
+    "high steal rate":     "steal_attempts", "low steal rate": "steal_attempts",
+    # small-sample floors already enforced in the trait gates
+    "rarely strikes out": "pa200",
+    "super-utility":      "positions",
+    # pitcher mechanics need ≥150 pitches; tempo needs a tempo sample
+    "submarine": "mechanics", "sidearm": "mechanics", "over-the-top": "mechanics",
+    "wide release": "mechanics", "deep extension": "mechanics",
+    "short extension": "mechanics",
+    "quick pitcher": "tempo", "slow pitcher": "tempo",
+    "controls runners": "runner_control",
+    # role tags are scoped to the pool they were ranked within
+    "two-pitch": "starters", "workhorse": "starters",
+    "short-outing starter": "starters",
+    "heavy usage": "relievers", "mop-up duty": "relievers",
+    "high-leverage arm": "relievers", "multi-inning reliever": "relievers",
+}
+
+
+def _hitter_populations(
+    sprint_raw:   Optional[float],
+    season_metrics: dict,
+    catching:     Optional[dict],
+    advancement:  Optional[dict],
+    splits:       Optional[dict],
+    positions:    Optional[dict],
+    pa:           int,
+    metrics:      Optional[dict] = None,
+    attempt_rate_pct: Optional[float] = None,
+    attempts:     int = 0,
+) -> list[str]:
+    """Which tag populations this hitter belongs to — mirrors the gates in
+    hitter_traits.build_hitter_traits."""
+    from hitter_traits import (PLATOON_MIN_PA, RARELY_K_MIN_PA, XBT_MIN_OPPS,
+                               STEAL_RATE_MIN_ATTEMPTS)
+
+    pops = [POP_ALL]
+    sm = season_metrics or {}
+
+    def _has(key: str) -> bool:
+        v = sm.get(key)
+        return v is not None and not (isinstance(v, float) and np.isnan(v))
+
+    if catching:
+        pops.append("catchers")
+    if _has("OAA"):
+        pops.append("fielders_oaa")
+    if _has("ArmStrength"):
+        pops.append("fielders_arm")
+    if sprint_raw is not None:
+        pops.append("speed")
+    if (advancement or {}).get("opps", 0) >= XBT_MIN_OPPS:
+        pops.append("xbt")
+    if positions:
+        pops.append("positions")
+    if pa >= RARELY_K_MIN_PA:
+        pops.append("pa200")
+
+    m = metrics or {}
+
+    def _hasm(key: str) -> bool:
+        v = m.get(key)
+        return v is not None and not (isinstance(v, float) and np.isnan(v))
+
+    if _hasm("OSwing_pct"):
+        pops.append("chase")
+    if _hasm("XB_pct") and _hasm("GapTend_pct"):
+        pops.append("spray")
+    if attempt_rate_pct is not None and not (
+            isinstance(attempt_rate_pct, float) and np.isnan(attempt_rate_pct)):
+        pops.append("steal_opps")
+    if attempts >= STEAL_RATE_MIN_ATTEMPTS:
+        pops.append("steal_attempts")
+
+    sp = splits or {}
+    if sp.get("bats"):
+        pops.append("splits")
+        bats = sp.get("bats")
+        if bats == "S":
+            pops.append("splits_qual")   # switch hitters are tagged, not gapped
+        elif bats in ("L", "R"):
+            same = sp.get("vs_lhp" if bats == "L" else "vs_rhp") or {}
+            opp  = sp.get("vs_rhp" if bats == "L" else "vs_lhp") or {}
+            if (same.get("pa", 0) >= PLATOON_MIN_PA
+                    and opp.get("pa", 0) >= PLATOON_MIN_PA):
+                pops.append("splits_qual")
+    return pops
+
+
+def _pitcher_populations(
+    player_id:      int,
+    is_starter:     bool,
+    league_mechanics,
+    tempo:          Optional[dict],
+    splits:         Optional[dict],
+    runner_control: Optional[dict],
+) -> list[str]:
+    """Which tag populations this pitcher belongs to — mirrors the gates in
+    pitcher_traits.build_pitcher_traits."""
+    pops = [POP_ALL, "starters" if is_starter else "relievers"]
+    try:
+        if (league_mechanics is not None and len(league_mechanics)
+                and int(player_id) in set(league_mechanics["pitcher"])):
+            pops.append("mechanics")
+    except Exception:
+        pass
+    if tempo:
+        pops.append("tempo")
+    if splits:
+        pops.append("splits_qual")
+    if runner_control:
+        pops.append("runner_control")
+    return pops
+
+
 def _trait_density(arms: list[dict], weight_key: str = "bf") -> dict[str, float]:
     """
-    BF-weighted share of a staff's workload carried by pitchers holding each
-    trait tag. This is the trait-based replacement for archetype counting:
-    the staff's shape IS this distribution — no winner-take-all label.
+    Weighted share of a unit's workload carried by players holding each trait
+    tag. This is the trait-based replacement for archetype counting: the
+    unit's shape IS this distribution — no winner-take-all label.
+
+    Each tag is divided by the weight of the players ELIGIBLE for it (see
+    TAG_POPULATION), not the whole unit. Players carry their eligibility in
+    `populations`; profiles built before that field existed fall back to the
+    whole-unit denominator, which is the pre-fix behaviour.
     """
-    tag_w: dict[str, float] = {}
+    tag_w:  dict[str, float] = {}
+    pop_w:  dict[str, float] = {}
     total_w = 0.0
     for arm in arms:
         w = float(arm.get(weight_key) or 0)
         if w <= 0:
             continue
         total_w += w
+        for pop in (arm.get("populations") or [POP_ALL]):
+            pop_w[pop] = pop_w.get(pop, 0.0) + w
         for tr in arm.get("traits") or []:
             tag = tr.get("tag")
             if tag:
                 tag_w[tag] = tag_w.get(tag, 0.0) + w
     if total_w <= 0:
         return {}
-    return {k: round(v / total_w, 4)
-            for k, v in sorted(tag_w.items(), key=lambda kv: -kv[1])}
+
+    out: dict[str, float] = {}
+    for tag, w in tag_w.items():
+        denom = pop_w.get(TAG_POPULATION.get(tag, POP_ALL), 0.0) or total_w
+        out[tag] = round(min(w / denom, 1.0), 4)
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
 def _build_team_identity(
@@ -1967,43 +2165,21 @@ def _build_team_identity(
     total_pa = sum(float(hp.get("pa") or 0) for hp in hitter_profiles)
 
     if total_pa > 0 and offense_density:
-        power_share    = sum(v for k, v in offense_density.items()
-                             if k in _OFFENSE_POWER_TAGS)
-        contact_share  = sum(v for k, v in offense_density.items()
-                             if k in _OFFENSE_CONTACT_TAGS)
-        complete_share = sum(v for k, v in offense_density.items()
-                             if k in _OFFENSE_COMPLETE_TAGS)
-
-        if power_share >= 0.40:
-            label = "Power-Driven Lineup"
-        elif contact_share >= 0.40:
-            label = "Contact-Oriented Lineup"
-        elif complete_share >= 0.30 and complete_share >= max(power_share, contact_share):
-            label = "Complete-Hitter-Led Lineup"
-        elif power_share >= 0.25 and contact_share >= 0.25:
-            label = "Balanced Lineup"
-        else:
-            # Fallback names the densest identity-relevant tag — luck and
-            # baserunning tags don't define a lineup's offensive character.
-            _IDENTITY_TAGS = {"power bat", "plus power", "contact bat",
-                              "gap hitter", "hard contact", "complete",
-                              "walk machine", "aggressive", "free swinger",
-                              "elite discipline", "high-K"}
-            top_tag = next((t for t in offense_density if t in _IDENTITY_TAGS), None)
-            label = f"{top_tag.title()}-Led Lineup" if top_tag else "Mixed-Profile Lineup"
-
+        # Headline labels retired. They were the least emergent thing in the
+        # system — human-chosen cutoffs ("power_share >= 0.40") assigning a
+        # team to a bucket. A team's offensive identity is now read from where
+        # it actually sits in tag-density space (see build_league_identity:
+        # fingerprint deviations + nearest neighbours), which needs no
+        # thresholds and follows the roster rather than a taxonomy.
         identity["offense"] = {
-            "trait_density":   offense_density,
-            "power_share":     power_share,
-            "contact_share":   contact_share,
-            "complete_share":  complete_share,
-            "label":           label,
+            "trait_density": offense_density,
+            "power_share":   sum(v for k, v in offense_density.items()
+                                 if k in _OFFENSE_POWER_TAGS),
         }
 
     # ── Rotation: BF-weighted trait densities + approach distribution ──────
     approach_bf: dict[str, float] = {}
     total_bf = 0.0
-    ace_count = 0
     for sp in starters:
         bf = float(sp.get("bf") or 0)
         if bf <= 0:
@@ -2012,8 +2188,6 @@ def _build_team_identity(
         approach = arsenal.get("approach")
         if approach:
             approach_bf[approach] = approach_bf.get(approach, 0.0) + bf
-        if any(t.get("tag") == "ace" for t in sp.get("traits") or []):
-            ace_count += 1
         total_bf += bf
 
     rotation_density = _trait_density(starters)
@@ -2035,36 +2209,16 @@ def _build_team_identity(
         else:
             rotation_mechanism = None
 
-        tunneler_share = rotation_density.get("tunneler", 0.0)
-
-        if ace_count >= 2:
-            label = "Top-Heavy Rotation"
-        elif tunneler_share >= _TUNNEL_ROTATION_SHARE:
-            label = "Tunnel-Dependent Rotation"
-        elif rotation_mechanism == "Strikeout-driven":
-            label = "Strikeout-Driven Rotation"
-        elif rotation_mechanism == "Ground-ball-driven":
-            label = "Ground-Ball Rotation"
-        else:
-            # Fallback names the densest label-worthy tag (styles of pitching,
-            # not individual pitch names or luck).
-            _ROTATION_LABEL_TAGS = {
-                "deep arsenal", "sinker-baller", "ride four-seam",
-                "command: elite", "command: plus", "contact suppressor",
-                "invisible ball", "high spin efficiency", "pitch-to-contact",
-                "elite velo", "plus velo", "soft tosser", "two-pitch",
-            }
-            top_tag = next((t for t in rotation_density if t in _ROTATION_LABEL_TAGS), None)
-            label = f"{top_tag.title()} Rotation" if top_tag else "Mixed-Profile Rotation"
-
+        # Rotation headline label retired for the same reason as the offense
+        # one. `out_mechanism` survives: it is not a bucket assignment but a
+        # side-by-side comparison of two measured densities with an explicit
+        # margin, and the fit notes below read it.
         identity["rotation"] = {
-            "trait_density":   rotation_density,
-            "approach_dist":   approach_dist,
-            "dominant_approach":  dominant_approach,
-            "tunneler_share":  tunneler_share,
-            "out_mechanism":   rotation_mechanism,
-            "ace_count":       ace_count,
-            "label":           label,
+            "trait_density":     rotation_density,
+            "approach_dist":     approach_dist,
+            "dominant_approach": dominant_approach,
+            "tunneler_share":    rotation_density.get("tunneler", 0.0),
+            "out_mechanism":     rotation_mechanism,
         }
 
     # ── Bullpen: passthrough of collective profile ─────────────────────────
@@ -2224,14 +2378,22 @@ def build_team_portrait(
         _fill = _bat_agg[["key_mlbam", "chase_sc_pct", "fps_pct"]].rename(
             columns={"chase_sc_pct": "_chase_fill", "fps_pct": "_fps_fill"})
         batting_full = batting_full.merge(_fill, on="key_mlbam", how="left")
+        # UNIT MISMATCH — do NOT fillna() one into the other. The DB's
+        # chase_pct/fps_pct are PERCENTILES (1–100, median ~49); the Statcast
+        # columns are RATES (0–1, median ~0.28). Filling nulls mixed both
+        # scales into one column, and the downstream percentile rank then
+        # sorted by DATA SOURCE rather than by behaviour — every DB-sourced
+        # player outranked every backfilled one. `free swinger` was really
+        # tagging "has a Savant value" and `patient` "was backfilled"
+        # (corr with true chase rate: +0.27).
+        # The Statcast rate is computed uniformly from raw pitches for every
+        # player, so it is used ALONE. Players without it stay null and simply
+        # miss the zone-judgment tags — which is what the `chase` population
+        # already encodes.
         for dest, src in [("chase_pct", "_chase_fill"), ("fps_pct", "_fps_fill")]:
-            if dest in batting_full.columns:
-                batting_full[dest] = pd.to_numeric(
-                    batting_full[dest], errors="coerce").fillna(batting_full[src])
-            else:
-                batting_full[dest] = batting_full[src]
+            batting_full[dest] = pd.to_numeric(batting_full[src], errors="coerce")
         batting_full = batting_full.drop(columns=["_chase_fill", "_fps_fill"])
-        log.info("Chase/FPS backfill — chase now %d/%d non-null",
+        log.info("Chase/FPS from Statcast rates — chase %d/%d non-null",
                  batting_full["chase_pct"].notna().sum(), len(batting_full))
     except Exception as exc:
         log.warning("Chase/FPS backfill failed: %s", exc)

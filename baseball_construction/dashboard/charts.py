@@ -274,11 +274,19 @@ def dimension_confidence_bars(portrait: dict) -> go.Figure:
 
 # Trait family → display color (shared by trait charts and chips)
 TRAIT_FAMILY_COLORS = {
-    "bat":         "#f97316",   # orange
-    "approach":    "#22c55e",   # green
-    "athleticism": "#06b6d4",   # cyan
-    "luck":        "#6b7280",   # grey
-    "outcome":     "#f59e0b",   # amber (complete / ace badges)
+    "bat":          "#f97316",  # orange
+    "bat-to-ball":  "#fb923c",  # light orange — sits beside bat
+    "approach":     "#22c55e",  # green
+    "batted-ball":  "#84cc16",  # lime
+    "athleticism":  "#06b6d4",  # cyan
+    "running-game": "#14b8a6",  # teal
+    "fielding":     "#0ea5e9",  # sky
+    "catcher":      "#6366f1",  # indigo
+    "handedness":   "#94a3b8",  # slate — attributes, deliberately quiet
+    "platoon":      "#a855f7",  # violet
+    "role":         "#d946ef",  # fuchsia
+    "luck":         "#6b7280",  # grey
+    "outcome":      "#f59e0b",  # amber
     "mechanics":   "#8b5cf6",   # purple
     "sequencing":  "#06b6d4",   # cyan
     "deception":   "#f59e0b",   # amber
@@ -787,7 +795,7 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
     }
 
     names, ages, bfs, wars = [], [], [], []
-    arsenals, approaches, aces, traits_col = [], [], [], []
+    arsenals, approaches, traits_col = [], [], []
 
     for s in sorted(starters, key=lambda x: -(x.get("bf") or 0)):
         name = (s.get("name") or "").strip() or f"ID {s.get('player_id', '?')}"
@@ -804,34 +812,29 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
         approach_raw = ap.get("approach", "")
         approaches.append(_APPROACH_SHORT.get(approach_raw, approach_raw or "—"))
 
-        tags = {t["tag"] for t in traits}
-        aces.append("★ Ace" if "ace" in tags else "—")
-
-        # Arsenal facts already have their own column; ace has its own badge
-        shown = [t["tag"] for t in traits
-                 if t.get("family") != "arsenal" and t["tag"] != "ace"]
+        # Arsenal facts already have their own column
+        shown = [t["tag"] for t in traits if t.get("family") != "arsenal"]
         traits_col.append(", ".join(shown) if shown else "—")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
-    ace_font_colors = ["#f59e0b" if a == "★ Ace" else COLORS["text"] for a in aces]
 
     fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 2.5, 1.5, 1.2, 4],
+        columnwidth=[3, 1, 1, 1, 2.5, 1.5, 4],
         header=dict(
             values=[
                 "<b>Pitcher</b>", "<b>Age</b>", "<b>BF</b>", "<b>bWAR</b>",
-                "<b>Arsenal</b>", "<b>Approach</b>", "<b>Tier</b>", "<b>Traits</b>",
+                "<b>Arsenal</b>", "<b>Approach</b>", "<b>Traits</b>",
             ],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
-            align=["left", "center", "center", "center", "left", "center", "center", "left"],
+            align=["left", "center", "center", "center", "left", "center", "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
-            values=[names, ages, bfs, wars, arsenals, approaches, aces, traits_col],
-            fill_color=[row_colors] * 8,
+            values=[names, ages, bfs, wars, arsenals, approaches, traits_col],
+            fill_color=[row_colors] * 7,
             font=dict(
                 color=[
                     [COLORS["text"]] * n,   # names
@@ -840,12 +843,11 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
                     [COLORS["text"]] * n,    # wars
                     [COLORS["text"]] * n,    # arsenals
                     [COLORS["subtext"]] * n, # approaches
-                    ace_font_colors,         # ace — gold for Ace, dim otherwise
                     [COLORS["text"]] * n,    # traits
                 ],
                 size=11,
             ),
-            align=["left", "center", "center", "center", "left", "center", "center", "left"],
+            align=["left", "center", "center", "center", "left", "center", "left"],
             line_color=COLORS["border"],
             height=28,
         ),
@@ -885,7 +887,7 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
     rows = sorted(arms, key=lambda x: -(x.get("bf") or 0))
 
     names, ages, bfs, wars = [], [], [], []
-    velos, ks, whiffs, gbs, hcs, aces, traits_col = [], [], [], [], [], [], []
+    velos, ks, whiffs, gbs, hcs, traits_col = [], [], [], [], [], []
 
     for arm in rows:
         m = arm.get("metrics_pct", {})
@@ -901,42 +903,39 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         gbs.append(_fmt(m.get("GB_pct_pct")))
         hcs.append(_fmt(m.get("HardHit_allowed_pct")))
 
-        tags = {t["tag"] for t in traits}
-        aces.append("★" if "ace" in tags else "—")
-        shown = [t["tag"] for t in traits if t["tag"] != "ace"]
+        shown = [t["tag"] for t in traits]
         traits_col.append(", ".join(shown) if shown else "—")
 
     n = len(rows)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
-    ace_font_colors = ["#f59e0b" if a == "★" else COLORS["subtext"] for a in aces]
 
     fig = go.Figure(go.Table(
-        columnwidth=[2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 0.8, 1, 0.6, 4],
+        columnwidth=[2.5, 0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 0.8, 1, 4],
         header=dict(
             values=[
                 "<b>Reliever</b>", "<b>Age</b>", "<b>BF</b>", "<b>bWAR</b>",
                 "<b>Velo%</b>", "<b>K%</b>", "<b>Whiff%</b>",
-                "<b>GB%</b>", "<b>HC Supp%</b>", "<b>Ace</b>", "<b>Traits</b>",
+                "<b>GB%</b>", "<b>HC Supp%</b>", "<b>Traits</b>",
             ],
             fill_color=COLORS["surface"],
             font=dict(color=COLORS["subtext"], size=11),
             align=["left", "center", "center", "center",
                    "center", "center", "center", "center", "center",
-                   "center", "left"],
+                   "left"],
             line_color=COLORS["border"],
             height=32,
         ),
         cells=dict(
             values=[names, ages, bfs, wars, velos, ks, whiffs, gbs, hcs,
-                    aces, traits_col],
-            fill_color=[row_colors] * 11,
+                    traits_col],
+            fill_color=[row_colors] * 10,
             font=dict(
-                color=[[COLORS["text"]] * n] * 9 + [ace_font_colors, [COLORS["text"]] * n],
+                color=[[COLORS["text"]] * n] * 10,
                 size=11,
             ),
             align=["left", "center", "center", "center",
                    "center", "center", "center", "center", "center",
-                   "center", "left"],
+                   "left"],
             line_color=COLORS["border"],
             height=26,
         ),
@@ -2113,9 +2112,7 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.
     if density:
         # Top trait densities, e.g. "tunneler 52% · bat-misser 40%"
         top = list(density.items())[:2]
-        ace_count = rotation.get("ace_count", 0)
-        ace_str = f" · {ace_count} Ace{'s' if ace_count != 1 else ''}" if ace_count else ""
-        rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in top) + ace_str
+        rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in top)
     elif rotation.get("approach_dist"):
         appr = rotation.get("dominant_approach")
         share = rotation["approach_dist"].get(appr, 0)
