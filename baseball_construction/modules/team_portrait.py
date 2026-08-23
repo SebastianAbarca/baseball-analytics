@@ -46,7 +46,7 @@ sys.path.insert(0, str(_HERE))
 # Bump whenever the shape of the portrait dict returned by build_team_portrait
 # changes (new top-level keys, renamed fields, etc.) — callers use this to
 # detect and discard stale cached/stored portraits built against an older shape.
-PORTRAIT_SCHEMA_VERSION = 18
+PORTRAIT_SCHEMA_VERSION = 19
 
 from ingest import (
     pull_statcast_range,
@@ -61,6 +61,11 @@ from ingest import (
     apply_reliability_weight,
     normalize_percentile,
     PROCESSED_DIR,
+)
+from reliability import (
+    is_limited_sample,
+    LIMITED_SAMPLE_PA,
+    LIMITED_SAMPLE_BF,
 )
 from database import (
     query_batting, query_pitching,
@@ -1041,6 +1046,13 @@ def _classify_hitters(
             attempts=int(_nz(row.get("SB", 0))) + int(_nz(row.get("CS", 0))),
         )
 
+        # One player-level marker rather than a per-metric reliability score:
+        # a reader needs to know "don't lean on this profile", not to audit
+        # thirteen separate denominators. The per-tag gate has already run
+        # inside build_hitter_traits.
+        profile["limited_sample"] = is_limited_sample(
+            int(_nz(row.get("PA")) or _nz(row.get("pa"))), LIMITED_SAMPLE_PA)
+
         # Store curated percentile metrics for the interactive player chart.
         # Each raw_key is the exact key that _classify_hitters puts in `metrics`
         # (the col.removesuffix("_pct") form OR the full col name — both present).
@@ -1259,6 +1271,8 @@ def _classify_pitchers(
                 splits=(pitcher_splits or {}).get(player_id),
                 runner_control=(runner_ctrl_map or {}).get(player_id),
             )
+            profile["limited_sample"] = is_limited_sample(
+                profile.get("bf"), LIMITED_SAMPLE_BF)
             # Archetype boxes retired — traits are the identity layer now.
             # modifiers (platoon/command/arsenal/ace) is fully redundant with
             # the trait families and is dropped from the portrait.
@@ -1331,6 +1345,8 @@ def _classify_pitchers(
                 splits=(pitcher_splits or {}).get(player_id),
                 runner_control=(runner_ctrl_map or {}).get(player_id),
             )
+            bullpen_arms[-1]["limited_sample"] = is_limited_sample(
+                bullpen_arms[-1].get("bf"), LIMITED_SAMPLE_BF)
 
     # Build collective bullpen profile from BF-weighted mean metrics
     bullpen_profile: dict = {}

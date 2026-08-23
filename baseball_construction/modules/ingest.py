@@ -38,53 +38,9 @@ REF_DIR.mkdir(parents=True, exist_ok=True)
 # Stabilization thresholds
 # ---------------------------------------------------------------------------
 
-STABILIZATION: dict[str, int] = {
-    # Hitter metrics
-    "K_pct":           60,
-    "BB_pct":         120,
-    "SwStr_pct":      150,
-    "Chase_pct":      100,
-    "Contact_pct":    150,
-    "ZContact_pct":   150,
-    "xwOBA":          200,
-    "EV_90":          200,
-    "HardHit_pct":    200,
-    "Barrel_pct":     300,
-    "xBA":            200,
-    "BABIP":          800,
-    "HR_per_FB":      300,
-    "ISO":            300,
-    "wRC_plus":       300,
-    "OBP":            300,
-    "FPS_pct":        150,
-    "OSwing_pct":     100,
-    "PitchesPerPA":   150,
-    # Statcast pitch-aggregate hitter metrics
-    "BatGB_pct":      200,
-    "FPS_pct_agg":    150,
-    "pitches_per_pa": 150,
-    # Pitcher metrics
-    "spin_rate":      200,
-    "spin_efficiency":200,
-    "tunnel_score":   150,
-    "K_pct_pitch":    150,
-    "BB_pct_pitch":   150,
-    "GB_pct":         200,
-    "HardHit_allowed":200,
-    "Barrel_allowed": 200,
-    "FIP":            150,
-    # Statcast pitch-aggregate pitcher metrics
-    "GB_pct_pitch":   200,
-    "Zone_pct":       150,
-    "CSW_pct":        150,
-    "pitches_per_bf": 150,
-    "WAR":            162,
-    # Catcher
-    "framing":       1000,
-    # Movement
-    "sprint_speed":    50,
-    "SB_attempts":      8,
-}
+# Canonical home is reliability.py — imported rather than redefined so the
+# shrinkage path here and the tag GATE there can never drift apart.
+from reliability import STABILIZATION  # noqa: E402,F401
 
 # Default league-mean shrinkage target (percentile space: 0–1 scale)
 LEAGUE_MEAN_DEFAULT: float = 0.50

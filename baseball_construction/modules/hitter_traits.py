@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
+from reliability import filter_traits, LIMITED_SAMPLE_PA  # noqa: F401
 from hitter_archetypes import (
     compute_spectrum,
     compute_aggressive,
@@ -397,6 +398,16 @@ def build_hitter_traits(
             traits.append(_trait("unlucky", "luck", luck, luck,
                                  "xwOBA far above wOBA (bottom decile of luck delta) — "
                                  "contact deserved better"))
+
+    # ── reliability gate ──────────────────────────────────────────────────
+    # Last step on purpose: every tag above states its own baseball logic, and
+    # this asks the separate question of whether the sample can carry it. PA is
+    # the sample for all of them — the stabilization points in reliability.py
+    # are expressed in plate appearances, and a hitter's swing, batted-ball and
+    # plate-discipline opportunities all scale with PA. Tags with their own
+    # purpose-built floor (rarely strikes out, the steal tags, platoon splits)
+    # are absent from TAG_EVIDENCE and pass through untouched.
+    traits = filter_traits(traits, pa)
 
     return traits, (float(spectrum) if spectrum is not None else None)
 

@@ -35,6 +35,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from reliability import filter_traits, LIMITED_SAMPLE_BF  # noqa: E402,F401
+
 log = logging.getLogger(__name__)
 
 _HERE = Path(__file__).parent
@@ -794,5 +796,11 @@ def build_pitcher_traits(
                              f"runners moved mid-PA on just {rate:.1%} of "
                              f"{rc.get('opps', 0)} chances (steals, WP and PB "
                              "included)"))
+
+    # ── reliability gate ──────────────────────────────────────────────────
+    # Mirrors the hitter side: batters faced is the sample every rate-based
+    # pitcher tag rests on. Arsenal, mechanics and role tags carry their own
+    # pitch-count or appearance floors and are absent from TAG_EVIDENCE.
+    traits = filter_traits(traits, bf)
 
     return traits
