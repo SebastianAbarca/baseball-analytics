@@ -205,8 +205,19 @@ def build_hitter_traits(
         traits.append(_trait("power bat", "bat", iso, iso, ev))
 
     # ── bat: gap hitter — doubles, not homers ─────────────────────────────
+    # `power bat` suppresses this outright. The HR/FB ceiling alone was not
+    # enough: a hitter can clear elite ISO while his extra-base production
+    # still skews doubles, so both tags fired on the same player and asserted
+    # opposite things — "elite raw power" beside "without home-run power".
+    # Measured on 2023, 2 of 4 gap hitters across HOU/ATL/LAD/NYY carried both
+    # (Kyle Tucker, Freddie Freeman). Suppression mirrors `plus power`, which
+    # both tags already silence.
+    #
+    # This also closes the ceiling's null hole: HR/FB is absent for ~2 of 3
+    # hitters, and `hrfb is None` skipped the power check entirely. ISO is
+    # known far more often, so power_bat now carries that case.
     hrfb = gm.get("HR_FB_pct")
-    gap_hitter = compute_gap_hitter(gm) and (
+    gap_hitter = (not power_bat) and compute_gap_hitter(gm) and (
         hrfb is None or float(hrfb) <= GAP_HITTER_HRFB_CEILING)
     if gap_hitter:
         xb = gm.get("XB_pct")
