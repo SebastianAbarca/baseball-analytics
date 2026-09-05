@@ -23,7 +23,7 @@ import pandas as pd
 
 from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,  # noqa: E402
                            TAG_POPULATION, POP_ALL, TAG_KINDS, kind_of,
-                           TAG_EXCLUSIVE_GROUPS)
+                           TAG_EXCLUSIVE_GROUPS, portrait_is_current)
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -362,7 +362,11 @@ def main(season: int):
         if cp.exists():
             try:
                 cached = json.loads(cp.read_text())
-                if cached.get("schema_version") == PORTRAIT_SCHEMA_VERSION:
+                # Schema AND build fingerprint — a portrait can carry the
+                # current schema and still have been built against different
+                # pools or gates, which is exactly how 31 stale portraits and
+                # HOU_2025 were skipped as cache hits during earlier rebuilds.
+                if portrait_is_current(cached):
                     portrait = cached
             except Exception:
                 pass

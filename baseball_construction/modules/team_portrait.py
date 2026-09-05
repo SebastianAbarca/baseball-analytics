@@ -28,6 +28,7 @@ Portrait structure:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sys
 from pathlib import Path
@@ -2184,6 +2185,119 @@ def _ordinal(n: float) -> str:
     return f"{i}{suffix}"
 
 
+# ---------------------------------------------------------------------------
+# Build fingerprint — staleness a portrait can detect about itself
+# ---------------------------------------------------------------------------
+# PORTRAIT_SCHEMA_VERSION answers "was this built against a different SHAPE".
+# It cannot answer "was this built against different DATA or different GATES",
+# and that is the failure this project kept hitting — four times in one day:
+#
+#   * the metric-unit repair fixed the database and left three layers of
+#     derived cache holding percentiles, so the rebuild read stale inputs
+#   * 31 portraits carried the current schema but pre-repair units, and
+#     build_league_identity skipped them as cache hits
+#   * HOU_2025 was written by a dev server against a half-regenerated pool,
+#     twelve minutes before the rebuild reached that season, and was skipped
+#     for the same reason
+#   * two tag-logic changes (the reliability floor, `zone hunter`) forced full
+#     rebuilds even though no metric had moved
+#
+# Every one of those is the same shape: a cache that does not know its inputs
+# changed. The fingerprint hashes what a portrait actually depends on —
+# the normalization pools it was ranked against, and every gate constant and
+# vocabulary map the tags were cut with. A mismatch means rebuild, decided by
+# the data rather than by remembering to bump a number.
+_FINGERPRINT_CACHE: Optional[str] = None
+
+# Pools a portrait's percentiles are ranked against. Content-hashed rather
+# than mtime-checked: regenerating a cache byte-identically should NOT
+# invalidate anything, and today's incidents all involved files whose contents
+# changed while their names did not.
+_FINGERPRINT_POOL_GLOBS = (
+    "fg_batting_*.csv", "fg_pitching_*.csv",
+    "*history*.csv", "*prior*.parquet",
+)
+
+
+def _stable_repr(v) -> str:
+    """Order-independent repr, so dict/set iteration order cannot churn the hash."""
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{k}:{_stable_repr(v[k])}" for k in sorted(map(str, v))) + "}"
+    if isinstance(v, (set, frozenset)):
+        return "{" + ",".join(sorted(_stable_repr(x) for x in v)) + "}"
+    if isinstance(v, (list, tuple)):
+        return "[" + ",".join(_stable_repr(x) for x in v) + "]"
+    if isinstance(v, float):
+        return f"{v:.10g}"
+    return str(v)
+
+
+def _pool_digest() -> str:
+    parts = []
+    for pattern in _FINGERPRINT_POOL_GLOBS:
+        for path in sorted(PROCESSED_DIR.glob(pattern)):
+            h = hashlib.sha256()
+            try:
+                with open(path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+            except OSError:
+                continue
+            parts.append(f"{path.name}:{h.hexdigest()[:16]}")
+    return "|".join(parts)
+
+
+def _gate_digest() -> str:
+    """Every tag gate constant and vocabulary map, from the modules that cut tags."""
+    import hitter_traits
+    import pitcher_traits
+    import reliability
+
+    items = []
+    for mod in (hitter_traits, pitcher_traits, reliability):
+        for name in sorted(dir(mod)):
+            # Module-level CONSTANTS are the gates: thresholds, floors, maps.
+            if not name.isupper() or name.startswith("_"):
+                continue
+            val = getattr(mod, name)
+            if isinstance(val, (int, float, str, bool, dict, list, tuple, set, frozenset)):
+                items.append(f"{mod.__name__}.{name}={_stable_repr(val)}")
+    # Vocabulary axes defined in this module.
+    for name in ("TAG_POPULATION", "TAG_KIND", "TAG_KINDS", "TAG_EXCLUSIVE_GROUPS"):
+        items.append(f"team_portrait.{name}={_stable_repr(globals()[name])}")
+    return "|".join(items)
+
+
+def build_fingerprint(refresh: bool = False) -> str:
+    """
+    Short hash of everything a portrait depends on beyond its own team-season:
+    the normalization pools, and the gate constants and vocabulary the tags
+    were cut with. Memoised per process — the pools do not change mid-run.
+    """
+    global _FINGERPRINT_CACHE
+    if _FINGERPRINT_CACHE is None or refresh:
+        blob = _pool_digest() + "||" + _gate_digest()
+        _FINGERPRINT_CACHE = hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return _FINGERPRINT_CACHE
+
+
+def portrait_is_current(portrait: Optional[dict]) -> bool:
+    """
+    Is this stored portrait safe to serve?
+
+    Schema must match, and the build fingerprint must match when the portrait
+    carries one. Portraits predating the fingerprint are accepted on schema
+    alone — they cannot be checked, and refusing them would force a rebuild of
+    everything already known to be good.
+    """
+    if not portrait:
+        return False
+    if portrait.get("schema_version") != PORTRAIT_SCHEMA_VERSION:
+        return False
+    stamped = portrait.get("build_fingerprint")
+    return stamped is None or stamped == build_fingerprint()
+
+
 def kind_of(tag: str) -> Optional[str]:
     """Kind for a tag, or None if the tag is outside the vocabulary.
 
@@ -3338,6 +3452,10 @@ def build_team_portrait(
 
     portrait = {
         "schema_version": PORTRAIT_SCHEMA_VERSION,
+        # What this portrait was built AGAINST — pools and gates. See
+        # build_fingerprint: the schema catches a change of shape, this
+        # catches a change of inputs.
+        "build_fingerprint": build_fingerprint(),
         "team":   team,
         "season": season,
         "players": {

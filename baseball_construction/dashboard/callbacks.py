@@ -23,7 +23,8 @@ from dash import Input, Output, State, callback, no_update, MATCH, ctx, clientsi
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
-from team_portrait import build_team_portrait, PORTRAIT_SCHEMA_VERSION
+from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,
+                           portrait_is_current)
 from ingest import pull_statcast_season
 import charts
 from layout import team_header
@@ -56,8 +57,13 @@ def _cache_valid(path: Path, season: int) -> bool:
 
 
 def _schema_current(portrait: dict | None) -> bool:
-    """True if a (de)serialized portrait dict matches the current schema version."""
-    return bool(portrait) and portrait.get("schema_version") == PORTRAIT_SCHEMA_VERSION
+    """
+    True if a stored portrait is safe to serve — current schema AND built
+    against the current pools and gates. See team_portrait.build_fingerprint;
+    the schema alone cannot tell a portrait built before a data repair from
+    one built after, which is how stale portraits reached readers.
+    """
+    return portrait_is_current(portrait)
 
 
 def _storage_download(team: str, season: int) -> str | None:
