@@ -2121,37 +2121,43 @@ _assign_kind(
 _assign_kind(KIND_NOISE, "lucky", "unlucky")
 
 
-# Tags that are two ends of ONE axis. At team level both can carry a nonzero
-# density, so a fingerprint row could spend both its slots saying one thing:
-# "left-handed hitter -22pts · right-handed hitter +26pts" is a single fact
-# written twice, since a lineup that is 26 points more right-handed is
-# necessarily that much less left-handed. Measured across 360 team-seasons,
-# 8.2% of two-tag rows were such a pair and 76 of those 81 were handedness.
-# Only the stronger end is shown.
-TAG_COMPLEMENT: dict[str, str] = {}
+# Tags that carve up ONE underlying axis. At team level several ends carry
+# density at once, so a fingerprint row could spend both its slots stating a
+# single fact: "left-handed hitter -22pts · right-handed hitter +26pts" is one
+# thing said twice, once as a presence and once as an absence. Measured across
+# 360 team-seasons, 8.2% of two-tag rows were such a pair and 76 of 81 were
+# handedness. Only one member of a group is shown.
+#
+# These are GROUPS, not pairs, because batting handedness is three-way. CLE
+# 2016 read `right-handed hitter -31` beside `left-handed hitter -1` — both
+# negative, which is impossible for two ends of one axis and obvious once you
+# remember switch hitters exist. A team deep in switch hitters is down in BOTH
+# L and R, and pairing L against R would have reported that as "not
+# right-handed" rather than as what it is.
+TAG_EXCLUSIVE_GROUPS: list[frozenset[str]] = [
+    frozenset({"left-handed hitter", "right-handed hitter", "switch hitter"}),
+    frozenset({"left-handed pitcher", "right-handed pitcher"}),
+    frozenset({"high steal attempts", "low steal attempts"}),
+    frozenset({"high steal rate", "low steal rate"}),
+    frozenset({"elite framer", "poor framer"}),
+    frozenset({"good blocker", "bad blocker"}),
+    frozenset({"air-ball bat", "ground-ball bat"}),
+    frozenset({"pull-heavy", "oppo bat"}),
+    frozenset({"elite defender", "plus defender", "defensive liability"}),
+    frozenset({"elite command", "plus command", "walk prone"}),
+    frozenset({"bat-misser", "pitch-to-contact"}),
+    frozenset({"quick pitcher", "slow pitcher"}),
+    frozenset({"deep arsenal", "two-pitch"}),
+    frozenset({"patient", "free swinger"}),
+    frozenset({"high-K", "rarely strikes out"}),
+    frozenset({"elite speed", "fast", "station-to-station"}),
+    frozenset({"power bat", "plus power", "weak contact"}),
+]
 
-
-def _pair(a: str, b: str) -> None:
-    TAG_COMPLEMENT[a] = b
-    TAG_COMPLEMENT[b] = a
-
-
-_pair("left-handed hitter", "right-handed hitter")
-_pair("left-handed pitcher", "right-handed pitcher")
-_pair("high steal attempts", "low steal attempts")
-_pair("high steal rate", "low steal rate")
-_pair("elite framer", "poor framer")
-_pair("good blocker", "bad blocker")
-_pair("air-ball bat", "ground-ball bat")
-_pair("pull-heavy", "oppo bat")
-_pair("elite defender", "defensive liability")
-_pair("elite command", "walk prone")
-_pair("bat-misser", "pitch-to-contact")
-_pair("quick pitcher", "slow pitcher")
-_pair("deep arsenal", "two-pitch")
-_pair("patient", "free swinger")
-_pair("high-K", "rarely strikes out")
-_pair("elite speed", "station-to-station")
+# tag → the other members of its group
+TAG_EXCLUSIVE: dict[str, frozenset[str]] = {
+    tag: (grp - {tag}) for grp in TAG_EXCLUSIVE_GROUPS for tag in grp
+}
 
 
 def _ordinal(n: float) -> str:

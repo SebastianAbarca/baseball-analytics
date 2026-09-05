@@ -23,7 +23,7 @@ import pandas as pd
 
 from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,  # noqa: E402
                            TAG_POPULATION, POP_ALL, TAG_KINDS, kind_of,
-                           TAG_COMPLEMENT)
+                           TAG_EXCLUSIVE_GROUPS)
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -190,17 +190,32 @@ def _compute_fingerprints(league: dict[str, dict],
 
             # File each surviving tag under its kind, most distinctive first,
             # capped so one loud kind cannot fill the card.
+            # Of a two-ended axis, keep the end the team actually HAS. Both
+            # ends carry density at team level, so a lineup reads as both
+            # "right-handed hitter +26" and "left-handed hitter -22" — the same
+            # fact, once as a presence and once as an absence. Ranking by |z|
+            # alone picked whichever was numerically louder, which named what
+            # the team is NOT. Prefer the positive deviation; fall back to |z|
+            # when the pair does not straddle zero.
+            by_tag = {e["tag"]: e for e in devs}
+            dropped: set[str] = set()
+            for grp in TAG_EXCLUSIVE_GROUPS:
+                members = [by_tag[t] for t in grp if t in by_tag]
+                if len(members) < 2:
+                    continue
+                # A presence beats an absence: "right-handed lineup +26" says
+                # what this team IS, "left-handed -22" says what it is not.
+                # Only when no member is positive does magnitude decide.
+                positives = [m for m in members if m["deviation"] >= 0]
+                keep = max(positives or members, key=lambda x: abs(x["z"]))
+                dropped |= {m["tag"] for m in members if m["tag"] != keep["tag"]}
+
             by_kind: dict[str, list] = {}
             for e in devs:
                 k = e.get("kind")
-                if not k:
+                if not k or e["tag"] in dropped:
                     continue
                 bucket = by_kind.setdefault(k, [])
-                # Skip the weaker end of a two-ended axis — devs is already
-                # sorted by |z|, so whichever end appears first is the stronger.
-                comp = TAG_COMPLEMENT.get(e["tag"])
-                if comp and any(x["tag"] == comp for x in bucket):
-                    continue
                 cap = _FP_PER_KIND_OVERRIDE.get(k, _FP_PER_KIND)
                 if len(bucket) < cap:
                     bucket.append(e)

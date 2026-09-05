@@ -2069,6 +2069,43 @@ def team_split_card(portrait: dict) -> html.Div:
     return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
 
 
+# Empty-state wording per kind. "league-typical" on its own did not say
+# typical in WHAT — it read as clear for `result` and as a shrug for `tool`
+# and `deployment`. Each line states the thing that was measured and came back
+# ordinary; the hover carries the precise rule. Descriptive, not evaluative:
+# these report that no tag cleared the bar, they do not grade the team.
+_TYPICAL_TEXT: dict[tuple, tuple] = {
+    ("league-typical", "attribute"): (
+        "ordinary mix",
+        "Handedness and delivery split close to the league's."),
+    ("league-typical", "tool"): (
+        "no standout tools",
+        "Nobody's speed, arm or velocity is far from league norm — in either "
+        "direction. The team is neither notably toolsy nor notably lacking."),
+    ("league-typical", "behavior"): (
+        "no distinctive tendencies",
+        "Swing decisions, running and pitch selection all sit near the "
+        "league's."),
+    ("league-typical", "result"): (
+        "league-average outcomes",
+        "What the players produced — power, contact, command, defense — lands "
+        "near league average."),
+    ("league-typical", "deployment"): (
+        "conventional usage",
+        "The front office used this unit in unremarkable ways: no unusual "
+        "leverage, workload or platoon patterns."),
+    ("league-typical", "noise"): (
+        "ordinary luck",
+        "Results tracked the underlying contact; no notable over- or "
+        "under-performance."),
+    ("not measured", "noise"): (
+        "not measured",
+        "Luck is computed from a hitter's wOBA against his xwOBA, so it has "
+        "no definition for a pitching staff. This is an absence of vocabulary, "
+        "not a finding about the team."),
+}
+
+
 def team_identity_card(portrait: dict, fingerprint: dict | None = None,
                        position: dict | None = None) -> html.Div:
     """
@@ -2182,13 +2219,20 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
                            "display": "inline-block", "width": "78px",
                            "verticalAlign": "top"})
                 if state != "defined" or not tags:
-                    # Dimmed but legible: "league-typical" is a real finding
-                    # in this vocabulary, not an absence, so it should read as
-                    # a quiet statement rather than a rendering gap.
+                    # Dimmed but legible: this is a real finding in this
+                    # vocabulary, not an absence, so it should read as a quiet
+                    # statement rather than a rendering gap. "league-typical"
+                    # alone did not say typical IN WHAT, so each kind says
+                    # what was actually checked.
+                    label, tip = _TYPICAL_TEXT.get(
+                        (state, kind),
+                        (state, "No tag of this kind separates this team "
+                                "from the league."))
                     body = html.Span(
-                        state,
+                        label, title=tip,
                         style={"color": COLORS["subtext"], "fontSize": "0.72rem",
-                               "fontStyle": "italic", "opacity": "0.75"})
+                               "fontStyle": "italic", "opacity": "0.75",
+                               "cursor": "help"})
                 else:
                     parts = []
                     for i, e in enumerate(tags):
