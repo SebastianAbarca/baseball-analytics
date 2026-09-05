@@ -2021,6 +2021,164 @@ TAG_POPULATION: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Tag kind — who controls the thing the tag describes
+# ---------------------------------------------------------------------------
+# The second of the v3 axes to actually reach code (population was the first).
+# `kind` orders tags by CONTROL, from what nobody chose to what the front
+# office decided:
+#
+#   attribute  — nobody chose it (handedness, arm slot)
+#   tool       — physical capacity (sprint speed, velocity, arm strength)
+#   behavior   — a choice the player makes (chase, steal attempts, pitch mix)
+#   result     — what came out (strikeout rate, barrel rate, framing runs)
+#   deployment — what the organisation did with them (leverage, usage, role)
+#   noise      — luck
+#
+# Without this axis every tag competed for the same identity slots, so a team
+# fingerprint could lead with "right-handed hitter" — true, unchosen, and
+# useless as a description of how they play. Measured across 360 team-seasons,
+# handedness held 6.8% of all fingerprint slots and 42% of team-seasons
+# carried at least one. Kind does not DELETE those tags; it files them, so an
+# attribute is reported as an attribute instead of outranking a skill.
+#
+# Keyed by tag name. Kind is a property of the VOCABULARY, not of a
+# player-season — `free swinger` is a behavior whoever carries it — so this is
+# a lookup map rather than a field stamped on every trait instance. That also
+# means adding it needs no portrait rebuild.
+KIND_ATTRIBUTE  = "attribute"
+KIND_TOOL       = "tool"
+KIND_BEHAVIOR   = "behavior"
+KIND_RESULT     = "result"
+KIND_DEPLOYMENT = "deployment"
+KIND_NOISE      = "noise"
+
+# Display order, least controllable → most.
+TAG_KINDS = [KIND_ATTRIBUTE, KIND_TOOL, KIND_BEHAVIOR, KIND_RESULT,
+             KIND_DEPLOYMENT, KIND_NOISE]
+
+TAG_KIND: dict[str, str] = {}
+
+
+def _assign_kind(kind: str, *tags: str) -> None:
+    for t in tags:
+        TAG_KIND[t] = kind
+
+
+_assign_kind(
+    KIND_ATTRIBUTE,
+    # handedness
+    "left-handed hitter", "right-handed hitter", "switch hitter",
+    "left-handed pitcher", "right-handed pitcher",
+    # delivery geometry — a pitcher's build and slot, not a season's choice
+    "over-the-top", "sidearm", "submarine", "wide release",
+    "deep extension", "short extension",
+)
+
+_assign_kind(
+    KIND_TOOL,
+    "elite speed", "fast", "station-to-station",
+    "elite velo", "plus velo", "cannon arm", "quick pop",
+    "high spin efficiency", "ride four-seam",
+)
+
+_assign_kind(
+    KIND_BEHAVIOR,
+    # swing decisions
+    "patient", "free swinger", "aggressive", "zone hunter",
+    # what they do with the bat
+    "pull-heavy", "oppo bat", "air-ball bat", "ground-ball bat",
+    # the decision to run (the RESULT of running is a result tag)
+    "high steal attempts", "low steal attempts", "extra base taker",
+    # how a pitcher works
+    "count-shifter", "first-pitch attacker", "patterned", "steady mix",
+    "unpredictable", "quick pitcher", "slow pitcher", "tunneler",
+    # what he chooses to throw
+    "deep arsenal", "two-pitch", "cutter-primary", "sinker-baller",
+    "knuckleballer",
+)
+
+_assign_kind(
+    KIND_RESULT,
+    "power bat", "plus power", "gap hitter", "weak contact",
+    "high-K", "rarely strikes out", "walk machine",
+    "high steal rate", "low steal rate",
+    "elite defender", "plus defender", "defensive liability",
+    "elite framer", "poor framer", "good blocker", "bad blocker",
+    "bat-misser", "ground-baller", "fly-ball prone", "pitch-to-contact",
+    "elite command", "plus command", "walk prone", "invisible ball",
+    "controls runners",
+    "platoon liability", "reverse split", "platoon-vulnerable",
+)
+
+_assign_kind(
+    KIND_DEPLOYMENT,
+    "everyday player", "heavy usage", "high-leverage arm", "mop-up duty",
+    "multi-inning reliever", "short-outing starter", "swingman", "workhorse",
+    "platoon specialist", "super-utility",
+)
+
+_assign_kind(KIND_NOISE, "lucky", "unlucky")
+
+
+# Tags that are two ends of ONE axis. At team level both can carry a nonzero
+# density, so a fingerprint row could spend both its slots saying one thing:
+# "left-handed hitter -22pts · right-handed hitter +26pts" is a single fact
+# written twice, since a lineup that is 26 points more right-handed is
+# necessarily that much less left-handed. Measured across 360 team-seasons,
+# 8.2% of two-tag rows were such a pair and 76 of those 81 were handedness.
+# Only the stronger end is shown.
+TAG_COMPLEMENT: dict[str, str] = {}
+
+
+def _pair(a: str, b: str) -> None:
+    TAG_COMPLEMENT[a] = b
+    TAG_COMPLEMENT[b] = a
+
+
+_pair("left-handed hitter", "right-handed hitter")
+_pair("left-handed pitcher", "right-handed pitcher")
+_pair("high steal attempts", "low steal attempts")
+_pair("high steal rate", "low steal rate")
+_pair("elite framer", "poor framer")
+_pair("good blocker", "bad blocker")
+_pair("air-ball bat", "ground-ball bat")
+_pair("pull-heavy", "oppo bat")
+_pair("elite defender", "defensive liability")
+_pair("elite command", "walk prone")
+_pair("bat-misser", "pitch-to-contact")
+_pair("quick pitcher", "slow pitcher")
+_pair("deep arsenal", "two-pitch")
+_pair("patient", "free swinger")
+_pair("high-K", "rarely strikes out")
+_pair("elite speed", "station-to-station")
+
+
+def _ordinal(n: float) -> str:
+    """1st / 2nd / 3rd / 4th … — the fit notes read as prose, and a hard-coded
+    'th' produced '3th percentile'. 11-13 take 'th' regardless of last digit."""
+    i = int(round(n))
+    if 11 <= (i % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(i % 10, "th")
+    return f"{i}{suffix}"
+
+
+def kind_of(tag: str) -> Optional[str]:
+    """Kind for a tag, or None if the tag is outside the vocabulary.
+
+    The `<pitch> out pitch` tags are generated dynamically per pitch type, so
+    they are matched by suffix rather than enumerated — choosing which pitch
+    to put hitters away with is a behavior.
+    """
+    if tag in TAG_KIND:
+        return TAG_KIND[tag]
+    if tag.endswith("out pitch"):
+        return KIND_BEHAVIOR
+    return None
+
+
 def _hitter_populations(
     sprint_raw:   Optional[float],
     season_metrics: dict,
@@ -2260,7 +2418,7 @@ def _build_team_identity(
                 else "bottom-tier" if team_defense_pct < 40
                 else "middle-tier")
         identity["fit"]["rotation_vs_defense"] = (
-            f"{rotation_mech} rotation; team defense ranks {team_defense_pct:.0f}th "
+            f"{rotation_mech} rotation; team defense ranks {_ordinal(team_defense_pct)} "
             f"percentile ({band})."
         )
 

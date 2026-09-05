@@ -2069,7 +2069,8 @@ def team_split_card(portrait: dict) -> html.Div:
     return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
 
 
-def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.Div:
+def team_identity_card(portrait: dict, fingerprint: dict | None = None,
+                       position: dict | None = None) -> html.Div:
     """
     Team Identity — three headline labels (Offense / Rotation / Bullpen)
     synthesized from the per-player archetype distributions, plus a short
@@ -2097,15 +2098,12 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.
                      style={"fontSize": "0.7rem", "marginTop": "2px"}),
         ]), md=4, xs=12, className="mb-2")
 
+    # `contact_share` / `complete_share` retired with the tags that fed them —
+    # they rendered as a permanent "Contact 0%". Power share survives because
+    # it is still computed from live tags.
     offense_sub = None
-    if offense.get("power_share") is not None or offense.get("trait_density"):
-        # Show the raw share mix so the data speaks for itself —
-        # complete hitters are their own bucket, not folded into either side.
-        parts = [f"Power {offense.get('power_share', 0):.0%}",
-                 f"Contact {offense.get('contact_share', 0):.0%}"]
-        if offense.get("complete_share"):
-            parts.append(f"Complete {offense['complete_share']:.0%}")
-        offense_sub = " · ".join(parts) + " of PA"
+    if offense.get("power_share") is not None:
+        offense_sub = f"Power {offense['power_share']:.0%} of PA"
 
     rotation_sub = None
     density = rotation.get("trait_density") or {}
@@ -2121,10 +2119,25 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.
     bullpen_label = bullpen.get("out_mechanism")
     bullpen_sub = bullpen.get("leverage_structure")
 
+    # Headline labels were retired (hand-chosen cutoffs assigning a team to a
+    # bucket). Position replaces them: who this unit most resembles, and how
+    # unusual it is. No thresholds, and it follows the roster.
+    def _headline(unit: str, fallback=None):
+        pos = position or {}
+        near = (pos.get("neighbours") or {}).get(unit) or []
+        uq = ((pos.get("uniqueness") or {}).get(unit) or {}).get("score")
+        if near:
+            names = ", ".join(x.get("team", "") for x in near[:2])
+            if uq is not None:
+                return f"Plays like {names} · {uq:.0f}/100 distinct"
+            return f"Plays like {names}"
+        return fallback
+
     cols = dbc.Row([
-        _identity_col("Offense",  offense.get("label"),  offense_sub,  COLORS["offense"]),
-        _identity_col("Rotation", rotation.get("label"), rotation_sub, COLORS["pitching"]),
-        _identity_col("Bullpen",  bullpen_label,         bullpen_sub,  COLORS["roster"]),
+        _identity_col("Offense",  _headline("offense"),  offense_sub,  COLORS["offense"]),
+        _identity_col("Rotation", _headline("rotation"), rotation_sub, COLORS["pitching"]),
+        _identity_col("Bullpen",  _headline("bullpen", bullpen_label),
+                      bullpen_sub, COLORS["roster"]),
     ], className="g-3")
 
     fit_notes = [v for v in fit.values() if v]
@@ -2144,23 +2157,56 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None) -> html.
                      ("bullpen", "Bullpen", COLORS["roster"])]
         lines = []
         for unit, label, color in unit_meta:
-            for e in (fingerprint.get(unit) or []):
-                dev = e.get("deviation", 0) * 100
-                breadth = (f" · {e['carriers']}/{e['qualifiers']} regulars"
-                           if e.get("qualifiers") else "")
-                lines.append(html.Div([
-                    html.Span(label, style={"color": color, "fontWeight": "600",
-                                            "fontSize": "0.7rem",
-                                            "textTransform": "uppercase",
-                                            "letterSpacing": "0.05em",
-                                            "marginRight": "6px"}),
-                    html.Span(e.get("tag", ""), style={"color": "#f9fafb",
-                                                       "fontWeight": "600",
-                                                       "fontSize": "0.78rem"}),
-                    html.Span(f" {dev:+.0f} pts vs league{breadth}",
-                              className="text-secondary",
-                              style={"fontSize": "0.72rem"}),
-                ], className="mb-1"))
+            rows = fingerprint.get(unit) or []
+            # Legacy shape (a flat ranked list) had no `kind`; render it the
+            # old way so a stale league file still displays.
+            if rows and "kind" not in (rows[0] or {}):
+                rows = [{"kind": None, "state": "defined", "tags": rows}]
+            if not rows:
+                continue
+            lines.append(html.Div(
+                label, style={"color": color, "fontWeight": "700",
+                              "fontSize": "0.7rem", "textTransform": "uppercase",
+                              "letterSpacing": "0.06em",
+                              "marginTop": "8px", "marginBottom": "3px"}))
+            for row in rows:
+                kind = row.get("kind")
+                state = row.get("state", "defined")
+                tags = row.get("tags") or []
+                # The kind label is a fixed column so the six rows line up
+                # across teams and units — the card is a skeleton, not a list.
+                kind_span = html.Span(
+                    (kind or ""),
+                    style={"color": COLORS["subtext"], "fontSize": "0.66rem",
+                           "textTransform": "uppercase", "letterSpacing": "0.05em",
+                           "display": "inline-block", "width": "78px",
+                           "verticalAlign": "top"})
+                if state != "defined" or not tags:
+                    # Dimmed but legible: "league-typical" is a real finding
+                    # in this vocabulary, not an absence, so it should read as
+                    # a quiet statement rather than a rendering gap.
+                    body = html.Span(
+                        state,
+                        style={"color": COLORS["subtext"], "fontSize": "0.72rem",
+                               "fontStyle": "italic", "opacity": "0.75"})
+                else:
+                    parts = []
+                    for i, e in enumerate(tags):
+                        dev = e.get("deviation", 0) * 100
+                        breadth = (f" ({e['carriers']}/{e['qualifiers']})"
+                                   if e.get("qualifiers") else "")
+                        if i:
+                            parts.append(html.Span(" · ", className="text-secondary",
+                                                   style={"fontSize": "0.72rem"}))
+                        parts.append(html.Span(
+                            e.get("tag", ""),
+                            style={"color": "#f9fafb", "fontWeight": "600",
+                                   "fontSize": "0.76rem"}))
+                        parts.append(html.Span(
+                            f" {dev:+.0f}pts{breadth}", className="text-secondary",
+                            style={"fontSize": "0.7rem"}))
+                    body = html.Span(parts)
+                lines.append(html.Div([kind_span, body], className="mb-1"))
         if lines:
             fp_block = html.Div([
                 html.Hr(style={"borderColor": COLORS["border"], "margin": "10px 0"}),

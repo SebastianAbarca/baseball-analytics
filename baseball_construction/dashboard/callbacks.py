@@ -77,17 +77,17 @@ def _storage_download(team: str, season: int) -> str | None:
             text = data.decode("utf-8") if isinstance(data, bytes) else data
             if not _schema_current(json.loads(text)):
                 log.info(
-                    "Stale portrait in Supabase Storage (schema mismatch): %s %d — ignoring",
+                    "Stale portrait in Supabase Storage (schema mismatch): %s %s — ignoring",
                     team, season,
                 )
                 return None
             # Write to local cache so subsequent requests hit disk
             cp = _cache_path(team, int(season))
             cp.write_text(text)
-            log.info("Portrait downloaded from Supabase Storage: %s %d", team, season)
+            log.info("Portrait downloaded from Supabase Storage: %s %s", team, season)
             return text
     except Exception as exc:
-        log.debug("Storage download miss for %s %d: %s", team, season, exc)
+        log.debug("Storage download miss for %s %s: %s", team, season, exc)
     return None
 
 
@@ -107,9 +107,9 @@ def _storage_upload(team: str, season: int, json_text: str) -> None:
             filename, data,
             file_options={"content-type": "application/json"},
         )
-        log.info("Portrait uploaded to Supabase Storage: %s %d", team, season)
+        log.info("Portrait uploaded to Supabase Storage: %s %s", team, season)
     except Exception as exc:
-        log.warning("Storage upload failed for %s %d: %s", team, season, exc)
+        log.warning("Storage upload failed for %s %s: %s", team, season, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +193,10 @@ def build_portrait(team: str, season: int):
                      f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
                     color="success", className="py-1 mb-0",
                 )
-                log.info("Portrait cache hit (disk): %s %d (%.2fs)", team, season, elapsed)
+                log.info("Portrait cache hit (disk): %s %s (%.2fs)", team, season, elapsed)
                 return cached_json, banner
             else:
-                log.info("Stale disk-cached portrait (schema mismatch): %s %d — rebuilding", team, season)
+                log.info("Stale disk-cached portrait (schema mismatch): %s %s — rebuilding", team, season)
         except Exception as exc:
             log.warning("Portrait disk cache read failed: %s", exc)
 
@@ -844,7 +844,7 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
                     "sprint_raw": sprint_raw,
                 })
         except Exception as exc:
-            log.warning("Scout season %d failed: %s", season, exc)
+            log.warning("Scout season %s failed: %s", season, exc)
 
     if not all_profiles:
         return (charts.empty_figure("No data for selected seasons"),
@@ -989,15 +989,21 @@ def team_identity_card(data):
     p = _deserialize(data)
     if not p:
         return "Load a portrait to see team identity."
-    fingerprint = None
+    fingerprint = position = None
     try:
         path = _LEAGUE_IDENTITY_DIR / f"league_identity_{p.get('season')}.json"
         if path.exists():
             league = json.loads(path.read_text())
-            fingerprint = (league.get(p.get("team")) or {}).get("fingerprint")
+            entry = league.get(p.get("team")) or {}
+            fingerprint = entry.get("fingerprint")
+            # Where the team sits relative to everyone else — this is what
+            # replaced the headline labels, and it had never been wired in, so
+            # the card rendered a bare "—" where the label used to be.
+            position = {"neighbours": entry.get("neighbours") or {},
+                        "uniqueness": entry.get("uniqueness") or {}}
     except Exception:
         pass
-    return charts.team_identity_card(p, fingerprint=fingerprint)
+    return charts.team_identity_card(p, fingerprint=fingerprint, position=position)
 
 
 # ---------------------------------------------------------------------------
@@ -1082,9 +1088,16 @@ def league_identity_board(season):
         fp = identity.get("fingerprint") or {}
         fp_items = []
         for unit, prefix in [("offense", "O"), ("rotation", "R"), ("bullpen", "B")]:
-            for e in (fp.get(unit) or []):
-                fp_items.append((abs(e["deviation"]), 
-                                 f"{prefix}: {e['tag']} {e['deviation']*100:+.0f}"))
+            for row in (fp.get(unit) or []):
+                # Fingerprints are per-kind rows carrying a `tags` list; older
+                # league files stored a flat list of entries.
+                entries = row.get("tags") if isinstance(row, dict) and "tags" in row \
+                    else [row]
+                for e in entries or []:
+                    if "deviation" not in e:
+                        continue
+                    fp_items.append((abs(e["deviation"]),
+                                     f"{prefix}: {e['tag']} {e['deviation']*100:+.0f}"))
         fp_items.sort(key=lambda x: -x[0])
         fp_str = " · ".join(t for _, t in fp_items[:3]) or "league-typical"
 

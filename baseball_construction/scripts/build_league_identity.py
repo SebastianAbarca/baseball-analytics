@@ -22,7 +22,8 @@ import numpy as np
 import pandas as pd
 
 from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,  # noqa: E402
-                           TAG_POPULATION, POP_ALL)
+                           TAG_POPULATION, POP_ALL, TAG_KINDS, kind_of,
+                           TAG_COMPLEMENT)
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -77,7 +78,36 @@ _FP_MIN_DEV = 0.08   # |deviation| floor to count as identity-defining
 # something, or more than one player carries the tag.
 _FP_MIN_QUALIFIERS = 3
 _FP_MIN_CARRIERS_SMALL_POOL = 2
-_FP_TOP_N   = 3      # max fingerprint tags per unit
+
+# ── Per-kind fingerprint ────────────────────────────────────────────────────
+# The fingerprint is organised BY KIND (see team_portrait.TAG_KIND) rather
+# than as one ranked list. Ranking everything together let an attribute nobody
+# chose outrank a skill: HOU 2025's offense led with "left-handed hitter" and
+# "right-handed hitter", i.e. it reported that they bat right-handed. Filing
+# each tag under its kind keeps that fact — a lineup's handedness IS worth
+# knowing — without letting it displace how the team actually plays.
+#
+# Every kind gets a row, so the card is a fixed skeleton and teams can be read
+# against each other line by line. A kind where nothing clears the bar is
+# reported as league-typical, which is information rather than a gap. A kind
+# with no vocabulary in that unit at all (luck applies only to hitters, so
+# `noise` is undefined for a pitching staff) is reported as unmeasured, which
+# is a different statement.
+#
+# Selection is by |z| — deviation over the tag's own cross-team spread —
+# because raw deviations are not comparable between tags. The gate is a z
+# floor rather than the old winner-take-all top-3: with only three slots the
+# floor barely mattered, but per kind it does the work. Measured across 360
+# team-seasons, z >= 1.5 with a cap of 2 yields a median 4 tags per unit
+# against the 3 the old design showed — the same density, now structured.
+_FP_MIN_Z = 1.5
+_FP_PER_KIND = 2
+# Luck is one line or none. It is the one kind where more detail is actively
+# misleading, since a second luck tag says nothing a first does not.
+_FP_PER_KIND_OVERRIDE = {"noise": 1}
+
+_FP_TYPICAL = "league-typical"    # vocabulary exists, team is unremarkable
+_FP_UNMEASURED = "not measured"   # kind has no vocabulary for this unit
 
 
 def _compute_fingerprints(league: dict[str, dict],
@@ -118,6 +148,11 @@ def _compute_fingerprints(league: dict[str, dict],
             mu = sum(vals) / len(vals)
             sd[tag] = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
 
+        # Which kinds have any vocabulary at all in this unit. Luck tags exist
+        # only for hitters, so a pitching staff has no `noise` vocabulary — a
+        # different statement from "this staff had average luck".
+        unit_kinds = {k for k in (kind_of(t) for t in all_tags) if k}
+
         for team in teams:
             ident = league[team]
             dens = (ident.get(unit) or {}).get("trait_density") or {}
@@ -127,6 +162,8 @@ def _compute_fingerprints(league: dict[str, dict],
                 d = float(dens.get(tag, 0.0)) - base[tag]
                 if abs(d) < _FP_MIN_DEV or not sd[tag]:
                     continue
+                if abs(d / sd[tag]) < _FP_MIN_Z:
+                    continue   # not unusual enough FOR THIS TAG to mean anything
                 # Breadth is counted within the tag's ELIGIBLE population —
                 # "0 of 13 regulars are good blockers" is meaningless when 11
                 # of those 13 never crouch behind the plate.
@@ -141,6 +178,7 @@ def _compute_fingerprints(league: dict[str, dict],
                     continue   # population of one is coverage, not identity
                 devs.append({
                     "tag":        tag,
+                    "kind":       kind_of(tag),
                     "density":    round(float(dens.get(tag, 0.0)), 4),
                     "baseline":   round(base[tag], 4),
                     "deviation":  round(d, 4),
@@ -149,7 +187,35 @@ def _compute_fingerprints(league: dict[str, dict],
                     "qualifiers": len(qual),
                 })
             devs.sort(key=lambda x: -abs(x["z"]))
-            ident.setdefault("fingerprint", {})[unit] = devs[:_FP_TOP_N]
+
+            # File each surviving tag under its kind, most distinctive first,
+            # capped so one loud kind cannot fill the card.
+            by_kind: dict[str, list] = {}
+            for e in devs:
+                k = e.get("kind")
+                if not k:
+                    continue
+                bucket = by_kind.setdefault(k, [])
+                # Skip the weaker end of a two-ended axis — devs is already
+                # sorted by |z|, so whichever end appears first is the stronger.
+                comp = TAG_COMPLEMENT.get(e["tag"])
+                if comp and any(x["tag"] == comp for x in bucket):
+                    continue
+                cap = _FP_PER_KIND_OVERRIDE.get(k, _FP_PER_KIND)
+                if len(bucket) < cap:
+                    bucket.append(e)
+
+            # Every kind gets a row so the card is a fixed skeleton and teams
+            # read against each other line by line.
+            rows = []
+            for k in TAG_KINDS:
+                if k not in unit_kinds:
+                    rows.append({"kind": k, "state": _FP_UNMEASURED, "tags": []})
+                elif by_kind.get(k):
+                    rows.append({"kind": k, "state": "defined", "tags": by_kind[k]})
+                else:
+                    rows.append({"kind": k, "state": _FP_TYPICAL, "tags": []})
+            ident.setdefault("fingerprint", {})[unit] = rows
 
     league["_baselines"] = baselines
 
