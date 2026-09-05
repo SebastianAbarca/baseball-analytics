@@ -217,31 +217,35 @@ def _archetype_guide_card() -> dbc.Card:
         },
         {
             "code": "APPR", "color": "#22c55e", "name": "Approach traits",
-            "desc": "How the plate appearance is conducted.",
-            "gates": [
-                "walk machine — BB% ≥ 80th pct (absorbed into elite discipline when both fire)",
-                "high-K — strikeout rate ≥ 80th pct · rarely strikes out — ≤ 10th pct (min 200 PA)",
-                "elite discipline / free swinger — walk-rate + chase composite top/bottom tier",
-                "aggressive — first-pitch swing ≥ 65th pct AND chase ≥ 60th pct",
-            ],
-            "examples": "aggressive: Tucker, Acuña 2023 · walk machine: Soto",
-        },
-        {
-            "code": "COMP", "color": "#f59e0b", "name": "complete (collapse badge)",
             "desc": (
-                "When a hitter independently earns the power, on-base, discipline, "
-                "and hard-contact evidence (with K% under 30%), those tags collapse "
-                "into one `complete` badge — the constituents are listed in its "
-                "evidence. The presence of everything shows as one word."
+                "Swing decisions. Chase rate alone separates patient from free "
+                "swinger — the old composite mixed the decision with its "
+                "result, which is why free swinger fired on 30% of the league."
             ),
             "gates": [
-                "power bat or plus power",
-                "OBP ≥ 70th pct",
-                "elite discipline or walk machine",
-                "hard contact",
-                "K% ≤ 30% raw",
+                "patient — chase ≤ 15th pct · free swinger — chase ≥ 85th pct",
+                "zone hunter — swing discrimination (zone-swing rate minus chase "
+                "rate) ≥ 85th pct: attacks strikes AND lays off balls",
+                "walk machine — BB% ≥ 80th pct (a result, so it stands alone)",
+                "aggressive — first-pitch swing ≥ 65th pct AND chase ≥ 60th pct",
             ],
-            "examples": "2023: Acuña, Yordan, Tucker, Olson, Sean Murphy",
+            "examples": ("zone hunter: Seager 2023 (100th), Semien, Judge · "
+                         "aggressive: Tucker, Acuña 2023 · walk machine: Soto"),
+        },
+        {
+            "code": "B2B", "color": "#fb923c", "name": "Bat-to-ball traits",
+            "desc": (
+                "Contact ability, kept separate from approach on purpose. Chase "
+                "rate and strikeout rate correlate +0.02 — swing decisions and "
+                "bat-to-ball skill are orthogonal, so filing strikeouts under "
+                "approach was simply wrong."
+            ),
+            "gates": [
+                "high-K — strikeout rate ≥ 80th pct of the season",
+                "rarely strikes out — ≤ 10th pct (min 200 PA; small samples "
+                "produce fake 8% strikeout rates)",
+            ],
+            "examples": "rarely strikes out: Arraez, Kwan · high-K: Gallo",
         },
     ]
 
@@ -339,7 +343,10 @@ def _archetype_guide_card() -> dbc.Card:
             "desc": (
                 "How the stuff plays beyond its raw quality. tunneler (league tunnel "
                 "score ≥ 75th pct), invisible ball (whiff rate above what velocity "
-                "predicts, ≥ 90th pct residual), high spin efficiency / gyro-heavy."
+                "predicts, ≥ 90th pct residual), high spin efficiency. The old "
+                "gyro-heavy tag retired — 79% of the pitchers carrying it also "
+                "threw a slider as their out pitch, so it mostly restated the "
+                "pitch."
             ),
             "examples": "tunneler: Javier, Pressly 2023 · invisible ball: Luis García, Abreu 2023",
         },
@@ -813,7 +820,7 @@ def scout_tab() -> dbc.Tab:
     TRAIT_TAGS = [
         "power bat", "plus power", "gap hitter", "weak contact",
         "high-K", "rarely strikes out",
-        "patient", "free swinger", "walk machine", "aggressive",
+        "patient", "free swinger", "zone hunter", "walk machine", "aggressive",
         "pull-heavy", "oppo bat", "air-ball bat", "ground-ball bat",
         "elite speed", "fast", "station-to-station",
         "high steal attempts", "low steal attempts",

@@ -133,6 +133,7 @@ TAG_EVIDENCE: dict[str, str] = {
     "walk machine":    "BB_pct",
     "patient":         "OSwing_pct",
     "free swinger":    "OSwing_pct",
+    "zone hunter":     "OSwing_pct",   # differences two swing-decision rates
     "aggressive":      "FPS_pct",
     "pull-heavy":      "BatGB_pct",    # batted-ball direction share
     "oppo bat":        "BatGB_pct",

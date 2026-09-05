@@ -14,7 +14,8 @@ denominator it is scored against).
 Families:
     bat          — power bat / plus power / gap hitter / weak contact
     bat-to-ball  — high-K / rarely strikes out
-    approach     — patient / free swinger / walk machine / aggressive
+    approach     — patient / free swinger / zone hunter / walk machine /
+                   aggressive
     batted-ball  — pull-heavy / oppo bat / air-ball bat / ground-ball bat
     athleticism  — elite speed / fast / station-to-station
     running-game — high|low steal attempts / high|low steal rate /
@@ -86,6 +87,9 @@ GAP_HITTER_HRFB_CEILING = 70.0   # HR/FB percentile ≤ → power isn't the sour
 PATIENT_CHASE_PCT      = 15.0   # OSwing (chase) pct ≤ → patient
 FREE_SWINGER_CHASE_PCT = 85.0   # OSwing (chase) pct ≥ → free swinger
 WALK_MACHINE_PCT = 80.0
+# Swing discrimination (zone-swing rate − chase rate) percentile ≥ → zone
+# hunter. See the tag for why the raw zone-swing rate is not used.
+ZONE_HUNTER_PCT = 85.0
 
 # bat-to-ball gates (K rate correlates −0.88 with contact rate — this is a
 # contact axis, not an approach one)
@@ -256,6 +260,21 @@ def build_hitter_traits(
         elif float(chase) >= FREE_SWINGER_CHASE_PCT:
             traits.append(_trait("free swinger", "approach", chase, chase,
                                  f"chase rate {chase:.0f}th pct — expands the zone"))
+
+    # `zone hunter` — swing DISCRIMINATION, not swing volume. Zone-swing rate
+    # on its own was not worth a tag: it correlates +0.81 with first-pitch
+    # swing rate, so it would have restated `aggressive`. Differencing it
+    # against chase drops that to +0.26 and isolates a real, repeatable skill
+    # — Corey Seager clears this gate in three separate seasons, Kyle Tucker
+    # and Brandon Belt in two, while Javier Baez sits at the bottom twice.
+    # Distinct from `patient`, which is chase alone and says nothing about
+    # whether the hitter then does damage on the strikes he does swing at.
+    discrim = gm.get("SwingDiscrim")
+    if (discrim is not None and not (isinstance(discrim, float) and np.isnan(discrim))
+            and float(discrim) >= ZONE_HUNTER_PCT):
+        traits.append(_trait("zone hunter", "approach", discrim, discrim,
+                             f"swing discrimination {discrim:.0f}th pct — "
+                             "attacks strikes and lays off balls"))
 
     # ── bat-to-ball ────────────────────────────────────────────────────────
     k = gm.get("K_pct_raw")

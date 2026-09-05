@@ -2391,8 +2391,10 @@ def build_team_portrait(
     try:
         from pitch_aggregates import compute_pitch_aggregates
         _bat_agg, _ = compute_pitch_aggregates(season)
-        _fill = _bat_agg[["key_mlbam", "chase_sc_pct", "fps_pct"]].rename(
-            columns={"chase_sc_pct": "_chase_fill", "fps_pct": "_fps_fill"})
+        _fill = _bat_agg[["key_mlbam", "chase_sc_pct", "fps_pct",
+                          "zone_swing_pct"]].rename(
+            columns={"chase_sc_pct": "_chase_fill", "fps_pct": "_fps_fill",
+                     "zone_swing_pct": "_zswing_fill"})
         batting_full = batting_full.merge(_fill, on="key_mlbam", how="left")
         # UNIT MISMATCH — do NOT fillna() one into the other. The DB's
         # chase_pct/fps_pct are PERCENTILES (1–100, median ~49); the Statcast
@@ -2406,9 +2408,27 @@ def build_team_portrait(
         # player, so it is used ALONE. Players without it stay null and simply
         # miss the zone-judgment tags — which is what the `chase` population
         # already encodes.
-        for dest, src in [("chase_pct", "_chase_fill"), ("fps_pct", "_fps_fill")]:
+        for dest, src in [("chase_pct", "_chase_fill"), ("fps_pct", "_fps_fill"),
+                          ("zone_swing_pct", "_zswing_fill")]:
             batting_full[dest] = pd.to_numeric(batting_full[src], errors="coerce")
-        batting_full = batting_full.drop(columns=["_chase_fill", "_fps_fill"])
+
+        # Swing discrimination — strikes attacked minus balls chased. This is
+        # the `zone hunter` axis, and it has to be differenced from the RAW
+        # rates here rather than from their percentiles downstream: a
+        # percentile of a difference is not the difference of two percentiles.
+        #
+        # Zone-swing rate alone was not worth a tag. Measured on 2,040
+        # qualified batter-seasons (2021-25) it correlates +0.81 with
+        # first-pitch-swing rate, which `aggressive` already gates on — above
+        # the containment that retired `hard contact` (0.82) and `gyro-heavy`
+        # (0.79). The difference decorrelates it to +0.26: swinging a lot and
+        # swinging at the RIGHT pitches are separate skills, and only the
+        # second one is news.
+        batting_full["swing_discrim"] = (
+            pd.to_numeric(batting_full["zone_swing_pct"], errors="coerce")
+            - pd.to_numeric(batting_full["chase_pct"], errors="coerce"))
+        batting_full = batting_full.drop(
+            columns=["_chase_fill", "_fps_fill", "_zswing_fill"])
         log.info("Chase/FPS from Statcast rates — chase %d/%d non-null",
                  batting_full["chase_pct"].notna().sum(), len(batting_full))
     except Exception as exc:
@@ -2485,6 +2505,7 @@ def build_team_portrait(
         ("gb_pct",       "BatGB_pct",  False),  # batter GB% (air/ground tags)
         ("sprint_speed", "SprintSpeed", False),  # station-to-station gate
         ("pa",           "PAvol",      False),   # everyday-player gate
+        ("swing_discrim","SwingDiscrim", False), # zone-hunter gate
     ]
     def _first_col(frame: pd.DataFrame, col: str) -> Optional[pd.Series]:
         """Column as Series; first occurrence if the rename created duplicates."""
