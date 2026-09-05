@@ -146,6 +146,63 @@ def _repair_table(table: str, season: int, agg: pd.DataFrame,
     _upsert(table, records)
 
 
+def purge_derived_pools(dry_run: bool) -> None:
+    """
+    Delete every cache that carries metric units, so they rebuild through the
+    repaired code path.
+
+    This is the trap this script sprang the first time it ran, twice. Repairing
+    the stored rows is not enough: team_portrait ranks a player against pools
+    cached on disk, and those files keep whatever units they were built with.
+    After the first repair the database held true mph while the pool still held
+    percentiles, so a 93 mph fastball was ranked against a uniform 1-100 pool
+    and came back as the 93rd percentile — `elite velo` fired on 89.8% of
+    pitcher-seasons and `soft tosser` on none at all.
+
+    The caches are LAYERED, which is what made the second attempt fail too:
+
+        fg_{batting,pitching}_{season}.csv      <- root; the Savant pull
+          -> {batting,pitching}_history_*.csv   <- pooled, built FROM the root
+               -> *_prior_*.parquet             <- prior-season slice
+                    -> portraits/{TEAM}_{season}.json
+
+    Purging only the pooled layer rebuilds it from the stale root and changes
+    nothing. Every level goes, portraits included — they are the layer that
+    actually reaches a reader, and PORTRAIT_SCHEMA_VERSION cannot save them
+    here. The version detects a change of SHAPE; this is a change of CONTENT
+    at the same shape, so a portrait built minutes before a repair and one
+    built after are indistinguishable to it. On the third pass of this bug, 31
+    portraits carrying the current version but pre-repair units were being
+    skipped as cache hits by build_league_identity. Deleting them is the only
+    signal that works.
+
+    This makes a repair expensive on purpose: the next portrait build is a
+    full one (roughly an hour for 12 seasons). That is the honest cost of
+    changing what the numbers mean.
+
+    Nothing is lost. Every one of these is a pure cache gated on
+    `if cache.exists()`; pull_fg_* regenerates the root through
+    _bref_savant_*_merge, which is the path that drops the Savant percentile
+    columns and promotes the Statcast rates.
+    """
+    processed = _HERE.parent / "data" / "processed"
+    stale = (sorted(processed.glob("fg_batting_*.csv"))
+             + sorted(processed.glob("fg_pitching_*.csv"))
+             + sorted(processed.glob("*history*.csv"))
+             + sorted(processed.glob("*prior*.parquet"))
+             + sorted((processed / "portraits").glob("*.json")))
+    if not stale:
+        log.info("No derived pools to purge")
+        return
+    log.warning("%s %d derived pool file(s) — they will rebuild from the "
+                "repaired database on the next portrait build",
+                "Would purge" if dry_run else "Purging", len(stale))
+    for p in stale:
+        log.info("  %s %s", "would remove" if dry_run else "removing", p.name)
+        if not dry_run:
+            p.unlink()
+
+
 def main(season: int, dry_run: bool) -> None:
     parquet = _RAW / f"statcast_{season}.parquet"
     if not parquet.exists():
@@ -185,3 +242,6 @@ if __name__ == "__main__":
                            if p.stem.split("_")[1].isdigit()))
     for s in seasons:
         main(s, args.dry_run)
+    # Always last: the pools must be dropped AFTER the rows they derive from
+    # are correct, or they would simply be rebuilt stale.
+    purge_derived_pools(args.dry_run)

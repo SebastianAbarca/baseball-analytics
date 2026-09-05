@@ -28,3 +28,6 @@ baseball_construction/data/processed/batting_prior_*.parquet
 baseball_construction/modules/processed/
 baseball_construction/data/processed/spray/
 baseball_construction/data/processed/league_identity_*.json
+
+# Pre-repair metric caches, moved aside by scripts/repair_metric_units.py
+baseball_construction/data/processed/_stale_pre_unit_repair/

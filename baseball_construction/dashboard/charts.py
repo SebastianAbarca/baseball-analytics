@@ -19,6 +19,11 @@ from dash import html
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
+# Tag kind (attribute / tool / behavior / result / deployment / noise) — the
+# vocabulary axis, used here to tell a genuinely empty trait cell from one
+# holding only attributes that fire regardless of sample.
+from team_portrait import kind_of  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # ABS (Automated Ball-Strike) standardized strike zone
 # Width : ±0.833 ft  — 17" home plate + ½ ball radius (1.44" dia) each side
@@ -358,10 +363,13 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         return fig
 
     names, poss, ages, pas, wars, specs, traits_col = [], [], [], [], [], [], []
+    dim = []   # per-row: is this profile too thin to lean on?
 
     for h in sorted(hitters, key=lambda x: -(x.get("pa") or 0)):
         name = (h.get("name") or "").strip() or f"ID {h.get('player_id', '?')}"
         war  = h.get("war")
+        limited = bool(h.get("limited_sample"))
+        dim.append(limited)
 
         names.append(name)
         poss.append(h.get("home_position") or "—")
@@ -373,11 +381,34 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         spec = h.get("spectrum")
         specs.append(f"{spec:.0f}" if spec is not None else "—")
 
+        # An empty trait cell used to mean two opposite things. In this
+        # vocabulary carrying no tag is a real finding — the player is
+        # league-average, which is why the middle of every distribution is
+        # deliberately untagged. But a player with 20 PA also carries no tags,
+        # because the reliability gate refused to make a claim. Both rendered
+        # as "—", so the reader could not tell "unremarkable" from "unknown".
+        #
+        # "Empty" has to mean no SUBSTANTIVE tag, not no tag at all. Every
+        # hitter carries a handedness attribute, and attributes are ungated by
+        # reliability because a sample size cannot make someone bat left. So a
+        # pitcher with 12 PA still showed "right-handed hitter" and never fell
+        # through to either state — the distinction was unreachable.
         tags = [t["tag"] for t in h.get("traits") or []]
-        traits_col.append(", ".join(tags) if tags else "—")
+        substantive = [t for t in tags if kind_of(t) != "attribute"]
+        if substantive:
+            traits_col.append(", ".join(tags))
+        elif limited:
+            traits_col.append("limited sample")
+        else:
+            traits_col.append("league-average")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
+    # Thin profiles recede rather than disappear: they are still roster facts,
+    # they just should not read with the same weight as a regular's.
+    name_colors = [COLORS["subtext"] if d else COLORS["text"] for d in dim]
+    trait_colors = [COLORS["subtext"] if (d or t in ("limited sample", "league-average"))
+                    else COLORS["text"] for d, t in zip(dim, traits_col)]
 
     fig = go.Figure(go.Table(
         columnwidth=[3, 0.8, 1, 1, 1, 1.2, 4],
@@ -393,7 +424,18 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         cells=dict(
             values=[names, poss, ages, pas, wars, specs, traits_col],
             fill_color=[row_colors] * 7,
-            font=dict(color=COLORS["text"], size=11),
+            font=dict(
+                color=[
+                    name_colors,                # dimmed when sample is thin
+                    [COLORS["subtext"]] * n,    # position
+                    [COLORS["subtext"]] * n,    # age
+                    name_colors,                # PA — the reason for the dim
+                    [COLORS["text"]] * n,       # bWAR
+                    [COLORS["text"]] * n,       # spectrum
+                    trait_colors,
+                ],
+                size=11,
+            ),
             align=["left", "center", "center", "center", "center", "center", "left"],
             line_color=COLORS["border"],
             height=28,
@@ -814,7 +856,15 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
 
         # Arsenal facts already have their own column
         shown = [t["tag"] for t in traits if t.get("family") != "arsenal"]
-        traits_col.append(", ".join(shown) if shown else "—")
+        # See hitter_archetype_table: an empty cell has to say WHICH kind of
+        # empty it is — nothing distinctive, or not enough to judge — and
+        # "empty" means no SUBSTANTIVE tag, since handedness and arm slot are
+        # attributes that fire regardless of sample.
+        if [t for t in shown if kind_of(t) != "attribute"]:
+            traits_col.append(", ".join(shown))
+        else:
+            traits_col.append("limited sample" if s.get("limited_sample")
+                              else "league-average")
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
@@ -904,7 +954,11 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         hcs.append(_fmt(m.get("HardHit_allowed_pct")))
 
         shown = [t["tag"] for t in traits]
-        traits_col.append(", ".join(shown) if shown else "—")
+        if [t for t in shown if kind_of(t) != "attribute"]:
+            traits_col.append(", ".join(shown))
+        else:
+            traits_col.append("limited sample" if arm.get("limited_sample")
+                              else "league-average")
 
     n = len(rows)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]

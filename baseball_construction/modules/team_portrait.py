@@ -46,7 +46,15 @@ sys.path.insert(0, str(_HERE))
 # Bump whenever the shape of the portrait dict returned by build_team_portrait
 # changes (new top-level keys, renamed fields, etc.) — callers use this to
 # detect and discard stale cached/stored portraits built against an older shape.
-PORTRAIT_SCHEMA_VERSION = 19
+# 20 does not change the SHAPE — it invalidates content. The schema-19
+# portraits were built against normalization pools (data/processed/
+# *_history_*.csv, *_prior_*.parquet) cached before the Savant percentile
+# repair, so a pitcher's true 93 mph was ranked against a pool still holding
+# percentiles and came back as the 93rd percentile. `elite velo` fired on
+# 89.8% of pitcher-seasons against a 90th-percentile gate, and `soft tosser`
+# and `contact suppressor` on none at all. Bumping the version is what
+# discards those portraits everywhere, Supabase Storage included.
+PORTRAIT_SCHEMA_VERSION = 20
 
 from ingest import (
     pull_statcast_range,
