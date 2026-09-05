@@ -2086,7 +2086,11 @@ _assign_kind(
 _assign_kind(
     KIND_TOOL,
     "elite speed", "fast", "station-to-station",
-    "elite velo", "plus velo", "cannon arm", "quick pop",
+    # Velocity is one axis with three ends. `soft tosser` was missing here
+    # only because the broken normalization pool had starved it to zero
+    # incidence — it did not exist in the portraits this map was built from.
+    "elite velo", "plus velo", "soft tosser",
+    "cannon arm", "quick pop",
     "high spin efficiency", "ride four-seam",
 )
 
@@ -2115,7 +2119,7 @@ _assign_kind(
     "elite framer", "poor framer", "good blocker", "bad blocker",
     "bat-misser", "ground-baller", "fly-ball prone", "pitch-to-contact",
     "elite command", "plus command", "walk prone", "invisible ball",
-    "controls runners",
+    "contact suppressor", "controls runners",
     "platoon liability", "reverse split", "platoon-vulnerable",
 )
 
@@ -2159,6 +2163,7 @@ TAG_EXCLUSIVE_GROUPS: list[frozenset[str]] = [
     frozenset({"patient", "free swinger"}),
     frozenset({"high-K", "rarely strikes out"}),
     frozenset({"elite speed", "fast", "station-to-station"}),
+    frozenset({"elite velo", "plus velo", "soft tosser"}),
     frozenset({"power bat", "plus power", "weak contact"}),
 ]
 

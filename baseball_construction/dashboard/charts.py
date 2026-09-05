@@ -2225,9 +2225,19 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
     rotation_sub = None
     density = rotation.get("trait_density") or {}
     if density:
-        # Top trait densities, e.g. "tunneler 52% · bat-misser 40%"
-        top = list(density.items())[:2]
-        rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in top)
+        # Densest traits, e.g. "tunneler 52% · bat-misser 40%". This line is
+        # COMPOSITION — what the staff is mostly made of — as against the
+        # fingerprint below it, which is deviation and says what is unusual.
+        #
+        # Attributes and luck are excluded. Density ranks by how common a tag
+        # is, and `right-handed pitcher` is the most common thing about almost
+        # every rotation ever assembled: it took 292 of 720 subtitle slots,
+        # 44% of them going to a kind nobody chose. It is a real fact and it
+        # has its own fingerprint row; it just cannot be allowed to describe
+        # the staff.
+        shown = [(t, v) for t, v in density.items()
+                 if kind_of(t) not in ("attribute", "noise")][:2]
+        rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in shown) or None
     elif rotation.get("approach_dist"):
         appr = rotation.get("dominant_approach")
         share = rotation["approach_dist"].get(appr, 0)
