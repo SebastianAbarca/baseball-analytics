@@ -2069,6 +2069,32 @@ def team_split_card(portrait: dict) -> html.Div:
     return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
 
 
+def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
+    """The numbers behind the one-word comp strength."""
+    top = near[0] if near else {}
+    who, sim = top.get("team", "?"), top.get("similarity")
+    med, q1, q3 = uq.get("unit_median"), uq.get("unit_q1"), uq.get("unit_q3")
+    parts = []
+    if sim is not None:
+        parts.append(f"Closest comparable team is {who}, at {sim:.2f} similarity "
+                     f"(cosine, over per-tag deviations from league average).")
+    if med is not None:
+        parts.append(f"Across this season's {unit}s the closest comp typically "
+                     f"lands at {med:.2f}; below {q1:.2f} counts as loose and "
+                     f"above {q3:.2f} as close.")
+    parts.append("Each unit is banded against its own spread — offenses and "
+                 "rotations do not sit on a common scale.")
+    return " ".join(parts)
+
+
+def _ordinal_short(n: int) -> str:
+    """1st / 2nd / 3rd / 4th …"""
+    i = int(n)
+    if 11 <= (i % 100) <= 13:
+        return f"{i}th"
+    return f"{i}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(i % 10, 'th') }"
+
+
 # Empty-state wording per kind. "league-typical" on its own did not say
 # typical in WHAT — it read as clear for `result` and as a shrug for `tool`
 # and `deployment`. Each line states the thing that was measured and came back
@@ -2162,13 +2188,25 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
     def _headline(unit: str, fallback=None):
         pos = position or {}
         near = (pos.get("neighbours") or {}).get(unit) or []
-        uq = ((pos.get("uniqueness") or {}).get(unit) or {}).get("score")
-        if near:
-            names = ", ".join(x.get("team", "") for x in near[:2])
-            if uq is not None:
-                return f"Plays like {names} · {uq:.0f}/100 distinct"
+        uq = (pos.get("uniqueness") or {}).get(unit) or {}
+        if not near:
+            return fallback
+        names = ", ".join(x.get("team", "") for x in near[:2])
+        # Qualify the comparison rather than answer a different question. The
+        # word is banded against this unit's own spread of best-comp
+        # similarities; the exact figure and that spread ride on the hover, so
+        # the headline stays readable without hiding the number.
+        band = uq.get("band")
+        if not band:
             return f"Plays like {names}"
-        return fallback
+        word = {"close": "close comp", "fair": "fair comp",
+                "loose": "loose comp"}.get(band, band)
+        return html.Span([
+            f"Plays like {names} · ",
+            html.Span(word, title=_comp_tooltip(unit, near, uq),
+                      style={"borderBottom": "1px dotted currentColor",
+                             "cursor": "help"}),
+        ])
 
     cols = dbc.Row([
         _identity_col("Offense",  _headline("offense"),  offense_sub,  COLORS["offense"]),

@@ -253,9 +253,31 @@ def _compute_positions(league: dict[str, dict]) -> None:
     in the same DIRECTION, not whether they deviate by the same amount, so a
     mild contact team and an extreme one read as similar in kind.
 
-    `uniqueness` is 1 − (mean cosine similarity to every other team), scaled to
-    0–100 across the league: a team nobody resembles scores high. Both are
-    descriptive positions, not rankings of quality.
+    `uniqueness` asks the question a reader actually means — does anyone look
+    like this team? — and answers it from the NEAREST comparable team, not
+    from an average over the league.
+
+    It used to be 1 − (mean similarity to all 29 others), min-max scaled to
+    0–100, and that was wrong in three compounding ways. The rescale
+    guaranteed a 0 and a 100 every season, so the number was a within-season
+    position dressed up as an absolute score and was not comparable across
+    years. The mean similarities span barely 0.08 on a −1..1 scale, because
+    averaging over 29 teams cancels positives against negatives, so the scale
+    stretched a residue to full width. Worst, averaging destroys the structure
+    that matters: a team can sit in a tight cluster with three others and be
+    opposite to twenty-six, land at mean ≈ 0, and read as "average". Measured
+    on 2025, TOR scored 98.6/100 — second most distinctive in baseball — while
+    holding the second most SIMILAR nearest comp in the league (0.716). CLE
+    2023, the most distinctive offense by eye, ranked 21st.
+
+    Nearest-comp has none of that. It is measured on signal that demonstrably
+    exists (best-neighbour similarity runs 0.25–0.73 against a pairwise median
+    of −0.06), and it is the same measurement as the `neighbours` line beside
+    it: "plays like COL 0.48" and "nobody is closer than 0.48" are one fact.
+
+    Reported as a RANK within the season rather than a score. A rank cannot
+    imply precision the data does not have, and needs no calibration to read.
+    Both fields are descriptive positions, not rankings of quality.
     """
     teams = [t for t in league if not t.startswith("_")]
     baselines = league.get("_baselines") or {}
@@ -281,18 +303,50 @@ def _compute_positions(league: dict[str, dict]) -> None:
         mean_sim = {t: (sum(s.values()) / len(s)) if s else 0.0
                     for t, s in sims.items()}
 
-        raw = {t: 1.0 - mean_sim[t] for t in teams}
-        lo, hi = min(raw.values()), max(raw.values())
-        span = (hi - lo) or 1.0
+        # Similarity to the closest comparable team. Low = nobody looks like
+        # them; high = they have a twin.
+        closest = {t: max(s.values()) for t, s in sims.items() if s}
+        # Rank 1 = fewest lookalikes (lowest best match).
+        order = sorted(closest, key=lambda t: closest[t])
+        rank = {t: i for i, t in enumerate(order, 1)}
+
+        # How strong is the comparison? A raw cosine means nothing to a reader,
+        # and the units are NOT on a common scale — pooled over 12 seasons,
+        # best-comp similarity averages 0.502 for offenses but 0.387 for
+        # rotations, because the vocabularies differ in size and shape. One
+        # shared cutoff would therefore call rotations "loose" and offenses
+        # "close" as an artefact of the tag vocabulary rather than a fact about
+        # the teams. Each unit is banded against its OWN spread, the same
+        # principle the fingerprint's z-score uses.
+        vals = sorted(closest.values())
+        if vals:
+            q1 = vals[len(vals) // 4]
+            q3 = vals[(3 * len(vals)) // 4]
+        else:
+            q1 = q3 = 0.0
+
+        def _band(v: float) -> str:
+            if v >= q3:
+                return "close"
+            if v <= q1:
+                return "loose"
+            return "fair"
 
         for t in teams:
             near = sorted(sims[t].items(), key=lambda kv: -kv[1])[:_POS_TOP_N]
             league[t].setdefault("neighbours", {})[unit] = [
                 {"team": o, "similarity": round(s, 4)} for o, s in near
             ]
+            c = closest.get(t, 0.0)
             league[t].setdefault("uniqueness", {})[unit] = {
-                "score":    round((raw[t] - lo) / span * 100.0, 1),
-                "mean_sim": round(mean_sim[t], 4),
+                "closest":     round(c, 4),
+                "band":        _band(c),
+                "unit_q1":     round(q1, 4),
+                "unit_q3":     round(q3, 4),
+                "unit_median": round(vals[len(vals) // 2], 4) if vals else None,
+                "rank":        rank.get(t),   # fewest lookalikes = 1
+                "of":          len(order),
+                "mean_sim":    round(mean_sim[t], 4),   # analysis only
             }
 
 

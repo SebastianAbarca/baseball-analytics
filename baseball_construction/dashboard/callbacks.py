@@ -1109,7 +1109,12 @@ def league_identity_board(season):
             "Team":              team,
             "Fingerprint":       fp_str,
             "Plays Like":        ", ".join(x["team"] for x in nb[:2]) or "—",
-            "Distinctiveness":   uq.get("score"),
+            # How strong the "Plays Like" comparison actually is — similarity
+            # to the closest comparable offense. A sortable number suits a
+            # table better than the card's one-word band. The old 0–100
+            # "distinctiveness" was a min-max rescale of near-zero mean
+            # similarities and rated teams with near-twins as highly distinct.
+            "Distinctiveness":   uq.get("closest"),
             "Power Share":       (f"{offense['power_share']:.0%}"
                                   if offense.get("power_share") is not None else "—"),
             "Top Rotation Traits": top_traits,
@@ -1121,7 +1126,7 @@ def league_identity_board(season):
         {"name": "Team",              "id": "Team"},
         {"name": "Fingerprint",       "id": "Fingerprint"},
         {"name": "Plays Like",        "id": "Plays Like"},
-        {"name": "Distinctiveness",   "id": "Distinctiveness"},
+        {"name": "Comp Strength",     "id": "Distinctiveness"},
         {"name": "Power Share",       "id": "Power Share"},
         {"name": "Top Rotation Traits", "id": "Top Rotation Traits"},
         {"name": "Bullpen Mechanism", "id": "Bullpen Mechanism"},
