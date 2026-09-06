@@ -498,6 +498,34 @@ def _arsenal_cell(player: dict, season: int):
     return html.Span(chips)
 
 
+_HAND_MARK = {
+    "left-handed hitter": "L", "right-handed hitter": "R", "switch hitter": "S",
+    "left-handed pitcher": "L", "right-handed pitcher": "R",
+}
+
+
+def _handedness_mark(attribute_traits: list[dict], is_pitcher: bool):
+    """Bats/throws as a quiet marker beside the name.
+
+    Rendered even for pitchers, who also keep the attribute column — there it
+    sits alongside arm slot and extension, which is where a reader looking at
+    `platoon-vulnerable` wants it.
+    """
+    for t in attribute_traits:
+        mark = _HAND_MARK.get(t.get("tag", ""))
+        if mark:
+            verb = "Throws" if is_pitcher else "Bats"
+            full = {"L": "left", "R": "right", "S": "both sides"}[mark]
+            return html.Span(
+                mark, title=f"{verb} {full}",
+                style={"color": KIND_COLORS["attribute"], "fontSize": "0.6rem",
+                       "fontWeight": "700", "marginLeft": "5px",
+                       "border": f"1px solid {KIND_COLORS['attribute']}55",
+                       "borderRadius": "3px", "padding": "0 3px",
+                       "cursor": "help", "verticalAlign": "middle"})
+    return None
+
+
 def _roster_meta(unit: str) -> dict:
     """Per-unit differences: what the rows are, how they sort, what the
     non-tag columns say."""
@@ -561,12 +589,22 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
     # carry 32 and 29 of the 94 tags, attribute is usually one chip, and noise
     # is at most one. Pitchers give up some of it to the arsenal column.
     is_pitcher = unit in ("starters", "bullpen_arms")
+    # Handedness moves next to the name and drops out of the kind columns.
+    # Measured across 18,483 player-seasons, the attribute cell held ONLY
+    # handedness on 81% of rows — a full column spending ~11% of the table's
+    # width to repeat one letter. It is identifying information, not a
+    # finding. Pitchers keep the column because delivery geometry (arm slot,
+    # extension, release width) genuinely varies there; for hitters the kind
+    # is folded away entirely and its width goes to behavior and result,
+    # which are the crowded ones.
     if is_pitcher:
+        shown_kinds = KIND_ORDER
         kind_w = {"attribute": "9%", "tool": "8%", "behavior": "16%",
                   "result": "16%", "deployment": "10%", "noise": "4%"}
     else:
-        kind_w = {"attribute": "13%", "tool": "10%", "behavior": "18%",
-                  "result": "18%", "deployment": "12%", "noise": "8%"}
+        shown_kinds = [k for k in KIND_ORDER if k != "attribute"]
+        kind_w = {"tool": "11%", "behavior": "24%",
+                  "result": "24%", "deployment": "13%", "noise": "8%"}
     season = int(portrait.get("season") or 0)
 
     body = []
@@ -578,8 +616,14 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
         groups = _kind_groups(p.get("traits") or [])
         slot = (p.get("home_position") if unit == "hitters"
                 else p.get("gs") if unit == "starters" else p.get("g"))
+        # Bats/throws as a marker on the name — the fact a reader wants while
+        # looking at a platoon tag, without a column of its own.
+        hand = _handedness_mark(groups.get("attribute") or [], is_pitcher)
         cells = [
-            td(name, color=dim, size="0.78rem", weight="700"),
+            td(html.Span([
+                html.Span(name, style={"color": dim, "fontWeight": "700"}),
+                hand,
+            ]), size="0.78rem"),
             td(str(slot) if slot not in (None, "") else "—",
                align="center", color=COLORS["subtext"]),
             td(str(p.get(meta["weight"]) or "—"), align="right", color=dim),
@@ -587,7 +631,7 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
         ]
         if is_pitcher:
             cells.append(td(_arsenal_cell(p, season)))
-        for k in KIND_ORDER:
+        for k in shown_kinds:
             ts = groups.get(k) or []
             cells.append(td(
                 html.Span([_chip(t["tag"], k, t.get("evidence")) for t in ts])
@@ -604,7 +648,7 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
              th(meta["slot_label"], "4%", "center"),
              th(meta["weight_label"], "5%", "right"), th("bWAR", "5%", "right")]
             + ([th("Arsenal", "16%")] if is_pitcher else [])
-            + [th(k, kind_w[k], color=KIND_COLORS[k]) for k in KIND_ORDER]
+            + [th(k, kind_w[k], color=KIND_COLORS[k]) for k in shown_kinds]
         )),
         html.Tbody(body),
     ], style={"width": "100%", "borderCollapse": "collapse",
