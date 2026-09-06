@@ -20,6 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd
 from dotenv import load_dotenv
+
+# Estimated-service-time memo, keyed by (season, cache mtime). See
+# query_estimated_service_time — the on-disk cache was re-read once per team.
+_EST_MEMO: dict[tuple, dict[int, float]] = {}
 from supabase import create_client, Client
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -396,6 +400,25 @@ def query_estimated_service_time(
     from datetime import date, datetime
     from ingest import SEASON_DATES, pull_il_data
 
+    # In-process memo of the on-disk cache. A portrait build calls this once
+    # per team, so a 30-team season re-read and re-parsed the same CSV thirty
+    # times — 0.41s each even on a complete hit. Keyed by (season, mtime) so
+    # an external rewrite is still picked up.
+    global _EST_MEMO
+    cache_path_probe = (
+        Path(__file__).resolve().parents[1]
+        / "data" / "processed"
+        / f"est_service_time_{through_season}.csv"
+    )
+    try:
+        _memo_key = (through_season, cache_path_probe.stat().st_mtime)
+    except OSError:
+        _memo_key = None
+    if _memo_key is not None:
+        memo = _EST_MEMO.get(_memo_key)
+        if memo is not None and all(p in memo for p in player_ids):
+            return {p: memo[p] for p in player_ids}
+
     cache_path = (
         Path(__file__).resolve().parents[1]
         / "data" / "processed"
@@ -408,6 +431,8 @@ def query_estimated_service_time(
             # Return only the requested IDs that are cached; compute missing below
             missing_ids = [p for p in player_ids if p not in cached]
             if not missing_ids:
+                if _memo_key is not None:
+                    _EST_MEMO[_memo_key] = cached
                 return {p: cached[p] for p in player_ids if p in cached}
         except Exception:
             cached = {}
