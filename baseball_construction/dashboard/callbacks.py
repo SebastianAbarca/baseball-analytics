@@ -443,6 +443,12 @@ def hitter_pie(data):
 # Callback 9 — Hitter archetype table
 # ---------------------------------------------------------------------------
 
+@callback(Output("hitter-plane", "figure"), Input("portrait-store", "data"))
+def hitter_plane(data):
+    p = _deserialize(data)
+    return charts.hitter_plane(p) if p else charts.empty_figure()
+
+
 @callback(
     Output({"type": "roster-body", "unit": MATCH}, "children"),
     Output({"type": "roster-pageinfo", "unit": MATCH}, "children"),

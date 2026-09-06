@@ -705,6 +705,10 @@ def players_tab() -> dbc.Tab:
         # evidence on hover, which go.Table cannot render. The legend sits
         # above so the colours mean something before the first chip.
         _roster_card("The lineup",  "hitters"),
+        # Two absolute axes instead of the one ratio between them — see
+        # charts.hitter_plane for why the spectrum could not do this.
+        _card("How the lineup is built — power against contact",
+              "hitter-plane", height=520),
         _roster_card("The rotation", "starters"),
         _roster_card("The bullpen",  "bullpen_arms"),
         # Under the bullpen, beside the arsenal column it illustrates.

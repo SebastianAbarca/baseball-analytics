@@ -526,6 +526,96 @@ def _handedness_mark(attribute_traits: list[dict], is_pitcher: bool):
     return None
 
 
+_HITTER_PLANE_MIN_PA = 100
+
+
+def hitter_plane(portrait: dict) -> go.Figure:
+    """
+    The lineup on two ABSOLUTE axes — power against contact — rather than the
+    one ratio between them.
+
+    The power-contact spectrum collapses both into a single 0-100 score, and
+    a ratio cannot tell "elite at both" from "bad at both": Martin Maldonado
+    2023 scores 89 of 100 on a scale labelled power while hitting .191,
+    because he has almost no contact skill in the denominator. Measured on
+    hitters with 400+ PA, 43% of those above spectrum 80 sit below the 40th
+    percentile in xwOBA — nearly half the "power" end is not power at all.
+
+    Two axes keep the magnitude the ratio throws away. Power and contact
+    correlate at only +0.19, so the plane genuinely spreads: Arraez lands top
+    left, Judge top right, Maldonado bottom left where he belongs rather than
+    beside Stanton.
+
+    Results (xwOBA) is the COLOUR, not a third axis — it correlates +0.63 with
+    power, so it is largely downstream of the other two rather than
+    independent of them. Position is how the hitter is built; colour is how
+    well it worked.
+    """
+    hitters = [h for h in ((portrait.get("players") or {}).get("hitters") or [])
+               if (h.get("pa") or 0) >= _HITTER_PLANE_MIN_PA]
+    pts = []
+    for h in hitters:
+        m = (h.get("gate_inputs") or {}).get("metrics") or {}
+        power, contact, result = m.get("ISO"), m.get("Contact_pct"), m.get("xwOBA")
+        if power is None or contact is None:
+            continue
+        pts.append((h, float(power), float(contact),
+                    float(result) if result is not None else None))
+    if not pts:
+        return empty_figure("No hitters with enough sample for the plane")
+
+    names = [(p[0].get("name") or "?").split()[-1] for p in pts]
+    xs = [p[1] for p in pts]
+    ys = [p[2] for p in pts]
+    cs = [p[3] if p[3] is not None else 50 for p in pts]
+    pas = [p[0].get("pa") or 0 for p in pts]
+    full = [(p[0].get("name") or "?") for p in pts]
+
+    fig = go.Figure()
+    # Quadrant guides at the league median of each axis.
+    fig.add_hline(y=50, line_color=COLORS["border"], line_width=1, line_dash="dot")
+    fig.add_vline(x=50, line_color=COLORS["border"], line_width=1, line_dash="dot")
+    for x, y, label in ((6, 94, "contact, no power"), (94, 94, "both"),
+                        (6, 6, "neither"), (94, 6, "power, no contact")):
+        fig.add_annotation(x=x, y=y, text=label, showarrow=False,
+                           xanchor="left" if x < 50 else "right",
+                           yanchor="top" if y > 50 else "bottom",
+                           font=dict(size=9, color=COLORS["border"]))
+
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers+text", text=names,
+        textposition="top center",
+        textfont=dict(size=9, color=COLORS["subtext"]),
+        customdata=list(zip(full, pas, cs)),
+        marker=dict(
+            size=[max(9, min(26, 9 + (pa / 60))) for pa in pas],
+            color=cs, colorscale="RdYlBu", cmin=0, cmax=100,
+            line=dict(width=1, color=COLORS["background"]),
+            colorbar=dict(
+                title=dict(text="xwOBA<br>pct", font=dict(size=10, color=COLORS["subtext"])),
+                tickfont=dict(size=9, color=COLORS["subtext"]),
+                thickness=10, len=0.7, outlinewidth=0),
+        ),
+        hovertemplate=("<b>%{customdata[0]}</b><br>"
+                       "power (ISO) %{x:.0f}th pct<br>"
+                       "contact %{y:.0f}th pct<br>"
+                       "results (xwOBA) %{customdata[2]:.0f}th pct<br>"
+                       "%{customdata[1]} PA<extra></extra>"),
+        showlegend=False,
+    ))
+    # _DARK_LAYOUT already carries a margin; override it rather than passing
+    # the keyword twice.
+    layout = {**_DARK_LAYOUT, "margin": dict(l=60, r=10, t=30, b=50)}
+    fig.update_layout(
+        **layout,
+        xaxis=dict(title="power  —  ISO percentile", range=[-4, 104],
+                   gridcolor=COLORS["border"], zeroline=False),
+        yaxis=dict(title="contact  —  contact-rate percentile", range=[-4, 104],
+                   gridcolor=COLORS["border"], zeroline=False),
+    )
+    return fig
+
+
 def _roster_meta(unit: str) -> dict:
     """Per-unit differences: what the rows are, how they sort, what the
     non-tag columns say."""
