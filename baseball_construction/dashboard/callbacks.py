@@ -412,36 +412,45 @@ def hitter_pie(data):
 # Callback 9 — Hitter archetype table
 # ---------------------------------------------------------------------------
 
-@callback(Output("hitter-table", "figure"), Input("portrait-store", "data"))
-def hitter_table(data):
+@callback(
+    Output({"type": "roster-body", "unit": MATCH}, "children"),
+    Output({"type": "roster-pageinfo", "unit": MATCH}, "children"),
+    Input("portrait-store", "data"),
+    Input({"type": "roster-prev", "unit": MATCH}, "n_clicks"),
+    Input({"type": "roster-next", "unit": MATCH}, "n_clicks"),
+    State({"type": "roster-body", "unit": MATCH}, "id"),
+)
+def roster_body(data, prev_clicks, next_clicks, comp_id):
+    """
+    One callback for all three rosters via MATCH on the unit.
+
+    Page is derived from the click counts rather than held in a Store: with
+    only forward/back controls, next − prev IS the page, and roster_table
+    clamps it to the valid range. One less piece of state to keep in sync
+    with the portrait changing underneath it.
+    """
     p = _deserialize(data)
-    return charts.hitter_archetype_table(p) if p else charts.empty_figure()
-
-
-# ---------------------------------------------------------------------------
-# Callback 10 — Starter archetype bars
-# ---------------------------------------------------------------------------
-
-@callback(Output("starter-bars", "figure"), Input("portrait-store", "data"))
-def starter_bars(data):
-    p = _deserialize(data)
-    return charts.starter_archetype_bars(p) if p else charts.empty_figure()
+    unit = (comp_id or {}).get("unit", "hitters")
+    if not p:
+        return "Load a portrait to see the roster.", ""
+    page = (next_clicks or 0) - (prev_clicks or 0)
+    table, page, n_pages = charts.roster_table(p, unit, page)
+    info = f"{page + 1} / {n_pages}" if n_pages > 1 else ""
+    return table, info
 
 
 # ---------------------------------------------------------------------------
 # Callback 10a — Bullpen charts
 # ---------------------------------------------------------------------------
+# The starter and bullpen Plotly tables were replaced by the paginated
+# per-kind roster above (one MATCH callback drives all three units), so their
+# callbacks are gone. charts.starter_archetype_bars / bullpen_detail_table
+# remain for now and are unused.
 
 @callback(Output("bullpen-dims", "figure"), Input("portrait-store", "data"))
 def bullpen_dims(data):
     p = _deserialize(data)
     return charts.bullpen_dimension_bars(p) if p else charts.empty_figure()
-
-
-@callback(Output("bullpen-table", "figure"), Input("portrait-store", "data"))
-def bullpen_table(data):
-    p = _deserialize(data)
-    return charts.bullpen_detail_table(p) if p else charts.empty_figure()
 
 
 @callback(Output("bullpen-trait-density", "figure"), Input("portrait-store", "data"))

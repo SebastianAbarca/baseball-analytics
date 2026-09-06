@@ -348,6 +348,276 @@ def hitter_trait_density(portrait: dict, baseline: dict | None = None) -> go.Fig
 # 4. Hitter archetype table
 # ---------------------------------------------------------------------------
 
+def _kind_groups(traits: list[dict]) -> dict[str, list[dict]]:
+    """Split a player's traits by kind, preserving the order they were cut in."""
+    out: dict[str, list[dict]] = {}
+    for t in traits or []:
+        out.setdefault(kind_of(t.get("tag", "")) or "other", []).append(t)
+    return out
+
+
+def _player_tag_rows(traits: list[dict], limited: bool):
+    """
+    A player's tags, one row per kind.
+
+    Grouped rather than listed flat because a flat list makes the reader do
+    the sorting: "elite framer, right-handed hitter, high-leverage arm" mixes
+    a skill, an accident of birth and a usage decision in one breath. One row
+    per kind puts them in the same frame the fingerprint uses.
+    """
+    groups = _kind_groups(traits)
+    if not groups:
+        return [html.Span(
+            "limited sample" if limited else "league-average",
+            style={"color": COLORS["subtext"], "fontSize": "0.72rem",
+                   "fontStyle": "italic", "opacity": "0.75"})]
+    rows = []
+    for k in KIND_ORDER + ["other"]:
+        ts = groups.get(k)
+        if not ts:
+            continue
+        rows.append(html.Div([
+            html.Span(k, style={
+                "display": "inline-block", "width": "76px",
+                "color": COLORS["subtext"], "fontSize": "0.62rem",
+                "textTransform": "uppercase", "letterSpacing": "0.05em",
+                "verticalAlign": "top", "paddingTop": "2px"}),
+            html.Span([_chip(t["tag"], k, t.get("evidence")) for t in ts]),
+        ], style={"marginBottom": "2px"}))
+    return rows
+
+
+def _tags_inline(traits: list[dict], limited: bool):
+    """
+    A player's tags on one line, ordered by kind so the colours block up.
+
+    The kind labels live in the legend rather than on every row: with six
+    fixed colours the palette already says which kind a chip is, and
+    repeating the word for all 27 hitters costs a screen of vertical space
+    to restate what the legend said once.
+    """
+    groups = _kind_groups(traits)
+    if not groups:
+        return html.Span(
+            "limited sample" if limited else "league-average",
+            style={"color": COLORS["subtext"], "fontSize": "0.7rem",
+                   "fontStyle": "italic", "opacity": "0.75"})
+    out = []
+    for k in KIND_ORDER + ["other"]:
+        for t in groups.get(k, []):
+            out.append(_chip(t["tag"], k, t.get("evidence")))
+    return html.Span(out)
+
+
+ROSTER_PAGE_SIZE = 12
+
+# ---------------------------------------------------------------------------
+# Arsenal — the full pitch mix, not the two-pitch summary
+# ---------------------------------------------------------------------------
+# The portrait stores arsenal_profile["display"], which is hardcoded to
+# "{fastball} · {out_pitch}" — exactly two pitches. Spencer Arrighetti throws
+# SIX (FF, CU, CH, FC, SI, ST) and displayed as "4-Seam · Curveball". The
+# names of the rest live in `supporting`, but the usage percentages were lost:
+# `pitch_rows` is a DataFrame and does not survive JSON serialisation.
+#
+# So the mix is read from the per-season pitch_mix parquet the pipeline
+# already writes. No portrait rebuild needed, and it carries velo and whiff
+# per pitch as a bonus.
+_PITCH_MIX_CACHE: dict[int, dict] = {}
+
+# Grouped by what the pitch DOES, so a reader can see the shape of an arsenal
+# without knowing the codes: fastballs warm, breaking balls cool, offspeed
+# green. Within a group the colours are close enough to read as one family.
+_PITCH_COLORS = {
+    "FF": "#f87171", "FA": "#f87171", "FT": "#fb923c", "SI": "#fb923c",
+    "FC": "#fbbf24",                                    # fastball family
+    "SL": "#60a5fa", "ST": "#38bdf8", "SV": "#818cf8",
+    "CU": "#a78bfa", "KC": "#c084fc", "CS": "#c084fc",  # breaking
+    "CH": "#34d399", "FS": "#2dd4bf", "FO": "#2dd4bf",
+    "SC": "#4ade80", "KN": "#94a3b8", "EP": "#94a3b8",  # offspeed / oddity
+}
+
+
+def _pitch_mix(season: int) -> dict[int, list[dict]]:
+    """{pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage."""
+    if season in _PITCH_MIX_CACHE:
+        return _PITCH_MIX_CACHE[season]
+    out: dict[int, list[dict]] = {}
+    try:
+        import pandas as _pd
+        path = (_HERE.parent / "modules" / "processed"
+                / f"pitch_mix_{season}.parquet")
+        if path.exists():
+            df = _pd.read_parquet(path)
+            for pid, grp in df.groupby("pitcher"):
+                rows = grp.sort_values("usage_pct", ascending=False)
+                out[int(pid)] = [{
+                    "pitch": r.pitch_type,
+                    "usage": float(r.usage_pct or 0),
+                    "velo":  float(r.avg_velo) if _pd.notna(r.avg_velo) else None,
+                    "whiff": float(r.whiff_pct) if _pd.notna(r.whiff_pct) else None,
+                } for r in rows.itertuples()]
+    except Exception:
+        out = {}
+    _PITCH_MIX_CACHE[season] = out
+    return out
+
+
+_ARSENAL_MIN_USAGE = 0.03   # below this it is a show-me pitch, not a weapon
+
+
+def _arsenal_cell(player: dict, season: int):
+    """A pitcher's whole mix as usage-ordered chips."""
+    mix = _pitch_mix(season).get(int(player.get("player_id") or -1)) or []
+    mix = [m for m in mix if m["usage"] >= _ARSENAL_MIN_USAGE]
+    if not mix:
+        # Fall back to the stored two-pitch summary rather than showing
+        # nothing when the season's pitch-mix cache is absent.
+        disp = (player.get("arsenal_profile") or {}).get("display")
+        return html.Span(disp or "·",
+                         style={"color": COLORS["border"], "fontSize": "0.68rem"})
+    chips = []
+    for m in mix:
+        c = _PITCH_COLORS.get(m["pitch"], COLORS["subtext"])
+        tip = f"{m['pitch']} — {m['usage']:.0%} of pitches"
+        if m["velo"] is not None:
+            tip += f", {m['velo']:.1f} mph"
+        if m["whiff"] is not None:
+            tip += f", {m['whiff']:.0%} whiff"
+        chips.append(html.Span(
+            f"{m['pitch']} {m['usage']*100:.0f}", title=tip,
+            style={
+                "display": "inline-block", "backgroundColor": f"{c}22",
+                "color": c, "border": f"1px solid {c}55",
+                "borderRadius": "3px", "padding": "0px 4px",
+                "marginRight": "3px", "marginBottom": "2px",
+                "fontSize": "0.62rem", "fontWeight": "700",
+                "fontFamily": "ui-monospace, SFMono-Regular, monospace",
+                "cursor": "help",
+            }))
+    return html.Span(chips)
+
+
+def _roster_meta(unit: str) -> dict:
+    """Per-unit differences: what the rows are, how they sort, what the
+    non-tag columns say."""
+    if unit == "hitters":
+        return {"key": "hitters", "weight": "pa", "weight_label": "PA",
+                "slot_label": "Pos", "empty": "No hitter data"}
+    if unit == "starters":
+        return {"key": "starters", "weight": "bf", "weight_label": "BF",
+                "slot_label": "GS", "empty": "No starter data"}
+    return {"key": "bullpen_arms", "weight": "bf", "weight_label": "BF",
+            "slot_label": "G", "empty": "No bullpen data"}
+
+
+def roster_table(portrait: dict, unit: str, page: int = 0):
+    """
+    One roster as an HTML table with a column per KIND.
+
+    HTML rather than Plotly because go.Table can only hold flat strings,
+    which is why traits used to read as an undifferentiated comma list. A
+    column per kind lets the reader scan DOWN a kind — that a lineup is full
+    of `free swinger` is a roster-construction fact, and it was invisible
+    when every player's tags were mixed together on one line.
+
+    Paginated rather than scrolled: a scroll box keeps all 27 rows in the DOM
+    and hides the row count, while pages make the size of the roster legible
+    and keep the card a predictable height.
+    """
+    meta = _roster_meta(unit)
+    players = (portrait.get("players") or {}).get(meta["key"]) or []
+    if not players:
+        return html.Div(meta["empty"], className="text-secondary p-3"), 0, 0
+
+    players = sorted(players, key=lambda x: -(x.get(meta["weight"]) or 0))
+    n_pages = max(1, -(-len(players) // ROSTER_PAGE_SIZE))
+    page = max(0, min(page, n_pages - 1))
+    shown = players[page * ROSTER_PAGE_SIZE:(page + 1) * ROSTER_PAGE_SIZE]
+
+    def th(label, w=None, align="left", color=None):
+        # Kind headers carry the kind's colour, which makes the header row
+        # its own legend — no separate swatch strip needed above the card.
+        return html.Th(label, style={
+            "color": color or COLORS["subtext"], "fontSize": "0.6rem",
+            "textTransform": "uppercase", "letterSpacing": "0.04em",
+            "fontWeight": "700" if color else "600",
+            "textAlign": align, "padding": "4px 6px",
+            "borderBottom": f"1px solid {COLORS['border']}",
+            # Headers must not break mid-word ("DEPLOYME/NT", "NOIS/E").
+            "whiteSpace": "nowrap", "overflow": "hidden",
+            **({"width": w} if w else {}),
+        })
+
+    def td(child, align="left", color=None, size="0.74rem", weight="400"):
+        return html.Td(child, style={
+            "padding": "5px 6px", "textAlign": align, "fontSize": size,
+            "color": color or COLORS["text"], "fontWeight": weight,
+            "borderBottom": f"1px solid {COLORS['border']}44",
+            "verticalAlign": "top",
+        })
+
+    # Width follows how much each kind actually holds: behavior and result
+    # carry 32 and 29 of the 94 tags, attribute is usually one chip, and noise
+    # is at most one. Pitchers give up some of it to the arsenal column.
+    is_pitcher = unit in ("starters", "bullpen_arms")
+    if is_pitcher:
+        kind_w = {"attribute": "9%", "tool": "8%", "behavior": "16%",
+                  "result": "16%", "deployment": "10%", "noise": "4%"}
+    else:
+        kind_w = {"attribute": "13%", "tool": "10%", "behavior": "18%",
+                  "result": "18%", "deployment": "12%", "noise": "8%"}
+    season = int(portrait.get("season") or 0)
+
+    body = []
+    for p in shown:
+        limited = bool(p.get("limited_sample"))
+        name = (p.get("name") or "").strip() or f"ID {p.get('player_id', '?')}"
+        war = p.get("war")
+        dim = COLORS["subtext"] if limited else COLORS["text"]
+        groups = _kind_groups(p.get("traits") or [])
+        slot = (p.get("home_position") if unit == "hitters"
+                else p.get("gs") if unit == "starters" else p.get("g"))
+        cells = [
+            td(name, color=dim, size="0.78rem", weight="700"),
+            td(str(slot) if slot not in (None, "") else "—",
+               align="center", color=COLORS["subtext"]),
+            td(str(p.get(meta["weight"]) or "—"), align="right", color=dim),
+            td(f"{war:+.1f}" if war is not None else "—", align="right"),
+        ]
+        if is_pitcher:
+            cells.append(td(_arsenal_cell(p, season)))
+        for k in KIND_ORDER:
+            ts = groups.get(k) or []
+            cells.append(td(
+                html.Span([_chip(t["tag"], k, t.get("evidence")) for t in ts])
+                if ts else
+                # An empty cell is a real statement here — nothing of this
+                # kind separates the player — so it gets a mark rather than
+                # blank space the eye reads as missing data.
+                html.Span("·", style={"color": COLORS["border"]})))
+        body.append(html.Tr(cells, style={"opacity": "0.7" if limited else "1"}))
+
+    table = html.Table([
+        html.Thead(html.Tr(
+            [th("Player", "12%" if is_pitcher else "13%"),
+             th(meta["slot_label"], "4%", "center"),
+             th(meta["weight_label"], "5%", "right"), th("bWAR", "5%", "right")]
+            + ([th("Arsenal", "16%")] if is_pitcher else [])
+            + [th(k, kind_w[k], color=KIND_COLORS[k]) for k in KIND_ORDER]
+        )),
+        html.Tbody(body),
+    ], style={"width": "100%", "borderCollapse": "collapse",
+              "tableLayout": "fixed"})
+    return table, page, n_pages
+
+
+def hitter_roster_card(portrait: dict):
+    """Back-compat single-page render (no pager)."""
+    table, _, _ = roster_table(portrait, "hitters", 0)
+    return table
+
+
 def hitter_archetype_table(portrait: dict) -> go.Figure:
     """
     Table: one row per hitter with spectrum score and trait tags.
@@ -2121,6 +2391,78 @@ def team_split_card(portrait: dict) -> html.Div:
     )
 
     return html.Div([mini_cards, html.Div(footer, className="mt-1 px-1")])
+
+
+# ---------------------------------------------------------------------------
+# Tag chips, coloured by KIND
+# ---------------------------------------------------------------------------
+# Tags used to be coloured by FAMILY — 17 colours for what a tag is about
+# (bat, approach, catcher...), which is too many to hold in your head and
+# answers a question the reader is not asking. Kind is six values and answers
+# the one that matters at a glance: is this something the player IS, something
+# he CHOSE, something that HAPPENED, or something the club decided?
+#
+# Ordered by control, so the palette itself runs cool-to-warm as agency
+# increases: an attribute is slate and inert, a behavior is bright, luck is
+# deliberately washed out.
+KIND_COLORS: dict[str, str] = {
+    "attribute":  "#94a3b8",   # slate — unchosen, deliberately quiet
+    "tool":       "#06b6d4",   # cyan — physical capacity
+    "behavior":   "#22c55e",   # green — a choice
+    "result":     "#f59e0b",   # amber — what came out
+    "deployment": "#a855f7",   # violet — the club's decision
+    "noise":      "#6b7280",   # grey — luck, and it should look like it
+}
+KIND_ORDER = ["attribute", "tool", "behavior", "result", "deployment", "noise"]
+
+
+def _chip(tag: str, kind: str | None = None, evidence: str | None = None):
+    """One trait rendered as a tag: kind-coloured, evidence on hover."""
+    color = KIND_COLORS.get(kind or "", COLORS["subtext"])
+    return html.Span(
+        tag,
+        title=evidence or "",
+        style={
+            "display": "inline-block",
+            "backgroundColor": f"{color}22",   # 13% tint of the kind colour
+            "color": color,
+            "border": f"1px solid {color}55",
+            "borderRadius": "10px",
+            "padding": "1px 7px",
+            "marginRight": "4px",
+            "marginBottom": "3px",
+            "fontSize": "0.7rem",
+            "fontWeight": "600",
+            # Deliberately NOT nowrap: in the per-kind column layout the
+            # columns are narrow and tag names are long ("station-to-station",
+            # "high steal attempts"), so nowrap made chips overflow into the
+            # neighbouring column instead of wrapping inside their own.
+            "lineHeight": "1.5",
+            "cursor": "help" if evidence else "default",
+        },
+    )
+
+
+def kind_legend(title: str | None = None):
+    """The six kinds as swatches — sits above a roster so the colours mean
+    something before the reader hits their first chip."""
+    items = [
+        html.Span([
+            html.Span(style={
+                "display": "inline-block", "width": "9px", "height": "9px",
+                "borderRadius": "2px", "backgroundColor": KIND_COLORS[k],
+                "marginRight": "5px", "verticalAlign": "middle",
+            }),
+            html.Span(k, style={"color": COLORS["subtext"], "fontSize": "0.68rem",
+                                "marginRight": "14px", "verticalAlign": "middle"}),
+        ]) for k in KIND_ORDER
+    ]
+    head = ([html.Span("tag kind:", style={
+        "color": COLORS["subtext"], "fontSize": "0.66rem",
+        "textTransform": "uppercase", "letterSpacing": "0.06em",
+        "marginRight": "10px"})] if title is None else [])
+    return html.Div(head + items, className="mb-2",
+                    style={"lineHeight": "1.6"})
 
 
 def _comp_tooltip(unit: str, near: list, uq: dict) -> str:

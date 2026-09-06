@@ -45,12 +45,16 @@ _OUT = _HERE.parent / "TAGS.md"
 _SIDE_GROUP = {"hitters": "H", "starters": "P", "bullpen_arms": "P"}
 
 
-def scan_portraits() -> tuple[dict, dict, dict, int]:
+def scan_portraits() -> tuple[dict, dict, dict, int, dict]:
     """What the tags actually DO, as opposed to what the code says they are:
-    family, which side carries them, and how often each fires."""
+    family, which side carries them, how often each fires, and one real
+    evidence string per tag — the sentence the gate itself wrote when it
+    fired, which is the most honest available answer to "how is this earned".
+    """
     family: dict[str, str] = {}
     side: dict[str, set] = collections.defaultdict(set)
     count: dict[str, int] = collections.Counter()
+    evidence: dict[str, str] = {}
     players = 0
     for f in sorted(glob.glob(str(_PORTRAITS / "*.json"))):
         d = json.load(open(f))
@@ -66,7 +70,12 @@ def scan_portraits() -> tuple[dict, dict, dict, int]:
                     side[tag].add(s)
                     if t.get("family"):
                         family[tag] = t["family"]
-    return family, dict(side), count, players
+                    ev = t.get("evidence")
+                    # Keep the longest example seen: the fuller sentences
+                    # spell out the whole gate rather than just the number.
+                    if ev and len(ev) > len(evidence.get(tag, "")):
+                        evidence[tag] = ev
+    return family, dict(side), count, players, evidence
 
 
 def sample_floor(tag: str) -> str:
@@ -88,8 +97,59 @@ def exclusive_of(tag: str) -> str:
     return "—"
 
 
+KIND_DEF = {
+    "attribute": "Which side a player bats or throws from, and the geometry "
+                 "of a pitcher's delivery — arm angle, release extension, "
+                 "release width. Fixed characteristics rather than outcomes.",
+    "tool": "Physical capacity — what the body can do, measured directly "
+            "rather than inferred from outcomes.",
+    "behavior": "Swing decisions and where the ball is hit, which pitches a "
+                "pitcher throws and how he sequences them, and the choice to "
+                "run. What the player does, separate from how it turns out.",
+    "result": "What actually came out. The consequence of tools and choices "
+              "meeting major-league pitching.",
+    "deployment": "How the club used the player — workload, leverage, "
+                  "starting or relieving, platoon usage, and how many "
+                  "positions they were asked to cover.",
+    "noise": "The gap between results and expected outcomes — wOBA measured "
+             "against xwOBA. Positive means the results outran the contact "
+             "quality; negative means the contact deserved better.",
+}
+
+
+def write_json(family, side, count, evidence) -> Path:
+    """Machine-readable twin of TAGS.md, for the dashboard's tag footer.
+
+    The footer used to be hand-written and drifted — it described `complete`,
+    `elite discipline` and `gyro-heavy` long after all three were retired.
+    Generating it from the same scan means the UI cannot disagree with the
+    code about what the vocabulary is.
+    """
+    out = {"kinds": [], "generated_from": "scripts/tag_reference.py"}
+    for kind in TAG_KINDS:
+        tags = sorted(t for t in count if kind_of(t) == kind)
+        if not tags:
+            continue
+        out["kinds"].append({
+            "kind": kind,
+            "definition": KIND_DEF.get(kind, ""),
+            "tags": [{
+                "tag": t,
+                "side": "".join(sorted(side.get(t, ""))),
+                "family": family.get(t, ""),
+                "fires": count[t],
+                "population": TAG_POPULATION.get(t, POP_ALL),
+                "floor": sample_floor(t),
+                "earned": evidence.get(t, ""),
+            } for t in tags],
+        })
+    path = _HERE.parent / "dashboard" / "tag_reference.json"
+    path.write_text(json.dumps(out, indent=1))
+    return path
+
+
 def build(check_only: bool) -> int:
-    family, side, count, players = scan_portraits()
+    family, side, count, players, evidence = scan_portraits()
     seen = set(count)
     coded = set(TAG_KIND) | {t for t in seen if kind_of(t)}
 
@@ -181,7 +241,9 @@ def build(check_only: bool) -> int:
         "",
     ]
     _OUT.write_text("\n".join(lines))
+    jp = write_json(family, side, count, evidence)
     print(f"Wrote {_OUT} — {len(seen)} tags, {problems} discrepancies")
+    print(f"Wrote {jp} — dashboard tag footer")
     return 0
 
 

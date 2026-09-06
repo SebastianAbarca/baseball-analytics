@@ -6,8 +6,13 @@ All functions return Dash/DBC component trees. No callbacks here.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import dash_bootstrap_components as dbc
 from dash import dcc, html, dash_table
+
+import charts   # KIND_COLORS — the tag palette lives with the charts
 
 # ---------------------------------------------------------------------------
 # Theme constants
@@ -163,6 +168,44 @@ def team_header(portrait: dict) -> html.Div:
 # Tab layout
 # ---------------------------------------------------------------------------
 
+def _roster_card(title: str, unit: str) -> dbc.Card:
+    """
+    A roster with a column per tag kind, paginated.
+
+    No legend strip above it — the kind columns are headed in their own
+    colours, so the header row IS the legend. Pattern-matching ids let one
+    callback drive all three rosters.
+    """
+    def _pager_btn(kind: str, label: str):
+        return dbc.Button(
+            label, id={"type": f"roster-{kind}", "unit": unit},
+            size="sm", color="secondary", outline=True, n_clicks=0,
+            style={"fontSize": "0.66rem", "padding": "1px 9px",
+                   "borderColor": "#374151", "color": "#9ca3af"},
+        )
+
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Div([
+                html.Small(title, className="text-secondary fw-semibold text-uppercase",
+                           style={"letterSpacing": "0.07em", "fontSize": "0.7rem"}),
+                html.Div([
+                    html.Span(id={"type": "roster-pageinfo", "unit": unit},
+                              className="text-secondary",
+                              style={"fontSize": "0.66rem", "marginRight": "8px"}),
+                    _pager_btn("prev", "‹"),
+                    html.Span(" "),
+                    _pager_btn("next", "›"),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+            ], style={"display": "flex", "justifyContent": "space-between",
+                      "alignItems": "center"}),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody(html.Div(id={"type": "roster-body", "unit": unit}),
+                     style={"padding": "10px"}),
+    ], style=CARD_STYLE, className="mb-3")
+
+
 def _card(title: str, graph_id: str, height: int = 380) -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
@@ -179,6 +222,84 @@ def _card(title: str, graph_id: str, height: int = 380) -> dbc.Card:
             style={"padding": "8px"},
         ),
     ], style=CARD_STYLE, className="mb-3")
+
+
+def tag_footer() -> html.Div:
+    """
+    The vocabulary, explained where the reader is: what each kind means, which
+    tags live in it, and how a player earns one.
+
+    Built from dashboard/tag_reference.json, which scripts/tag_reference.py
+    generates from the live tag maps and the built portraits. The previous
+    hand-written guide drifted badly — it was still describing `complete`,
+    `elite discipline` and `gyro-heavy` months after all three were retired,
+    and still defined `free swinger` as a walk-rate composite after it became
+    chase rate alone. Generating it means the UI cannot disagree with the code.
+
+    "How it is earned" is the gate's OWN evidence sentence, taken from a real
+    firing, rather than a description written alongside the gate that can fall
+    out of step with it.
+    """
+    try:
+        data = json.loads(
+            (Path(__file__).resolve().parent / "tag_reference.json").read_text())
+    except Exception:
+        return html.Div()
+
+    sections = []
+    for blk in data.get("kinds", []):
+        kind = blk["kind"]
+        color = charts.KIND_COLORS.get(kind, "#9ca3af")
+        rows = []
+        for t in blk["tags"]:
+            detail = " · ".join(x for x in [
+                f"{t['fires']:,} firings",
+                f"eligible: {t['population']}" if t["population"] != "all" else None,
+                f"needs {t['floor']}" if t["floor"] != "—" else None,
+            ] if x)
+            rows.append(html.Div([
+                html.Span(t["tag"], style={
+                    "color": color, "fontWeight": "700", "fontSize": "0.72rem",
+                    "display": "inline-block", "minWidth": "150px"}),
+                html.Span(t["earned"] or "—", style={
+                    "color": "#d1d5db", "fontSize": "0.7rem"}),
+                html.Span(f"  ({detail})", style={
+                    "color": "#6b7280", "fontSize": "0.64rem"}),
+            ], style={"marginBottom": "3px", "lineHeight": "1.45"}))
+
+        sections.append(dbc.AccordionItem(
+            html.Div(rows),
+            title=f"{kind}  ·  {len(blk['tags'])} tags  —  {blk['definition']}",
+            item_id=f"kind-{kind}",
+        ))
+
+    return html.Div([
+        html.Hr(style={"borderColor": "#374151", "marginTop": "28px"}),
+        html.Div([
+            html.Small("The vocabulary",
+                       className="text-secondary fw-semibold text-uppercase",
+                       style={"letterSpacing": "0.08em", "fontSize": "0.7rem"}),
+            html.Div(
+                "Every tag is one of six KINDS, ordered by who controls the "
+                "thing it describes — from what nobody chose to what the club "
+                "decided. A player carries a tag only when the evidence clears "
+                "its gate and the sample can support the claim; the middle of "
+                "any distribution is deliberately untagged, so carrying no tag "
+                "is a finding rather than a gap.",
+                className="text-secondary",
+                style={"fontSize": "0.72rem", "maxWidth": "820px",
+                       "marginTop": "4px", "marginBottom": "10px"}),
+        ]),
+        # always_open expects active_item to be a list; combining it with
+        # start_collapsed made dbc hand React an unexpected value.
+        dbc.Accordion(sections, start_collapsed=True,
+                      flush=True, id="tag-footer-accordion"),
+        html.Div("Generated from the tag maps by scripts/tag_reference.py — "
+                 "regenerate after changing a gate.",
+                 className="text-secondary",
+                 style={"fontSize": "0.62rem", "marginTop": "10px",
+                        "marginBottom": "18px", "fontStyle": "italic"}),
+    ], className="mt-3")
 
 
 def _archetype_guide_card() -> dbc.Card:
@@ -481,11 +602,12 @@ def years_tab() -> dbc.Tab:
 def players_tab() -> dbc.Tab:
     """The people behind the identity — rosters with trait tags."""
     return dbc.Tab(label="The Players", tab_id="tab-players", children=[
-        _card("The lineup", "hitter-table", height=520),
-        dbc.Row([
-            dbc.Col(_card("The rotation", "starter-bars", height=420), md=6),
-            dbc.Col(_card("The bullpen", "bullpen-table", height=420), md=6),
-        ]),
+        # HTML rather than a Plotly table: traits are kind-coloured chips with
+        # evidence on hover, which go.Table cannot render. The legend sits
+        # above so the colours mean something before the first chip.
+        _roster_card("The lineup",  "hitters"),
+        _roster_card("The rotation", "starters"),
+        _roster_card("The bullpen",  "bullpen_arms"),
         dbc.Card([
             dbc.CardHeader(
                 html.Small("Compare hitters head-to-head", className="text-secondary fw-semibold text-uppercase",
@@ -954,5 +1076,9 @@ def full_layout() -> html.Div:
                 color="#1a56db",
                 children=tabs_layout(),
             ),
+            # Sits below every tab rather than inside one: the vocabulary is
+            # what the whole app is written in, so it should be reachable from
+            # wherever the reader hits a tag they do not recognise.
+            tag_footer(),
         ], fluid=True),
     ], style={"backgroundColor": "#111827", "minHeight": "100vh", "color": "#f9fafb"})
