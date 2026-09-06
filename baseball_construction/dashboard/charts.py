@@ -1347,17 +1347,13 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     return fig
 
 
-def team_drift_chart(team: str, unit: str,
-                     seasons_data: dict[int, dict]) -> go.Figure:
-    """
-    "Through the Years" — one unit's identity drift across seasons.
+_DRIFT_MIN_SEASONS = 3
+_DRIFT_MIN_DENSITY = 0.02
 
-    seasons_data — {year: league_identity dict for that season}. For each
-    season we compute deviation = team density − league baseline per tag,
-    then draw the team's most-defining tags (largest |deviation| anywhere
-    in the window) as lines against the league zero-line.
-    """
-    # Deviation matrix: tag -> {year: (dev_pp, density)}
+
+def drift_deviations(team: str, unit: str,
+                     seasons_data: dict[int, dict]) -> dict[str, dict]:
+    """tag -> {year: (deviation_pp, density_pp)} for one team and unit."""
     dev: dict[str, dict[int, tuple[float, float]]] = {}
     for yr, league in sorted(seasons_data.items()):
         ident = (league.get(team) or {}).get(unit) or {}
@@ -1366,18 +1362,55 @@ def team_drift_chart(team: str, unit: str,
         for tag in set(density) | set(base):
             d = float(density.get(tag, 0) or 0)
             b = float(base.get(tag, 0) or 0)
-            if d < 0.02 and b < 0.02:
+            if d < _DRIFT_MIN_DENSITY and b < _DRIFT_MIN_DENSITY:
                 continue   # micro-tags: noise, not identity
             dev.setdefault(tag, {})[yr] = ((d - b) * 100, d * 100)
+    return dev
 
+
+def drift_tag_choices(team: str, unit: str, seasons_data: dict[int, dict],
+                      kind: str | None = None) -> list[tuple[str, float]]:
+    """
+    Tags this team has a real multi-season history for, most-defining first.
+
+    Ranked by the largest deviation the tag ever reached, which is what the
+    chart used to pick with silently. Exposing the ranking is the point: the
+    old chart drew its own top 6 and gave the reader no way to see why those
+    six, or to ask a different question.
+    """
+    dev = drift_deviations(team, unit, seasons_data)
+    out = []
+    for tag, series in dev.items():
+        if len(series) < _DRIFT_MIN_SEASONS:
+            continue
+        if kind and kind != "all" and kind_of(tag) != kind:
+            continue
+        out.append((tag, max(abs(v[0]) for v in series.values())))
+    return sorted(out, key=lambda kv: -kv[1])
+
+
+def team_drift_chart(team: str, unit: str,
+                     seasons_data: dict[int, dict],
+                     tags: list[str] | None = None) -> go.Figure:
+    """
+    "Through the Years" — one unit's identity drift across seasons.
+
+    seasons_data — {year: league_identity dict for that season}. For each
+    season we compute deviation = team density − league baseline per tag,
+    then draw the team's most-defining tags (largest |deviation| anywhere
+    in the window) as lines against the league zero-line.
+    """
+    dev = drift_deviations(team, unit, seasons_data)
     if not dev:
         return empty_figure("No multi-season data for this team")
 
-    # The team's defining tags: largest |deviation| anywhere, seen ≥3 seasons
-    ranked = sorted(
-        (t for t in dev if len(dev[t]) >= 3),
-        key=lambda t: -max(abs(v[0]) for v in dev[t].values()),
-    )[:6]
+    if tags is None:
+        # Unfiltered fallback: the team's most-defining tags.
+        ranked = [t for t, _ in drift_tag_choices(team, unit, seasons_data)][:6]
+    else:
+        ranked = [t for t in tags if t in dev]
+    if not ranked:
+        return empty_figure("No tags selected")
 
     years = sorted(seasons_data.keys())
     fig = go.Figure()

@@ -360,24 +360,55 @@ def _league_identity_file(season: int) -> dict:
     return data
 
 
-@callback(
-    Output("drift-offense",  "figure"),
-    Output("drift-rotation", "figure"),
-    Output("drift-bullpen",  "figure"),
-    Input("team-dropdown", "value"),
-)
-def team_drift(team):
-    if not team:
-        empty = charts.empty_figure("Select a team")
-        return empty, empty, empty
-    seasons = {}
+def _drift_seasons() -> dict:
+    """Every league identity file, keyed by season."""
+    out = {}
     for yr in range(2015, 2027):
         d = _league_identity_file(yr)
         if d:
-            seasons[yr] = d
-    return (charts.team_drift_chart(team, "offense",  seasons),
-            charts.team_drift_chart(team, "rotation", seasons),
-            charts.team_drift_chart(team, "bullpen",  seasons))
+            out[yr] = d
+    return out
+
+
+# How many tags to pre-select. Enough to show a shape, few enough to read;
+# the reader adds or removes from there.
+_DRIFT_DEFAULT_N = 6
+
+
+@callback(
+    Output({"type": "drift-tags", "unit": MATCH}, "options"),
+    Output({"type": "drift-tags", "unit": MATCH}, "value"),
+    Input("team-dropdown", "value"),
+    Input({"type": "drift-kind", "unit": MATCH}, "value"),
+    State({"type": "drift-tags", "unit": MATCH}, "id"),
+)
+def drift_tag_options(team, kind, comp_id):
+    """
+    Repopulate the tag checklist when the team or kind changes.
+
+    Options are ranked by the largest deviation the tag ever reached, so the
+    order itself says which tags defined this franchise — the ranking the old
+    chart applied silently.
+    """
+    unit = (comp_id or {}).get("unit", "offense")
+    if not team:
+        return [], []
+    choices = charts.drift_tag_choices(team, unit, _drift_seasons(), kind)
+    options = [{"label": f"{t}", "value": t} for t, _ in choices]
+    return options, [t for t, _ in choices[:_DRIFT_DEFAULT_N]]
+
+
+@callback(
+    Output({"type": "drift-chart", "unit": MATCH}, "figure"),
+    Input("team-dropdown", "value"),
+    Input({"type": "drift-tags", "unit": MATCH}, "value"),
+    State({"type": "drift-chart", "unit": MATCH}, "id"),
+)
+def drift_chart(team, tags, comp_id):
+    unit = (comp_id or {}).get("unit", "offense")
+    if not team:
+        return charts.empty_figure("Select a team")
+    return charts.team_drift_chart(team, unit, _drift_seasons(), tags=tags)
 
 
 _BASELINE_CACHE: dict[int, dict] = {}

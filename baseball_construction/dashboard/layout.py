@@ -581,6 +581,7 @@ def identity_tab() -> dbc.Tab:
         _card("The lineup — share of plate appearances", "hitter-pie", height=520),
         _card("The rotation — share of batters faced", "rotation-trait-density", height=520),
         _card("The bullpen — share of batters faced", "bullpen-trait-density", height=520),
+        split_resistance_card(),
     ])
 
 
@@ -593,10 +594,108 @@ def years_tab() -> dbc.Tab:
             "league average; identity is departure from it.",
             className="text-secondary", style={"fontSize": "0.85rem"},
         ),
-        _card("The lineup through the years", "drift-offense", height=430),
-        _card("The rotation through the years", "drift-rotation", height=430),
-        _card("The bullpen through the years", "drift-bullpen", height=430),
+        _drift_card("The lineup through the years",  "offense"),
+        _drift_card("The rotation through the years", "rotation"),
+        _drift_card("The bullpen through the years",  "bullpen"),
     ])
+
+
+def split_resistance_card() -> dbc.Card:
+    """Team split resistance — LHP vs RHP. Moved out of the retired Deep Data
+    tab: the platoon tags (`platoon liability`, `reverse split`, `platoon
+    specialist`) are live vocabulary, so this belongs with team identity."""
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Small("Team Split Resistance — LHP vs RHP",
+                       className="fw-semibold text-uppercase",
+                       style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                              "color": "#9ca3af"}),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody(html.Div(id="team-split-card"), style={"padding": "12px"}),
+    ], style=CARD_STYLE, className="mb-3")
+
+
+def arsenal_3d_card() -> dbc.Card:
+    """
+    Pitch Arsenal — 3D trajectories. Moved out of the retired Deep Data tab to
+    sit under the bullpen roster, beside the arsenal column it illustrates:
+    that column says WHAT a pitcher throws and how often, this says what the
+    pitch actually does on the way to the plate.
+    """
+    return dbc.Card([
+        dbc.CardHeader(
+            dbc.Row([
+                dbc.Col(
+                    html.Small("Pitch Arsenal — 3D Trajectories",
+                               className="text-secondary fw-semibold text-uppercase",
+                               style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                    width="auto", className="d-flex align-items-center",
+                ),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id="arsenal-pitch-type-dropdown",
+                        options=[], value=None, clearable=False,
+                        placeholder="Load a portrait to see pitch types…",
+                        style={"backgroundColor": "#1f2937", "color": "#111827",
+                               "minWidth": "220px"},
+                    ),
+                    width="auto",
+                ),
+            ], justify="between", className="g-2 align-items-center"),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody(
+            dcc.Graph(id="arsenal-3d-chart", config={"displayModeBar": True},
+                      style={"height": "520px"}),
+            style={"padding": "8px"},
+        ),
+    ], style=CARD_STYLE, className="mb-3")
+
+
+def _drift_card(title: str, unit: str) -> dbc.Card:
+    """
+    One unit's drift, with the tag choice handed to the reader.
+
+    The chart used to pick its own six tags — largest deviation reached
+    anywhere in the window — and gave no indication that it had chosen, let
+    alone why those six. Picking a kind first narrows 94 tags to a coherent
+    handful, and the checklist then shows exactly what is on the chart.
+    """
+    kind_opts = [{"label": "most defining", "value": "all"}] + [
+        {"label": k, "value": k} for k in charts.KIND_ORDER
+    ]
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Div([
+                html.Small(title, className="text-secondary fw-semibold text-uppercase",
+                           style={"letterSpacing": "0.07em", "fontSize": "0.7rem"}),
+                dbc.RadioItems(
+                    id={"type": "drift-kind", "unit": unit},
+                    options=kind_opts, value="all",
+                    inline=True, className="drift-kind",
+                    inputStyle={"marginRight": "3px"},
+                    labelStyle={"fontSize": "0.66rem", "marginRight": "9px",
+                                "color": "#9ca3af"},
+                ),
+            ], style={"display": "flex", "justifyContent": "space-between",
+                      "alignItems": "center", "flexWrap": "wrap", "gap": "8px"}),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody([
+            dbc.Checklist(
+                id={"type": "drift-tags", "unit": unit},
+                options=[], value=[], inline=True,
+                inputStyle={"marginRight": "4px"},
+                labelStyle={"fontSize": "0.68rem", "marginRight": "12px",
+                            "color": "#d1d5db"},
+                className="mb-2",
+            ),
+            dcc.Graph(id={"type": "drift-chart", "unit": unit},
+                      config={"displayModeBar": False},
+                      style={"height": "430px"}),
+        ], style={"padding": "10px"}),
+    ], style=CARD_STYLE, className="mb-3")
 
 
 def players_tab() -> dbc.Tab:
@@ -608,6 +707,8 @@ def players_tab() -> dbc.Tab:
         _roster_card("The lineup",  "hitters"),
         _roster_card("The rotation", "starters"),
         _roster_card("The bullpen",  "bullpen_arms"),
+        # Under the bullpen, beside the arsenal column it illustrates.
+        arsenal_3d_card(),
         dbc.Card([
             dbc.CardHeader(
                 html.Small("Compare hitters head-to-head", className="text-secondary fw-semibold text-uppercase",
@@ -1051,7 +1152,14 @@ def tabs_layout() -> dbc.Tabs:
     return dbc.Tabs(
         id="main-tabs",
         active_tab="tab-identity",
-        children=[identity_tab(), years_tab(), players_tab(), compare_tab(), scout_tab(), deep_tab()],
+        # Deep Data retired: its philosophy radars and archetype-mix charts
+        # scored the vocabulary the trait layer replaced. The two pieces worth
+        # keeping moved to where they are read — split resistance to Identity
+        # (the platoon tags are live), 3D trajectories under the bullpen roster
+        # beside the arsenal column. deep_tab() is now unreferenced; its
+        # callbacks are inert because the app sets suppress_callback_exceptions.
+        children=[identity_tab(), years_tab(), players_tab(),
+                  compare_tab(), scout_tab()],
         className="mb-3",
     )
 
