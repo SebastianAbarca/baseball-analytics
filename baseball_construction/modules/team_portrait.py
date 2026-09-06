@@ -55,7 +55,10 @@ sys.path.insert(0, str(_HERE))
 # 89.8% of pitcher-seasons against a 90th-percentile gate, and `soft tosser`
 # and `contact suppressor` on none at all. Bumping the version is what
 # discards those portraits everywhere, Supabase Storage included.
-PORTRAIT_SCHEMA_VERSION = 20
+# 21 adds the per-player `gate_inputs` block — everything build_*_traits was
+# called with, so tags can be recomputed by scripts/rederive_traits.py without
+# a rebuild. This is the last rebuild a pure gate change should ever require.
+PORTRAIT_SCHEMA_VERSION = 21
 
 from ingest import (
     pull_statcast_range,
@@ -1040,6 +1043,26 @@ def _classify_hitters(
             log.warning("hitter traits failed for %s: %s", player_id, _ht_exc)
             profile["traits"], profile["spectrum"] = [], None
 
+        # Everything build_hitter_traits was called with, kept so the tags can
+        # be recomputed WITHOUT rebuilding the portrait. Traits are a pure
+        # function of these; the portrait used to throw them away, so changing
+        # a gate meant an hour-long rebuild that recomputed metrics which had
+        # not moved. See scripts/rederive_traits.py.
+        profile["gate_inputs"] = _jsonable({
+            "metrics":          metrics,
+            "season_metrics":   season_metrics,
+            "sprint_speed_raw": sprint_raw,
+            "sb":               int(_nz(row.get("SB", 0))),
+            "cs":               int(_nz(row.get("CS", 0))),
+            "opportunities":    int(obp_val * pa_val),
+            "attempt_rate_pct": att_pct,
+            "splits":           (split_map or {}).get(int(player_id)),
+            "catching":         (catcher_map or {}).get(int(player_id)),
+            "advancement":      (advancement_map or {}).get(int(player_id)),
+            "positions":        (positions_map or {}).get(int(player_id)),
+            "pa":               int(_nz(row.get("PA")) or _nz(row.get("pa"))),
+        })
+
         # Eligible-population membership — the denominator each tag is scored
         # against in _trait_density (see TAG_POPULATION).
         profile["populations"] = _hitter_populations(
@@ -1282,6 +1305,17 @@ def _classify_pitchers(
             )
             profile["limited_sample"] = is_limited_sample(
                 profile.get("bf"), LIMITED_SAMPLE_BF)
+            # See the hitter equivalent. The five league frames are NOT stored
+            # per player — they are per-season and already cached as parquet
+            # in modules/processed, so a re-derive reloads them once.
+            profile["gate_inputs"] = _jsonable({
+                "metrics":        metrics,
+                "bf": bf, "g": g, "gs": gs, "is_starter": True,
+                "leverage":       _lev_map.get(player_id),
+                "splits":         (pitcher_splits or {}).get(player_id),
+                "tempo":          (tempo_map or {}).get(player_id),
+                "runner_control": (runner_ctrl_map or {}).get(player_id),
+            })
             # Archetype boxes retired — traits are the identity layer now.
             # modifiers (platoon/command/arsenal/ace) is fully redundant with
             # the trait families and is dropped from the portrait.
@@ -1356,6 +1390,14 @@ def _classify_pitchers(
             )
             bullpen_arms[-1]["limited_sample"] = is_limited_sample(
                 bullpen_arms[-1].get("bf"), LIMITED_SAMPLE_BF)
+            bullpen_arms[-1]["gate_inputs"] = _jsonable({
+                "metrics":        metrics,
+                "bf": bf, "g": g, "gs": gs, "is_starter": False,
+                "leverage":       _lev_map.get(player_id),
+                "splits":         (pitcher_splits or {}).get(player_id),
+                "tempo":          (tempo_map or {}).get(player_id),
+                "runner_control": (runner_ctrl_map or {}).get(player_id),
+            })
 
     # Build collective bullpen profile from BF-weighted mean metrics
     bullpen_profile: dict = {}
@@ -1381,6 +1423,11 @@ def _classify_pitchers(
             except Exception as exc:
                 log.warning("build_bullpen_profile failed: %s", exc)
                 bullpen_profile = {"team": team, "season": season, "metrics": bp_metrics}
+
+    # role_pool is four league quantiles shared by every pitcher on the staff,
+    # so it rides on the bullpen profile rather than being copied per player.
+    bullpen_profile = bullpen_profile or {}
+    bullpen_profile["role_pool"] = _jsonable(role_pool)
 
     return starters, bullpen_profile, bullpen_arms
 
@@ -2217,6 +2264,36 @@ _FINGERPRINT_POOL_GLOBS = (
     "fg_batting_*.csv", "fg_pitching_*.csv",
     "*history*.csv", "*prior*.parquet",
 )
+
+
+def _jsonable(obj):
+    """
+    Coerce numpy/pandas scalars and NaN to plain JSON types.
+
+    The gate inputs come straight out of pandas rows, so they arrive as
+    np.float64 / np.int64 / NaT and would either blow up json.dump or
+    round-trip as the string "nan" — which reads as a value rather than as
+    missing, and would silently change what a gate sees on re-derive.
+    """
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_jsonable(v) for v in obj]
+    if obj is None or isinstance(obj, (str, bool)):
+        return obj
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return None if (np.isnan(f) or np.isinf(f)) else f
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(obj)
 
 
 def _stable_repr(v) -> str:
