@@ -3680,6 +3680,164 @@ def arsenal_pitch_choices(portrait: dict, player_ids: list[int]) -> list[str]:
     return sorted(tot, key=lambda k: -tot[k])
 
 
+COMMIT_FT = 23.0   # hitter's decision point, feet from the plate
+_FASTBALL_CODES = ("FF", "FA", "SI", "FT", "FC")
+
+
+def _path_at(entry: dict, ys: np.ndarray):
+    """
+    (x, z) of a pitch at each distance-to-plate in `ys`, in feet.
+
+    Same kinematics as _reconstruct_trajectory, but solved at chosen y values
+    rather than evenly in time, so two pitches can be compared at the same
+    point in space — which is what the hitter actually sees.
+    """
+    x0, y0, z0 = entry["release_x"], entry["release_y"], entry["release_z"]
+    vx0, vy0, vz0 = entry["vx0"], entry["vy0"], entry["vz0"]
+    ax_, ay_, az_ = entry["ax"], entry["ay"], entry["az"]
+    a = 0.5 * ay_
+    disc = vy0 ** 2 - 4 * a * (y0 - ys)
+    t = np.where(disc >= 0, (-vy0 - np.sqrt(np.maximum(disc, 0))) / (2 * a), np.nan)
+    t = np.where(t >= 0, t, np.nan)
+    return (x0 + vx0 * t + 0.5 * ax_ * t ** 2,
+            z0 + vz0 * t + 0.5 * az_ * t ** 2)
+
+
+def tunnel_separation(a: dict, b: dict, n: int = 140):
+    """
+    (ys, inches) — how far apart two pitches are at every point of the flight.
+
+    Starts at the later of the two release points, since before that one of
+    them does not exist yet. Distance is in the plane the hitter reads, so
+    horizontal and vertical separation are combined.
+    """
+    y_start = min(a["release_y"], b["release_y"])
+    ys = np.linspace(y_start, PLATE_Y, n)
+    ax_, az_ = _path_at(a, ys)
+    bx_, bz_ = _path_at(b, ys)
+    return ys, np.sqrt((ax_ - bx_) ** 2 + (az_ - bz_) ** 2) * 12.0
+
+
+def _reference_pitch(pitches: dict) -> str | None:
+    """
+    The pitch everything else is measured against — his most-thrown fastball,
+    falling back to his most-thrown pitch.
+
+    Tunnelling is not really a property of a pair picked at random: the hitter
+    is timing the fastball, and every other pitch either mimics it or does
+    not. Anchoring here also turns N² pairs into N-1 readable lines.
+    """
+    if not pitches:
+        return None
+    fbs = {k: v for k, v in pitches.items()
+           if _PITCH_NAME_TO_CODE.get(k, "") in _FASTBALL_CODES}
+    pool = fbs or pitches
+    return max(pool, key=lambda k: pool[k].get("usage_pct") or 0)
+
+
+def tunnel_profile(portrait: dict,
+                   player_ids: list[int] | None = None,
+                   pitch_types: list[str] | None = None) -> go.Figure:
+    """
+    How well each pitch mirrors the fastball, from release to the plate.
+
+    The single-number tunnel score in tunneling.py samples one instant and
+    calls it deception. What matters is the SHAPE: two pitches that sit on
+    top of each other until the hitter has to commit and then split are a
+    tunnel; two that separate early are just two pitches. So this draws
+    separation continuously and marks the decision point on it, rather than
+    reporting the value there and discarding the curve.
+
+    y = separation from the reference fastball, in inches
+    x = distance to the plate, release on the left
+    """
+    arsenal = portrait.get("arsenal_trajectories", {})
+    by_type = arsenal.get("by_pitch_type", {})
+    if not by_type:
+        return empty_figure("No pitch trajectory data available")
+
+    choices = arsenal_pitcher_choices(portrait)
+    if not choices:
+        return empty_figure("No pitch trajectory data available")
+    wanted = list(dict.fromkeys(player_ids or [choices[0][0]]))
+
+    arms: dict[int, dict] = {}
+    for pt, entries in by_type.items():
+        for e in entries:
+            pid = int(e.get("player_id") or -1)
+            if pid in wanted and (not pitch_types or pt in pitch_types):
+                arms.setdefault(pid, {})[pt] = e
+    if not arms:
+        return empty_figure("No pitches selected")
+
+    fig = go.Figure()
+    dashes = ["solid", "dot", "dash", "longdash"]
+    for i, pid in enumerate([p for p in wanted if p in arms]):
+        pitches = arms[pid]
+        ref = _reference_pitch(pitches)
+        others = {k: v for k, v in pitches.items() if k != ref}
+        if ref is None or not others:
+            continue
+        who = pitches[ref].get("name") or "?"
+        multi = len(arms) > 1
+        for name, e in sorted(others.items(),
+                              key=lambda kv: -(kv[1].get("usage_pct") or 0)):
+            ys, d = tunnel_separation(pitches[ref], e)
+            at_commit = float(np.interp(COMMIT_FT, ys[::-1], d[::-1]))
+            code = _PITCH_NAME_TO_CODE.get(name, "")
+            fig.add_trace(go.Scatter(
+                x=ys, y=d, mode="lines",
+                line=dict(color=_PITCH_COLORS.get(code, COLORS["subtext"]),
+                          width=2, dash=dashes[i % len(dashes)]),
+                name=f"{name} · {who}" if multi else name,
+                hovertemplate=(f"<b>{name}</b> vs {ref}"
+                               "<br>%{y:.1f}\" apart at %{x:.0f} ft"
+                               f"<br>At the decision point: {at_commit:.1f}\""
+                               "<extra></extra>"),
+            ))
+
+    if not fig.data:
+        return empty_figure("Need at least two pitches to compare")
+
+    # The decision point is the whole reason the curve matters — separation to
+    # the left of this line is what the hitter gets to use.
+    fig.add_vline(x=COMMIT_FT, line=dict(color="#9ca3af", width=1, dash="dot"))
+    # Inside the plot, not above it: the subtitle occupies the space over the
+    # axis, and at the decision point every curve is still near the floor, so
+    # the top of the panel is free.
+    fig.add_annotation(x=COMMIT_FT, yref="paper", y=0.97, yanchor="top",
+                       text="decision point", showarrow=False,
+                       font=dict(size=9, color="#9ca3af"))
+
+    ref_names = sorted({_reference_pitch(p) for p in arms.values()} - {None})
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=54, r=16, t=78, b=44)},
+        title=dict(
+            text="Tunnelling — separation from the fastball<br>"
+                 f"<sup>vs {', '.join(ref_names)} · lower for longer is a "
+                 "better tunnel</sup><br>"
+                 "<sup>everything right of the dotted line is break the hitter "
+                 "cannot act on</sup>",
+            font=dict(size=13, color=COLORS["text"]), x=0.5,
+        ),
+        xaxis=dict(
+            title="Distance to plate (ft)",
+            autorange="reversed",          # release left, plate right
+            gridcolor=COLORS["border"], zeroline=False,
+            tickfont=dict(color=COLORS["subtext"], size=10),
+        ),
+        yaxis=dict(
+            title="Separation (inches)",
+            gridcolor=COLORS["border"], zeroline=False, rangemode="tozero",
+            tickfont=dict(color=COLORS["subtext"], size=10),
+        ),
+        legend=dict(font=dict(color=COLORS["subtext"], size=10),
+                    bgcolor="rgba(0,0,0,0)"),
+        height=380,
+    )
+    return fig
+
+
 def pitch_arsenal_3d(portrait: dict,
                      player_ids: list[int] | None = None,
                      pitch_types: list[str] | None = None) -> go.Figure:

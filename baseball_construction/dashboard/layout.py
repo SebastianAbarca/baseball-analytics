@@ -666,6 +666,11 @@ def arsenal_3d_card() -> dbc.Card:
             ),
             dcc.Graph(id="arsenal-3d-chart", config={"displayModeBar": True},
                       style={"height": "520px"}),
+            # Same pitcher, same pitch filter, second question. The 3D view
+            # shows where each pitch goes; this shows how long it looked like
+            # the fastball on the way there. One set of controls drives both.
+            dcc.Graph(id="tunnel-profile-chart", config={"displayModeBar": False},
+                      style={"height": "380px"}),
         ], style={"padding": "8px"}),
     ], style=CARD_STYLE, className="mb-3")
 

@@ -1057,6 +1057,19 @@ def arsenal_3d(player_ids, pitch_types, data):
     return charts.pitch_arsenal_3d(p, player_ids, pitch_types)
 
 
+@callback(
+    Output("tunnel-profile-chart", "figure"),
+    Input("arsenal-pitcher-dropdown", "value"),
+    Input("arsenal-pitch-filter", "value"),
+    State("portrait-store", "data"),
+)
+def tunnel_profile(player_ids, pitch_types, data):
+    p = _deserialize(data)
+    if not p:
+        return charts.empty_figure("Load a portrait to see tunnelling")
+    return charts.tunnel_profile(p, player_ids, pitch_types)
+
+
 # ---------------------------------------------------------------------------
 # League Identity Board
 # ---------------------------------------------------------------------------
