@@ -507,10 +507,32 @@ _ARSENAL_MIN_USAGE = 0.03   # below this it is a show-me pitch, not a weapon
 # The trajectory data keys pitches by their long Statcast name; the roster's
 # arsenal column keys by code. One map so both use the same colour per pitch.
 # Fixed scene bounds for the 3D trajectory view, in feet. Pinned so the strike
-# zone — drawn at constant ABS dimensions — is identical in every selection.
-SCENE_X = 4.0    # half-width; release points reach ~3.5 ft off centre
+# zone is identical in every selection.
+#
+# SCENE_X has to hold the widest release in the league, not the widest in the
+# selection, or the scene would move again. Across all 33k arsenal entries
+# release_x runs to ±4.87 (Donnie Hart, BAL 2018 — a sidearm lefty); 7% clear
+# ±3.0 and 2.3% clear ±3.5, so ±4 is the honest floor. Same for height: 5.7%
+# of releases clear 6.5 ft.
+SCENE_X = 4.0    # half-width; 0.6% of releases fall outside this
 SCENE_Y = 56.0   # release (~54 ft) to the plate
 SCENE_Z = 7.0    # ground to above the tallest release
+
+# The scene box in the space Plotly's camera lives in. `aspectratio` is applied
+# by the renderer as the box's half-extent along each axis, and `camera.eye` is
+# measured in those same units — so the camera is only OUTSIDE the box while
+# |eye.y| > ASPECT_Y. Getting that wrong is what broke the view before.
+#
+# ASPECT_X is tied to ASPECT_Z by the ratio of the ranges they cover, so one
+# foot across the plate is one foot of height on screen and the strike zone
+# renders square rather than as a letterbox.
+ASPECT_Z = 1.4
+ASPECT_X = ASPECT_Z * (2 * SCENE_X) / SCENE_Z
+ASPECT_Y = 3.0   # 56 ft of depth over 3.0 vs 7 ft of height over 1.4 — the
+                 # flight path is foreshortened 3.7x so the break stays legible
+EYE_GAP  = 1.2   # how far beyond the near face the camera sits. Closer fills
+                 # the frame but crowds the box against the scene's edges, and
+                 # Plotly silently drops an axis title it cannot fit.
 
 _PITCH_NAME_TO_CODE = {
     "4-Seam Fastball": "FF", "Four-Seam Fastball": "FF", "2-Seam Fastball": "FT",
@@ -3802,16 +3824,11 @@ def pitch_arsenal_3d(portrait: dict,
         #
         # Only z had a range before; x and y used bare autorange, so they
         # rescaled to whichever pitcher and pitches were selected. The strike
-        # zone is drawn at fixed ABS dimensions, so it appeared to change size
-        # and shape between selections — the zone was the one thing on the
-        # chart that should never move. Without aspectmode Plotly also
-        # normalises each axis to its own range independently, which squashed
-        # the box regardless.
-        #
-        # aspectratio is the true footage (8 x 56 x 7) with the long axis
-        # compressed 4x, otherwise the 56 ft to the plate dwarfs everything
-        # and the break is invisible. x and z stay in true proportion to each
-        # other so the zone renders square.
+        # zone is drawn at fixed dimensions, so it appeared to change size and
+        # shape between selections — the zone was the one thing on the chart
+        # that should never move. Without aspectmode Plotly also normalises
+        # each axis to its own range independently, which squashed the box
+        # regardless.
         scene=dict(
             xaxis=dict(
                 title="Horizontal (ft)",
@@ -3822,7 +3839,9 @@ def pitch_arsenal_3d(portrait: dict,
                 range=[SCENE_X, -SCENE_X],
             ),
             yaxis=dict(
-                title="Distance to plate (ft)",
+                # Short, because this title is drawn along the receding edge
+                # and runs straight into the legend at the full spelling.
+                title="To plate (ft)",
                 backgroundcolor=COLORS["surface"],
                 gridcolor=COLORS["border"],
                 tickfont=dict(color=COLORS["subtext"], size=9),
@@ -3836,11 +3855,23 @@ def pitch_arsenal_3d(portrait: dict,
                 range=[0, SCENE_Z],
             ),
             aspectmode="manual",
-            aspectratio=dict(x=(2 * SCENE_X) / SCENE_Z,
-                             y=(SCENE_Y / SCENE_Z) / 4.0,
-                             z=1.0),
+            aspectratio=dict(x=ASPECT_X, y=ASPECT_Y, z=ASPECT_Z),
+            # An actual catcher's-eye view: on the centre line, behind the
+            # plate, looking out at the mound.
+            #
+            # The old eye was (0, -1.8, 0.5) against a y half-extent of 2.0,
+            # which put the camera INSIDE the scene box. That is what produced
+            # the wide-angle three-quarter view the subtitle kept calling a
+            # catcher's-eye view — the trajectories swept across the frame
+            # sideways instead of coming at you, and the zone sat off-centre.
+            #
+            # y is positive because the y axis is drawn reversed (range
+            # [SCENE_Y, 0]) to put the plate at the near end, so the plate
+            # side of the box is +y in camera space, not -y. Sitting
+            # EYE_GAP beyond the near face keeps the whole box in frame; any
+            # closer and the axis titles collide with each other.
             camera=dict(
-                eye=dict(x=0.0, y=-1.8, z=0.5),   # roughly catcher's POV
+                eye=dict(x=0.0, y=ASPECT_Y + EYE_GAP, z=0.12),
             ),
             bgcolor=COLORS["surface"],
         ),
@@ -3848,7 +3879,9 @@ def pitch_arsenal_3d(portrait: dict,
             font=dict(color=COLORS["subtext"], size=10),
             bgcolor="rgba(0,0,0,0)",
         ),
-        margin=dict(l=0, r=0, t=68, b=0),
+        # l/b leave room for the "Height (ft)" and "Horizontal (ft)" titles,
+        # which the straight-on camera pushes to the very edge of the scene.
+        margin=dict(l=44, r=0, t=68, b=10),
         height=520,
     )
     return fig
