@@ -35,6 +35,10 @@ from team_portrait import kind_of  # noqa: E402
 ABS_SZ_TOP    = 3.38   # ft
 ABS_SZ_BOT    = 1.59   # ft
 ABS_SZ_WIDTH  = 0.833  # ft (half-width from center)
+# Front of home plate. Statcast measures plate_x/plate_z here and the zone is
+# judged here, so trajectories are solved to this plane and the zone must be
+# drawn on it — not at y=0, which is the back tip of the plate.
+PLATE_Y       = 1.4167  # ft
 
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
@@ -439,6 +443,40 @@ _PITCH_COLORS = {
 }
 
 
+_STRIKE_ZONE_CACHE: dict[int, tuple[float, float]] = {}
+
+
+def strike_zone(season: int) -> tuple[float, float]:
+    """
+    (top, bottom) of the season's average strike zone in feet.
+
+    Statcast records sz_top/sz_bot per pitch, set from the batter's stance, so
+    the zone is measured rather than assumed. The ABS constants used before
+    were a fixed 3.38/1.59 and neither matched a season nor moved with one:
+    the real average is 3.361/1.594 in 2023 and 3.435/1.605 in 2025, drifting
+    as the batter population changes.
+
+    Width is NOT computed — the plate is 17 inches by rule, so the half-width
+    of 0.833 ft (plate plus a ball radius each side) is the same every year.
+    """
+    if season in _STRIKE_ZONE_CACHE:
+        return _STRIKE_ZONE_CACHE[season]
+    top, bot = ABS_SZ_TOP, ABS_SZ_BOT
+    try:
+        import pandas as _pd
+        path = _HERE.parent / "data" / "raw" / f"statcast_{season}.parquet"
+        if path.exists():
+            df = _pd.read_parquet(path, columns=["sz_top", "sz_bot"])
+            t = _pd.to_numeric(df["sz_top"], errors="coerce").mean()
+            b = _pd.to_numeric(df["sz_bot"], errors="coerce").mean()
+            if _pd.notna(t) and _pd.notna(b) and 2.0 < t < 5.0 and 0.5 < b < 2.5:
+                top, bot = float(t), float(b)
+    except Exception:
+        pass
+    _STRIKE_ZONE_CACHE[season] = (top, bot)
+    return top, bot
+
+
 def _pitch_mix(season: int) -> dict[int, list[dict]]:
     """{pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage."""
     if season in _PITCH_MIX_CACHE:
@@ -468,6 +506,12 @@ _ARSENAL_MIN_USAGE = 0.03   # below this it is a show-me pitch, not a weapon
 
 # The trajectory data keys pitches by their long Statcast name; the roster's
 # arsenal column keys by code. One map so both use the same colour per pitch.
+# Fixed scene bounds for the 3D trajectory view, in feet. Pinned so the strike
+# zone — drawn at constant ABS dimensions — is identical in every selection.
+SCENE_X = 4.0    # half-width; release points reach ~3.5 ft off centre
+SCENE_Y = 56.0   # release (~54 ft) to the plate
+SCENE_Z = 7.0    # ground to above the tallest release
+
 _PITCH_NAME_TO_CODE = {
     "4-Seam Fastball": "FF", "Four-Seam Fastball": "FF", "2-Seam Fastball": "FT",
     "Sinker": "SI", "Cutter": "FC", "Slider": "SL", "Sweeper": "ST",
@@ -3569,7 +3613,7 @@ def _reconstruct_trajectory(
         # Solve for time of flight: y0 + vy0·t + ½·ay·t² = 1.4167 (front of plate)
         a_c = 0.5 * ay_
         b_c = vy0
-        c_c = y0 - 1.4167
+        c_c = y0 - PLATE_Y
         disc = b_c**2 - 4 * a_c * c_c
         if disc < 0:
             return None
@@ -3654,6 +3698,8 @@ def pitch_arsenal_3d(portrait: dict,
 
     # Longest label decides whether the pitcher's name is worth repeating.
     multi = len({int(e.get("player_id")) for _, e in selected}) > 1
+    names_in_view = list(dict.fromkeys(e.get("name") or "?" for _, e in selected))
+    who = " vs ".join(names_in_view) if multi else names_in_view[0]
 
     fig = go.Figure()
     for pitch_type, p in sorted(selected, key=lambda r: -(r[1].get("usage_pct") or 0)):
@@ -3708,16 +3754,29 @@ def pitch_arsenal_3d(portrait: dict,
             hoverinfo="skip",
         ))
 
-    # Strike zone reference box at y=0 (home plate face) — ABS standard dimensions
+    # Strike zone box at the FRONT OF THE PLATE, at this season's real height.
+    #
+    # Two things were wrong with it. It was drawn at y=0, but
+    # _reconstruct_trajectory solves flight time to y=PLATE_Y (1.4167 ft),
+    # which is also where Statcast measures plate_x/plate_z and where the zone
+    # is judged — so the zone hung about seventeen inches behind the point
+    # every pitch actually ended at, and nothing crossed the plane it was
+    # drawn on. And its height was the fixed ABS pair, 3.38/1.59, which is not
+    # any season's zone: Statcast sets sz_top/sz_bot per pitch from the
+    # batter's stance, and the average moves (3.361/1.594 in 2023,
+    # 3.435/1.605 in 2025). Now it is the season's own mean.
+    sz_top, sz_bot = strike_zone(int(portrait.get("season") or 0))
     sz_x = [-ABS_SZ_WIDTH, ABS_SZ_WIDTH, ABS_SZ_WIDTH, -ABS_SZ_WIDTH, -ABS_SZ_WIDTH]
-    sz_z = [ABS_SZ_BOT,    ABS_SZ_BOT,   ABS_SZ_TOP,   ABS_SZ_TOP,    ABS_SZ_BOT]
-    sz_y = [0.0] * 5
+    sz_z = [sz_bot,        sz_bot,       sz_top,       sz_top,        sz_bot]
+    sz_y = [PLATE_Y] * 5
     fig.add_trace(go.Scatter3d(
         x=sz_x, y=sz_y, z=sz_z,
         mode="lines",
         line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dash"),
         name="Strike Zone",
-        hoverinfo="skip",
+        hovertemplate=(f"<b>Strike zone</b><br>{portrait.get('season', '')} league "
+                       f"average<br>Top: {sz_top:.2f} ft<br>Bottom: {sz_bot:.2f} ft"
+                       "<extra></extra>"),
         showlegend=False,
     ))
 
@@ -3725,34 +3784,61 @@ def pitch_arsenal_3d(portrait: dict,
         paper_bgcolor=COLORS["background"],
         plot_bgcolor=COLORS["background"],
         font_color=COLORS["text"],
+        # Names the pitcher(s), not a pitch — the chart is one arm's arsenal
+        # now. Previously this interpolated `pitch_type`, which after the
+        # rewrite was whatever the draw loop happened to leave behind.
         title=dict(
-            text=f"Pitch Trajectories — {pitch_type}<br>"
-                 f"<sup>Catcher's-eye view (behind home plate, looking out) — "
-                 f"LHP arm-side release appears right, RHP appears left</sup>",
+            # Two short lines rather than one long one: the card is ~570px
+            # wide and a single subtitle carrying both notes ran off both
+            # edges and collided with the modebar.
+            text=f"Pitch Trajectories — {who}<br>"
+                 f"<sup>Catcher's-eye view — LHP release appears right, "
+                 f"RHP left</sup><br>"
+                 f"<sup>Zone: {portrait.get('season', '')} league average, "
+                 f"{sz_bot:.2f}–{sz_top:.2f} ft</sup>",
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
+        # Every axis is pinned, and the aspect is fixed in real feet.
+        #
+        # Only z had a range before; x and y used bare autorange, so they
+        # rescaled to whichever pitcher and pitches were selected. The strike
+        # zone is drawn at fixed ABS dimensions, so it appeared to change size
+        # and shape between selections — the zone was the one thing on the
+        # chart that should never move. Without aspectmode Plotly also
+        # normalises each axis to its own range independently, which squashed
+        # the box regardless.
+        #
+        # aspectratio is the true footage (8 x 56 x 7) with the long axis
+        # compressed 4x, otherwise the 56 ft to the plate dwarfs everything
+        # and the break is invisible. x and z stay in true proportion to each
+        # other so the zone renders square.
         scene=dict(
             xaxis=dict(
                 title="Horizontal (ft)",
                 backgroundcolor=COLORS["surface"],
                 gridcolor=COLORS["border"],
                 tickfont=dict(color=COLORS["subtext"], size=9),
-                autorange="reversed",   # flip so RHP arm-side renders on the right (pitcher's-eye view)
+                # reversed via [max, min] so RHP arm-side stays on the right
+                range=[SCENE_X, -SCENE_X],
             ),
             yaxis=dict(
                 title="Distance to plate (ft)",
                 backgroundcolor=COLORS["surface"],
                 gridcolor=COLORS["border"],
                 tickfont=dict(color=COLORS["subtext"], size=9),
-                autorange="reversed",   # release at back, plate at front
+                range=[SCENE_Y, 0],     # release at back, plate at front
             ),
             zaxis=dict(
                 title="Height (ft)",
                 backgroundcolor=COLORS["surface"],
                 gridcolor=COLORS["border"],
                 tickfont=dict(color=COLORS["subtext"], size=9),
-                range=[0, 7],
+                range=[0, SCENE_Z],
             ),
+            aspectmode="manual",
+            aspectratio=dict(x=(2 * SCENE_X) / SCENE_Z,
+                             y=(SCENE_Y / SCENE_Z) / 4.0,
+                             z=1.0),
             camera=dict(
                 eye=dict(x=0.0, y=-1.8, z=0.5),   # roughly catcher's POV
             ),
@@ -3762,7 +3848,7 @@ def pitch_arsenal_3d(portrait: dict,
             font=dict(color=COLORS["subtext"], size=10),
             bgcolor="rgba(0,0,0,0)",
         ),
-        margin=dict(l=0, r=0, t=40, b=0),
+        margin=dict(l=0, r=0, t=68, b=0),
         height=520,
     )
     return fig
