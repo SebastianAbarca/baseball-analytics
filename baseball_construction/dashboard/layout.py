@@ -767,115 +767,6 @@ def players_tab() -> dbc.Tab:
     ])
 
 
-def deep_tab() -> dbc.Tab:
-    """Analyst layer — philosophy scores, physics charts, raw percentiles."""
-    return dbc.Tab(label="Deep Data", tab_id="tab-deep", children=[
-        dbc.Row([
-            dbc.Col(_card("Philosophy Profile (All Dimensions)", "radar-all", height=420), md=6),
-            dbc.Col(_card("Primary Philosophy by Dimension", "dim-bars", height=280), md=6),
-        ]),
-        dbc.Row([
-            dbc.Col(_card("Park Factor — Pitcher Friendliness", "park-gauge", height=320), md=4),
-            dbc.Col(_card("Team Spin Efficiency", "spin-bar", height=200), md=8),
-        ]),
-        dbc.Card([
-            dbc.CardHeader(
-                html.Small("Team Split Resistance — LHP vs RHP",
-                           className="fw-semibold text-uppercase",
-                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
-                                  "color": "#9ca3af"}),
-                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-            ),
-            dbc.CardBody(
-                html.Div(id="team-split-card"),
-                style={"padding": "12px"},
-            ),
-        ], style=CARD_STYLE, className="mb-3"),
-        dbc.Row([
-            dbc.Col(_card("Construction vs Results — Philosophy", "cvr-radar", height=480), md=6),
-            dbc.Col(_card("Construction vs Results — Archetype Mix", "cvr-archetypes", height=380), md=6),
-        ]),
-        dbc.Row([
-            dbc.Col(_card("Offensive Philosophy Radar", "radar-offense", height=380), md=5),
-            dbc.Col(_card("Team Batting Metrics (Percentile)", "batting-bars", height=380), md=7),
-        ]),
-        _card("Batted Ball Profile", "spray-heatmap", height=580),
-        _card("Hitter Skill Affinity", "hitter-heatmap", height=500),
-        _card("Batter Split Resistance — LHP vs RHP", "split-heatmap", height=520),
-        dbc.Row([
-            dbc.Col(_card("Pitching Philosophy Radar", "radar-pitching", height=380), md=6),
-            dbc.Col(_card("Bullpen Collective Profile", "bullpen-dims", height=380), md=6),
-        ]),
-        dbc.Card([
-            dbc.CardHeader(
-                dbc.Row([
-                    dbc.Col(
-                        html.Small("Pitch Arsenal — 3D Trajectories",
-                                   className="text-secondary fw-semibold text-uppercase",
-                                   style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
-                        width="auto", className="d-flex align-items-center",
-                    ),
-                    dbc.Col(
-                        dcc.Dropdown(
-                            id="arsenal-pitch-type-dropdown",
-                            options=[],
-                            value=None,
-                            clearable=False,
-                            placeholder="Load a portrait to see pitch types…",
-                            style={"backgroundColor": "#1f2937", "color": "#111827",
-                                   "minWidth": "220px"},
-                        ),
-                        width="auto",
-                    ),
-                ], className="g-2 align-items-center"),
-                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-            ),
-            dbc.CardBody(
-                dcc.Graph(
-                    id="arsenal-3d-chart",
-                    config={"displayModeBar": True},
-                    style={"height": "520px"},
-                ),
-                style={"padding": "8px"},
-            ),
-        ], style=CARD_STYLE, className="mb-3 mt-3"),
-        dbc.Row([
-            dbc.Col(_card("Roster Philosophy Radar", "radar-roster", height=380), md=6),
-            dbc.Col(_card("Roster Control", "roster-control-chart", height=180), md=6),
-        ]),
-        dbc.Row([
-            dbc.Col(
-                dbc.Card([
-                    dbc.CardHeader(
-                        html.Small("C-Dimension Data Gaps", className="text-secondary fw-semibold text-uppercase",
-                                   style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
-                        style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-                    ),
-                    dbc.CardBody([
-                        dbc.Alert(
-                            [
-                                html.Strong("Some C-dimension metrics require external sources:"),
-                                html.Ul([
-                                    html.Li("Payroll — Spotrac CSV (GAP 4)"),
-                                    html.Li("Prospect pipeline — MLB Pipeline CSV (GAP 5)"),
-                                ], className="mt-2 mb-0"),
-                            ],
-                            color="warning", className="mb-0",
-                            style={"fontSize": "0.85rem"},
-                        ),
-                    ]),
-                ], style=CARD_STYLE),
-                md=12,
-            ),
-        ], className="mt-3"),
-        html.H6("Philosophy Breakdowns", className="text-secondary mt-3 mb-2",
-                style={"fontSize": "0.75rem", "letterSpacing": "0.07em",
-                       "textTransform": "uppercase"}),
-        *[_philosophy_collapse(c) for c in
-          ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]],
-    ])
-
-
 def _philosophy_collapse(code: str) -> html.Div:
     """Collapsible row for one philosophy dimension with click-to-expand breakdown."""
     label = _PHIL_FULL.get(code, code)
@@ -1173,8 +1064,7 @@ def tabs_layout() -> dbc.Tabs:
         # scored the vocabulary the trait layer replaced. The two pieces worth
         # keeping moved to where they are read — split resistance to Identity
         # (the platoon tags are live), 3D trajectories under the bullpen roster
-        # beside the arsenal column. deep_tab() is now unreferenced; its
-        # callbacks are inert because the app sets suppress_callback_exceptions.
+        # beside the arsenal column.
         children=[identity_tab(), years_tab(), players_tab(),
                   compare_tab(), scout_tab()],
         className="mb-3",

@@ -269,79 +269,25 @@ def update_team_header(data):
 # Callback 3 — Radar charts (3 separate callbacks, one per radar)
 # ---------------------------------------------------------------------------
 
-@callback(Output("radar-all",      "figure"), Input("portrait-store", "data"))
-def radar_all(data):
-    p = _deserialize(data)
-    return charts.philosophy_radar(p, "all") if p else charts.empty_figure("No portrait loaded")
-
-
-@callback(Output("radar-offense",  "figure"), Input("portrait-store", "data"))
-def radar_offense(data):
-    p = _deserialize(data)
-    return charts.philosophy_radar(p, "offense") if p else charts.empty_figure()
-
-
-@callback(Output("radar-pitching", "figure"), Input("portrait-store", "data"))
-def radar_pitching(data):
-    p = _deserialize(data)
-    return charts.philosophy_radar(p, "pitching") if p else charts.empty_figure()
-
-
-@callback(Output("radar-roster",   "figure"), Input("portrait-store", "data"))
-def radar_roster(data):
-    p = _deserialize(data)
-    return charts.philosophy_radar(p, "roster") if p else charts.empty_figure()
-
-
 # ---------------------------------------------------------------------------
 # Callback 4 — Dimension confidence bars
 # ---------------------------------------------------------------------------
-
-@callback(Output("dim-bars", "figure"), Input("portrait-store", "data"))
-def dim_bars(data):
-    p = _deserialize(data)
-    return charts.dimension_confidence_bars(p) if p else charts.empty_figure()
-
 
 # ---------------------------------------------------------------------------
 # Callback 5 — Park factor gauge
 # ---------------------------------------------------------------------------
 
-@callback(Output("park-gauge", "figure"), Input("portrait-store", "data"))
-def park_gauge(data):
-    p = _deserialize(data)
-    return charts.park_factor_gauge(p) if p else charts.empty_figure()
-
-
 # ---------------------------------------------------------------------------
 # Callback 5b — Roster control chart
 # ---------------------------------------------------------------------------
-
-@callback(Output("roster-control-chart", "figure"), Input("portrait-store", "data"))
-def roster_control(data):
-    p = _deserialize(data)
-    return charts.roster_control_chart(p) if p else charts.empty_figure("No portrait loaded")
-
 
 # ---------------------------------------------------------------------------
 # Callback 6 — Spin efficiency
 # ---------------------------------------------------------------------------
 
-@callback(Output("spin-bar", "figure"), Input("portrait-store", "data"))
-def spin_bar(data):
-    p = _deserialize(data)
-    return charts.spin_efficiency_bar(p) if p else charts.empty_figure()
-
-
 # ---------------------------------------------------------------------------
 # Callback 7 — Batting metrics
 # ---------------------------------------------------------------------------
-
-@callback(Output("batting-bars", "figure"), Input("portrait-store", "data"))
-def batting_bars(data):
-    p = _deserialize(data)
-    return charts.team_batting_bars(p) if p else charts.empty_figure()
-
 
 # ---------------------------------------------------------------------------
 # Callback 8 — Hitter archetype pie
@@ -516,12 +462,6 @@ def roster_body(data, prev_clicks, next_clicks, comp_id):
 # callbacks are gone. charts.starter_archetype_bars / bullpen_detail_table
 # remain for now and are unused.
 
-@callback(Output("bullpen-dims", "figure"), Input("portrait-store", "data"))
-def bullpen_dims(data):
-    p = _deserialize(data)
-    return charts.bullpen_dimension_bars(p) if p else charts.empty_figure()
-
-
 @callback(Output("bullpen-trait-density", "figure"), Input("portrait-store", "data"))
 def bullpen_trait_density_chart(data):
     p = _deserialize(data)
@@ -543,30 +483,6 @@ def rotation_trait_density_chart(data):
 # ---------------------------------------------------------------------------
 # Callback 9b — Hitter skill affinity heatmap
 # ---------------------------------------------------------------------------
-
-@callback(Output("hitter-heatmap", "figure"), Input("portrait-store", "data"))
-def hitter_heatmap(data):
-    p = _deserialize(data)
-    return charts.hitter_archetype_heatmap(p) if p else charts.empty_figure("Load a portrait to see skill affinities")
-
-
-@callback(Output("spray-heatmap", "figure"), Input("portrait-store", "data"))
-def spray_heatmap(data):
-    p = _deserialize(data)
-    if not p:
-        return charts.empty_figure("Load a portrait to see batted ball profile")
-    # Raw batted-ball points live in a sidecar file (portraits carry only the
-    # scalar spray summary since schema 13) — merge them in for the chart.
-    try:
-        sidecar = (_HERE.parent / "data" / "processed" / "spray"
-                   / f"{p.get('team')}_{p.get('season')}.json")
-        if sidecar.exists():
-            raw = json.loads(sidecar.read_text())
-            p = {**p, "spray_data": {**(p.get("spray_data") or {}), **raw}}
-    except Exception as exc:
-        logging.getLogger(__name__).warning("Spray sidecar load failed: %s", exc)
-    return charts.team_spray_heatmap(p)
-
 
 # ---------------------------------------------------------------------------
 # Callback 10b — Populate player dropdown options from portrait
@@ -1044,18 +960,6 @@ def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa,
 # Construction vs Results callbacks
 # ---------------------------------------------------------------------------
 
-@callback(Output("cvr-radar",      "figure"), Input("portrait-store", "data"))
-def cvr_radar(data):
-    p = _deserialize(data)
-    return charts.construction_vs_results_radar(p) if p else charts.empty_figure("Load a portrait to see Construction vs Results")
-
-
-@callback(Output("cvr-archetypes", "figure"), Input("portrait-store", "data"))
-def cvr_archetypes(data):
-    p = _deserialize(data)
-    return charts.construction_vs_results_archetypes(p) if p else charts.empty_figure()
-
-
 # ---------------------------------------------------------------------------
 # Team split resistance card (Overview tab)
 # ---------------------------------------------------------------------------
@@ -1093,12 +997,6 @@ def team_identity_card(data):
 # ---------------------------------------------------------------------------
 # Batter split resistance heatmap
 # ---------------------------------------------------------------------------
-
-@callback(Output("split-heatmap", "figure"), Input("portrait-store", "data"))
-def split_heatmap(data):
-    p = _deserialize(data)
-    return charts.batter_split_heatmap(p) if p else charts.empty_figure("Load a portrait to see split resistance")
-
 
 # ---------------------------------------------------------------------------
 # Arsenal 3D trajectory — populate dropdown + render chart
