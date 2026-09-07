@@ -109,6 +109,13 @@ def controls_row() -> dbc.Row:
             ),
         ], md=2, xs=6),
         dbc.Col([
+            # Two elements, deliberately. The `running=` spinner writes to
+            # status-spinner and the callback's return writes to status-banner.
+            # Pointing both at one Output meant `running` had to use no_update
+            # as its off-value, and Dash renders that sentinel straight through
+            # to the component — React then reports "Objects are not valid as a
+            # React child (found: object with keys {_dash_no_update})".
+            html.Div(id="status-spinner", className="mt-1"),
             html.Div(id="status-banner", className="mt-1"),
         ], md=7, xs=12),
     ], className="mb-3 align-items-end")
@@ -842,6 +849,9 @@ def compare_tab() -> dbc.Tab:
                                    className="w-100"),
                     ], md=4),
                 ], className="align-items-end"),
+                # Spinner and status are separate elements for the same reason
+                # as the main controls row — see status-spinner there.
+                html.Div(id=f"cmp-spinner-{suffix}", className="mt-2"),
                 html.Div(id=f"cmp-status-{suffix}", className="mt-2"),
             ], style={"padding": "10px"}),
         ], style=CARD_STYLE, className="mb-0")

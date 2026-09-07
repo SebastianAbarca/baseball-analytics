@@ -160,7 +160,12 @@ def _deserialize(data: str | None) -> dict | None:
     running=[
         (Output("team-dropdown", "disabled"), True, False),
         (Output("season-dropdown", "disabled"), True, False),
-        (Output("status-banner", "children"),
+        # Targets status-spinner, NOT status-banner: this callback returns the
+        # banner itself, and aiming `running` at the same Output forced
+        # no_update as the off-value, which Dash renders as a literal
+        # {_dash_no_update} object child. Empty string clears the spinner
+        # cleanly and leaves the banner to the return value.
+        (Output("status-spinner", "children"),
          __import__("dash_bootstrap_components").Alert(
              [
                  __import__("dash").html.Span(
@@ -172,7 +177,7 @@ def _deserialize(data: str | None) -> dict | None:
              ],
              color="primary", className="py-1 mb-0 d-flex align-items-center",
          ),
-         no_update),
+         ""),
     ],
 )
 def build_portrait(team: str, season: int):
@@ -646,10 +651,13 @@ def _build_cmp_portrait(team: str, season: int):
     State("cmp-season-a",    "value"),
     running=[
         (Output("cmp-btn-a", "disabled"), True, False),
-        (Output("cmp-status-a", "children"),
+        # Spinner goes to cmp-spinner-a, not the Output this callback
+        # writes — no_update as a `running` off-value is rendered by Dash as a
+        # literal {_dash_no_update} object child.
+        (Output("cmp-spinner-a", "children"),
          __import__("dash_bootstrap_components").Alert(
              "Loading Team A…", color="primary", className="py-1 mb-0"),
-         no_update),
+         ""),
     ],
     prevent_initial_call=True,
 )
@@ -667,10 +675,13 @@ def build_cmp_portrait_a(n_clicks, team, season):
     State("cmp-season-b",    "value"),
     running=[
         (Output("cmp-btn-b", "disabled"), True, False),
-        (Output("cmp-status-b", "children"),
+        # Spinner goes to cmp-spinner-b, not the Output this callback
+        # writes — no_update as a `running` off-value is rendered by Dash as a
+        # literal {_dash_no_update} object child.
+        (Output("cmp-spinner-b", "children"),
          __import__("dash_bootstrap_components").Alert(
              "Loading Team B…", color="warning", className="py-1 mb-0"),
-         no_update),
+         ""),
     ],
     prevent_initial_call=True,
 )
