@@ -632,24 +632,34 @@ def arsenal_3d_card() -> dbc.Card:
                                style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
                     width="auto", className="d-flex align-items-center",
                 ),
+                # Pitcher first, pitches second: the unit of the chart is one
+                # arm's arsenal. Multi-select so a second pitcher can be laid
+                # over the first deliberately, rather than by default.
                 dbc.Col(
                     dcc.Dropdown(
-                        id="arsenal-pitch-type-dropdown",
-                        options=[], value=None, clearable=False,
-                        placeholder="Load a portrait to see pitch types…",
+                        id="arsenal-pitcher-dropdown",
+                        options=[], value=[], multi=True, clearable=False,
+                        placeholder="Load a portrait…",
                         style={"backgroundColor": "#1f2937", "color": "#111827",
-                               "minWidth": "220px"},
+                               "minWidth": "300px"},
                     ),
                     width="auto",
                 ),
             ], justify="between", className="g-2 align-items-center"),
             style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
         ),
-        dbc.CardBody(
+        dbc.CardBody([
+            dbc.Checklist(
+                id="arsenal-pitch-filter",
+                options=[], value=[], inline=True,
+                inputStyle={"marginRight": "4px"},
+                labelStyle={"fontSize": "0.68rem", "marginRight": "12px",
+                            "color": "#d1d5db"},
+                className="mb-2",
+            ),
             dcc.Graph(id="arsenal-3d-chart", config={"displayModeBar": True},
                       style={"height": "520px"}),
-            style={"padding": "8px"},
-        ),
+        ], style={"padding": "8px"}),
     ], style=CARD_STYLE, className="mb-3")
 
 
@@ -683,13 +693,16 @@ def _drift_card(title: str, unit: str) -> dbc.Card:
             style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
         ),
         dbc.CardBody([
-            dbc.Checklist(
+            # A dropdown rather than a checklist: 41 tags as inline checkboxes
+            # was a wall of text above the chart, and the reader only ever has
+            # eight of them on at once.
+            dcc.Dropdown(
                 id={"type": "drift-tags", "unit": unit},
-                options=[], value=[], inline=True,
-                inputStyle={"marginRight": "4px"},
-                labelStyle={"fontSize": "0.68rem", "marginRight": "12px",
-                            "color": "#d1d5db"},
-                className="mb-2",
+                options=[], value=[], multi=True,
+                placeholder=f"Pick up to {charts.DRIFT_MAX_TAGS} tags…",
+                className="drift-tag-picker mb-2",
+                style={"backgroundColor": "#1f2937", "color": "#111827",
+                       "fontSize": "0.75rem"},
             ),
             dcc.Graph(id={"type": "drift-chart", "unit": unit},
                       config={"displayModeBar": False},

@@ -7,6 +7,7 @@ Dash html.Div component tree (for use in collapsible breakdown panels).
 
 from __future__ import annotations
 
+import colorsys
 import sys
 from pathlib import Path
 from typing import Optional
@@ -465,6 +466,16 @@ def _pitch_mix(season: int) -> dict[int, list[dict]]:
 
 _ARSENAL_MIN_USAGE = 0.03   # below this it is a show-me pitch, not a weapon
 
+# The trajectory data keys pitches by their long Statcast name; the roster's
+# arsenal column keys by code. One map so both use the same colour per pitch.
+_PITCH_NAME_TO_CODE = {
+    "4-Seam Fastball": "FF", "Four-Seam Fastball": "FF", "2-Seam Fastball": "FT",
+    "Sinker": "SI", "Cutter": "FC", "Slider": "SL", "Sweeper": "ST",
+    "Slurve": "SV", "Curveball": "CU", "Knuckle Curve": "KC",
+    "Slow Curve": "CS", "Changeup": "CH", "Split-Finger": "FS",
+    "Forkball": "FO", "Screwball": "SC", "Knuckleball": "KN", "Eephus": "EP",
+}
+
 
 def _arsenal_cell(player: dict, season: int):
     """A pitcher's whole mix as usage-ordered chips."""
@@ -572,15 +583,24 @@ def hitter_plane(portrait: dict) -> go.Figure:
     full = [(p[0].get("name") or "?") for p in pts]
 
     fig = go.Figure()
-    # Quadrant guides at the league median of each axis.
-    fig.add_hline(y=50, line_color=COLORS["border"], line_width=1, line_dash="dot")
-    fig.add_vline(x=50, line_color=COLORS["border"], line_width=1, line_dash="dot")
-    for x, y, label in ((6, 94, "contact, no power"), (94, 94, "both"),
-                        (6, 6, "neither"), (94, 6, "power, no contact")):
+    # The quadrant split is the whole point of the chart, so it is drawn to be
+    # seen. At border grey on a dark ground the crosshair was invisible and
+    # the plane read as one undifferentiated cloud.
+    _AX = "#6b7280"
+    fig.add_hline(y=50, line_color=_AX, line_width=1.5, line_dash="dash")
+    fig.add_vline(x=50, line_color=_AX, line_width=1.5, line_dash="dash")
+    # Shade the two "one-sided" quadrants faintly so the four regions read as
+    # regions rather than as a pair of crossing lines.
+    for x0, x1, y0, y1 in ((-4, 50, 50, 104), (50, 104, -4, 50)):
+        fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
+                      fillcolor="#ffffff", opacity=0.022,
+                      line_width=0, layer="below")
+    for x, y, label in ((2, 101, "CONTACT, NO POWER"), (98, 101, "BOTH"),
+                        (2, -1, "NEITHER"), (98, -1, "POWER, NO CONTACT")):
         fig.add_annotation(x=x, y=y, text=label, showarrow=False,
                            xanchor="left" if x < 50 else "right",
                            yanchor="top" if y > 50 else "bottom",
-                           font=dict(size=9, color=COLORS["border"]))
+                           font=dict(size=9.5, color=_AX, family="monospace"))
 
     fig.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers+text", text=names,
@@ -605,13 +625,26 @@ def hitter_plane(portrait: dict) -> go.Figure:
     ))
     # _DARK_LAYOUT already carries a margin; override it rather than passing
     # the keyword twice.
-    layout = {**_DARK_LAYOUT, "margin": dict(l=60, r=10, t=30, b=50)}
+    layout = {**_DARK_LAYOUT, "margin": dict(l=76, r=10, t=34, b=62)}
+    _axis = dict(
+        range=[-4, 104],
+        # Ticks only at the quarters: the numbers are percentiles, and the
+        # reader needs the halfway mark far more than a dense scale.
+        tickmode="array", tickvals=[0, 25, 50, 75, 100],
+        ticktext=["0", "25", "50", "75", "100"],
+        tickfont=dict(size=10, color=COLORS["subtext"]),
+        gridcolor="#252d3b", zeroline=False,
+        showline=True, linecolor=_AX, linewidth=1.5, mirror=False,
+        ticks="outside", tickcolor=_AX, ticklen=4,
+    )
     fig.update_layout(
         **layout,
-        xaxis=dict(title="power  —  ISO percentile", range=[-4, 104],
-                   gridcolor=COLORS["border"], zeroline=False),
-        yaxis=dict(title="contact  —  contact-rate percentile", range=[-4, 104],
-                   gridcolor=COLORS["border"], zeroline=False),
+        xaxis={**_axis, "title": dict(
+            text="<b>POWER</b>  ·  ISO percentile →",
+            font=dict(size=11.5, color=COLORS["text"]))},
+        yaxis={**_axis, "title": dict(
+            text="<b>CONTACT</b>  ·  contact-rate percentile →",
+            font=dict(size=11.5, color=COLORS["text"]))},
     )
     return fig
 
@@ -1436,7 +1469,11 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     else:
         tags = list(density.keys())[:18]
     shares = [density[t][0] * 100 for t in tags]
-    colors = [TRAIT_FAMILY_COLORS.get(density[t][1], COLORS["neutral"]) for t in tags]
+    colors = kind_shaded_colors(tags)
+    # Which kinds are actually on this chart, in canonical order — the legend
+    # below is built from these so it never advertises a colour that is absent.
+    kinds_present = [k for k in KIND_ORDER
+                     if any((kind_of(t) or "noise") == k for t in tags)]
 
     fig = go.Figure()
     xmax = max(shares)
@@ -1464,11 +1501,24 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
         hovertemplate="<b>%{y}</b><br>%{x:.1f}" + f"{x_title[1:]}<extra></extra>",
     ))
 
+    # Kind legend: one zero-width entry per kind actually on the chart, so the
+    # colours are named rather than left to be inferred. Bars are shaded within
+    # a kind, so the swatch shows that kind's base hue.
+    for k in kinds_present:
+        fig.add_trace(go.Bar(
+            # A real y category rather than None: a fully-empty trace still
+            # claims a legend slot in Plotly, which is how the legend ended up
+            # advertising kinds that were not on the chart.
+            x=[0], y=[tags[0]], orientation="h", name=k,
+            marker_color=KIND_COLORS[k], showlegend=True, hoverinfo="skip",
+            width=0.001, opacity=0,
+        ))
+
     fig.update_layout(
-        **{**_DARK_LAYOUT, "margin": dict(l=118, r=42, t=26, b=30)},
+        **{**_DARK_LAYOUT, "margin": dict(l=118, r=42, t=44, b=30)},
         barmode="overlay",
-        showlegend=bool(baseline),
-        legend=dict(orientation="h", x=0, y=1.06,
+        showlegend=True,
+        legend=dict(orientation="h", x=0, y=1.10,
                     font=dict(size=10, color=COLORS["subtext"]),
                     bgcolor="rgba(0,0,0,0)"),
         xaxis=dict(title=x_title, range=[0, xmax * 1.25],
@@ -1483,6 +1533,32 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
 
 _DRIFT_MIN_SEASONS = 3
 _DRIFT_MIN_DENSITY = 0.02
+
+# Hard cap on simultaneous lines. Beyond roughly eight categories no palette
+# stays distinguishable, so the limit is enforced in the selector rather than
+# papered over with more hues — the reader swaps a tag out to bring one in.
+DRIFT_MAX_TAGS = 8
+
+# Drift lines do NOT use the kind palette. On the rosters and the density bars
+# colour carries meaning and repetition is fine, because position and labels
+# still identify the row. On a line chart the colour IS the identity: two
+# behaviour tags in near-identical cyan are unfollowable where they cross. So
+# drift gets eight maximally separated hues, assigned by slot, and the same
+# eight in the same order on all three unit charts — the third line is the
+# same colour on offense, rotation and bullpen.
+#
+# Hues run roughly evenly around the wheel (0/30/50/130/165/210/265/330) at
+# lightness that holds up on the #111827 ground.
+DRIFT_LINE_COLORS = [
+    "#ff6b6b",  # coral
+    "#ffa94d",  # orange
+    "#ffd43b",  # yellow
+    "#69db7c",  # green
+    "#38d9a9",  # teal
+    "#4dabf7",  # blue
+    "#b197fc",  # purple
+    "#f783ac",  # pink
+]
 
 
 def drift_deviations(team: str, unit: str,
@@ -1554,12 +1630,10 @@ def team_drift_chart(team: str, unit: str,
                   annotation_font=dict(size=10, color=COLORS["subtext"]),
                   annotation_position="bottom right")
 
-    # Family color per tag — falls back to a rotating neutral-safe palette
-    _fallback = ["#60a5fa", "#f59e0b", "#34d399", "#a78bfa", "#f472b6", "#22d3ee"]
+    # Slot colour, not kind colour — see DRIFT_LINE_COLORS. Every line on the
+    # chart is a different hue so crossings stay followable.
     for i, tag in enumerate(ranked):
-        fam = None
-        # family isn't stored in the density map; color via known tag→family
-        color = TRAIT_TAG_COLORS.get(tag) or _fallback[i % len(_fallback)]
+        color = DRIFT_LINE_COLORS[i % len(DRIFT_LINE_COLORS)]
         xs = [yr for yr in years if yr in dev[tag]]
         ys = [dev[tag][yr][0] for yr in xs]
         dens = [dev[tag][yr][1] for yr in xs]
@@ -2573,14 +2647,59 @@ def team_split_card(portrait: dict) -> html.Div:
 # increases: an attribute is slate and inert, a behavior is bright, luck is
 # deliberately washed out.
 KIND_COLORS: dict[str, str] = {
-    "attribute":  "#94a3b8",   # slate — unchosen, deliberately quiet
-    "tool":       "#06b6d4",   # cyan — physical capacity
-    "behavior":   "#22c55e",   # green — a choice
-    "result":     "#f59e0b",   # amber — what came out
-    "deployment": "#a855f7",   # violet — the club's decision
-    "noise":      "#6b7280",   # grey — luck, and it should look like it
+    "attribute":  "#c4b5fd",   # light purple
+    "tool":       "#86efac",   # light green
+    "behavior":   "#67e8f9",   # light blue / cyan
+    "result":     "#f87171",   # red
+    # Not specified, chosen to stay clear of the four above: amber is the
+    # remaining warm hue that red does not swallow, and luck stays grey so it
+    # reads as the absence of a claim rather than as another category.
+    "deployment": "#fbbf24",   # amber
+    "noise":      "#9ca3af",   # grey
 }
 KIND_ORDER = ["attribute", "tool", "behavior", "result", "deployment", "noise"]
+
+
+def _shade(hex_color: str, i: int, n: int) -> str:
+    """One member of a kind, distinguished by lightness.
+
+    Two tags of the same kind should read as siblings rather than strangers,
+    so members vary within a band around the kind's colour instead of getting
+    unrelated hues. Past about four members the shades converge — which is a
+    real ceiling, not a palette failure: no set of colours stays separable
+    much beyond eight, so identity past that point has to come from position
+    and labels rather than hue.
+    """
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[j:j + 2], 16) / 255 for j in (0, 2, 4))
+    hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
+    if n > 1:
+        ll = max(0.30, min(0.82, ll - 0.20 + (0.42 * i / max(n - 1, 1))))
+        ss = max(0.30, ss - 0.10 * (i / max(n - 1, 1)))
+    r2, g2, b2 = colorsys.hls_to_rgb(hh, ll, ss)
+    return f"rgb({int(r2*255)},{int(g2*255)},{int(b2*255)})"
+
+
+def kind_shaded_colors(tags: list[str]) -> list[str]:
+    """Colour per tag: the kind's hue, shaded by position within its kind.
+
+    Replaces colouring by FAMILY, which needed 17 hues for a distinction the
+    reader was not asking about. Kind is six, under the perceptual ceiling,
+    and it is the same palette the rosters and the tag footer already use — so
+    a green bar here and a green chip there mean the same thing.
+    """
+    seen: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for t in tags:
+        k = kind_of(t) or "noise"
+        counts[k] = counts.get(k, 0) + 1
+    out = []
+    for t in tags:
+        k = kind_of(t) or "noise"
+        i = seen.get(k, 0)
+        seen[k] = i + 1
+        out.append(_shade(KIND_COLORS.get(k, COLORS["neutral"]), i, counts[k]))
+    return out
 
 
 def _chip(tag: str, kind: str | None = None, evidence: str | None = None):
@@ -3467,50 +3586,77 @@ def _reconstruct_trajectory(
         return None
 
 
-def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure:
+def arsenal_pitcher_choices(portrait: dict) -> list[tuple[int, str, int]]:
+    """(player_id, name, total pitches) for everyone with trajectory data,
+    heaviest workload first."""
+    by_type = (portrait.get("arsenal_trajectories") or {}).get("by_pitch_type", {})
+    totals: dict[int, list] = {}
+    for entries in by_type.values():
+        for e in entries:
+            pid = e.get("player_id")
+            if pid is None:
+                continue
+            row = totals.setdefault(int(pid), [e.get("name") or "?", 0])
+            row[1] += int(e.get("pitch_count") or 0)
+    return sorted(((pid, n, c) for pid, (n, c) in totals.items()),
+                  key=lambda r: -r[2])
+
+
+def arsenal_pitch_choices(portrait: dict, player_ids: list[int]) -> list[str]:
+    """Pitch types actually thrown by the selected pitchers, usage-ordered."""
+    by_type = (portrait.get("arsenal_trajectories") or {}).get("by_pitch_type", {})
+    wanted = set(player_ids or [])
+    tot: dict[str, float] = {}
+    for pt, entries in by_type.items():
+        for e in entries:
+            if int(e.get("player_id") or -1) in wanted:
+                tot[pt] = tot.get(pt, 0.0) + float(e.get("usage_pct") or 0)
+    return sorted(tot, key=lambda k: -tot[k])
+
+
+def pitch_arsenal_3d(portrait: dict,
+                     player_ids: list[int] | None = None,
+                     pitch_types: list[str] | None = None) -> go.Figure:
     """
-    3-D trajectory chart — one curve per pitcher for the selected pitch type.
+    3-D trajectories for one pitcher's whole arsenal — one curve per pitch.
+
+    It used to draw every pitcher in the organisation who threw the selected
+    pitch type: 88 traces on HOU 2025, which is a hairball rather than a
+    chart. Inverted, so the unit is a PITCHER and the curves are his pitches.
+    That is also the comparison worth making — how a slider leaves the same
+    hand as the fastball is the point of the view, and it is invisible when
+    twenty-nine pitchers' four-seamers are drawn on top of each other.
+
+    Defaults to the heaviest-workload arm; more can be added from the picker.
 
     x = horizontal position (ft, catcher's view)
     y = distance from home plate (ft)
     z = height (ft)
-    Colour ramp = whiff rate (darker = more swing-and-miss)
-    Line width  = proportional to usage %
+    Colour  = pitch type, matching the arsenal column on the roster above
+    Width   = usage share within that pitcher's mix
     """
     arsenal = portrait.get("arsenal_trajectories", {})
     by_type = arsenal.get("by_pitch_type", {})
-    available = arsenal.get("pitch_types", [])
-
     if not by_type:
         return empty_figure("No pitch trajectory data available")
 
-    # Default to first pitch type if none selected or invalid
-    if not pitch_type or pitch_type not in by_type:
-        pitch_type = available[0] if available else None
-    if not pitch_type:
-        return empty_figure("No pitch types found")
+    choices = arsenal_pitcher_choices(portrait)
+    if not choices:
+        return empty_figure("No pitch trajectory data available")
+    wanted = set(player_ids or [choices[0][0]])
 
-    pitchers = by_type[pitch_type]
-    if not pitchers:
-        return empty_figure(f"No data for {pitch_type}")
+    # Flatten to (pitch_type, entry) for the selected pitchers only.
+    selected = [(pt, e) for pt, entries in by_type.items() for e in entries
+                if int(e.get("player_id") or -1) in wanted
+                and (not pitch_types or pt in pitch_types)]
+    if not selected:
+        return empty_figure("No pitches selected")
+
+    # Longest label decides whether the pitcher's name is worth repeating.
+    multi = len({int(e.get("player_id")) for _, e in selected}) > 1
 
     fig = go.Figure()
-
-    # Whiff rate colour scale: 0 = muted, 1 = bright
-    whiff_rates = [p["whiff_rate"] for p in pitchers]
-    max_whiff   = max(whiff_rates) if whiff_rates else 0.40
-    min_whiff   = min(whiff_rates) if whiff_rates else 0.00
-
-    def _whiff_color(wr: float) -> str:
-        """Map whiff rate to a blue-green-yellow colour."""
-        t = (wr - min_whiff) / (max_whiff - min_whiff + 0.001)
-        # Interpolate: low whiff = steel blue, high whiff = bright yellow
-        r = int(30  + t * 225)
-        g = int(144 + t * 60)
-        b = int(255 - t * 200)
-        return f"rgb({r},{g},{b})"
-
-    for p in pitchers:
+    for pitch_type, p in sorted(selected, key=lambda r: -(r[1].get("usage_pct") or 0)):
         traj = _reconstruct_trajectory(p)
         if traj is None:
             continue
@@ -3518,16 +3664,21 @@ def pitch_arsenal_3d(portrait: dict, pitch_type: str | None = None) -> go.Figure
 
         wr      = p["whiff_rate"]
         usage   = p["usage_pct"]
-        color   = _whiff_color(wr)
-        lw      = max(2, min(8, int(usage * 16)))   # line width 2–8 px
+        # Same palette as the roster's arsenal column, keyed off the long
+        # pitch name rather than the code.
+        code = _PITCH_NAME_TO_CODE.get(pitch_type, "")
+        color = _PITCH_COLORS.get(code, COLORS["subtext"])
+        lw      = max(2, min(9, int(usage * 18)))
 
         label = (
-            f"<b>{p['name']}</b> ({p['p_throws']}HP)<br>"
-            f"Pitches: {p['pitch_count']}  Usage: {usage:.0%}<br>"
+            f"<b>{pitch_type}</b>"
+            + (f" — {p['name']}" if multi else "")
+            + f"<br>Usage: {usage:.0%}  ({p['pitch_count']} pitches)<br>"
             f"Velo: {p['velo']:.1f} mph<br>"
             f"Whiff: {wr:.1%}<br>"
             + (f"RV/100: {p['run_value_per100']:+.1f}" if p.get("run_value_per100") is not None else "")
         )
+        p = {**p, "name": (f"{pitch_type} · {p['name']}" if multi else pitch_type)}
 
         # Draw trajectory as 3D line
         fig.add_trace(go.Scatter3d(

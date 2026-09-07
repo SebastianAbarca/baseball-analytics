@@ -18,7 +18,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dash import Input, Output, State, callback, no_update, MATCH, ctx, clientside_callback
+from dash import (Input, Output, State, callback, no_update, MATCH, ctx,
+                  clientside_callback, html)
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
@@ -380,22 +381,53 @@ _DRIFT_DEFAULT_N = 6
     Output({"type": "drift-tags", "unit": MATCH}, "value"),
     Input("team-dropdown", "value"),
     Input({"type": "drift-kind", "unit": MATCH}, "value"),
+    Input({"type": "drift-tags", "unit": MATCH}, "value"),
     State({"type": "drift-tags", "unit": MATCH}, "id"),
 )
-def drift_tag_options(team, kind, comp_id):
+def drift_tag_options(team, kind, selected, comp_id):
     """
-    Repopulate the tag checklist when the team or kind changes.
+    Repopulate the tag checklist, and hold the selection to DRIFT_MAX_TAGS.
 
     Options are ranked by the largest deviation the tag ever reached, so the
     order itself says which tags defined this franchise — the ranking the old
     chart applied silently.
+
+    Once the cap is reached the remaining options are disabled rather than
+    silently ignored: the limit exists because more than eight lines stop
+    being separable by colour, and a control that quietly drops a pick would
+    be worse than one that says it is full.
     """
     unit = (comp_id or {}).get("unit", "offense")
     if not team:
         return [], []
     choices = charts.drift_tag_choices(team, unit, _drift_seasons(), kind)
-    options = [{"label": f"{t}", "value": t} for t, _ in choices]
-    return options, [t for t, _ in choices[:_DRIFT_DEFAULT_N]]
+    available = [t for t, _ in choices]
+
+    trig = ctx.triggered_id
+    picked_tags = (isinstance(trig, dict) and trig.get("type") == "drift-tags")
+    if picked_tags and selected is not None:
+        value = [t for t in selected if t in available][:charts.DRIFT_MAX_TAGS]
+    else:
+        # Team or kind changed — reset to the most-defining handful.
+        value = available[:_DRIFT_DEFAULT_N]
+
+    full = len(value) >= charts.DRIFT_MAX_TAGS
+    # The swatch in the label ties each option to the line it will draw, so
+    # the picker and the chart share one identity for a tag.
+    slot = {t: i for i, t in enumerate(value)}
+    options = []
+    for t in available:
+        colour = (charts.DRIFT_LINE_COLORS[slot[t] % len(charts.DRIFT_LINE_COLORS)]
+                  if t in slot else None)
+        label = (html.Span([
+            html.Span(style={"display": "inline-block", "width": "8px",
+                             "height": "8px", "borderRadius": "2px",
+                             "backgroundColor": colour, "marginRight": "6px"}),
+            t,
+        ]) if colour else t)
+        options.append({"label": label, "value": t,
+                        "disabled": full and t not in slot})
+    return options, value
 
 
 @callback(
@@ -1073,30 +1105,47 @@ def split_heatmap(data):
 # ---------------------------------------------------------------------------
 
 @callback(
-    Output("arsenal-pitch-type-dropdown", "options"),
-    Output("arsenal-pitch-type-dropdown", "value"),
+    Output("arsenal-pitcher-dropdown", "options"),
+    Output("arsenal-pitcher-dropdown", "value"),
     Input("portrait-store", "data"),
 )
-def populate_arsenal_dropdown(data):
+def populate_arsenal_pitchers(data):
+    """One pitcher selected by default — the heaviest workload on the staff."""
     p = _deserialize(data)
     if not p:
-        return [], None
-    pitch_types = p.get("arsenal_trajectories", {}).get("pitch_types", [])
-    options = [{"label": pt, "value": pt} for pt in pitch_types]
-    default = pitch_types[0] if pitch_types else None
-    return options, default
+        return [], []
+    choices = charts.arsenal_pitcher_choices(p)
+    options = [{"label": f"{n}  ({c:,} pitches)", "value": pid}
+               for pid, n, c in choices]
+    return options, ([choices[0][0]] if choices else [])
+
+
+@callback(
+    Output("arsenal-pitch-filter", "options"),
+    Output("arsenal-pitch-filter", "value"),
+    Input("arsenal-pitcher-dropdown", "value"),
+    State("portrait-store", "data"),
+)
+def populate_arsenal_pitches(player_ids, data):
+    """Pitch filter follows the pitcher choice — all his pitches on by default."""
+    p = _deserialize(data)
+    if not p or not player_ids:
+        return [], []
+    pitches = charts.arsenal_pitch_choices(p, player_ids)
+    return [{"label": pt, "value": pt} for pt in pitches], pitches
 
 
 @callback(
     Output("arsenal-3d-chart", "figure"),
-    Input("arsenal-pitch-type-dropdown", "value"),
+    Input("arsenal-pitcher-dropdown", "value"),
+    Input("arsenal-pitch-filter", "value"),
     State("portrait-store", "data"),
 )
-def arsenal_3d(pitch_type, data):
+def arsenal_3d(player_ids, pitch_types, data):
     p = _deserialize(data)
     if not p:
         return charts.empty_figure("Load a portrait to see pitch trajectories")
-    return charts.pitch_arsenal_3d(p, pitch_type)
+    return charts.pitch_arsenal_3d(p, player_ids, pitch_types)
 
 
 # ---------------------------------------------------------------------------
