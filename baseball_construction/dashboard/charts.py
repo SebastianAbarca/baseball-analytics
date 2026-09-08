@@ -26,19 +26,70 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 from team_portrait import kind_of  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# ABS (Automated Ball-Strike) standardized strike zone
-# Width : ±0.833 ft  — 17" home plate + ½ ball radius (1.44" dia) each side
-# Top   :  3.38 ft  — league-average sz_top (~53.5 % of avg MLB height 6'1")
-# Bottom:  1.59 ft  — league-average sz_bot (~26.7 % of avg MLB height 6'1")
-# These replace the old round-number fallbacks of 3.5 / 1.5 ft.
+# Strike zone geometry
+#
+# The zone ends AT the plate: 17 inches wide, so ±0.7083 ft. This was ±0.833,
+# which is a different quantity wearing the zone's name. A pitch is a strike if
+# ANY part of the ball passes through the zone, so the set of ball CENTRES that
+# produce a strike is 17" plus a ball diameter, ±0.829 ft. That widens the
+# strikes, not the zone.
+#
+# The distinction bites here because this chart plots centres — plate_x/plate_z
+# and every trajectory endpoint are ball centres — so a pitch can legally end
+# just outside the drawn box and still be a strike. Drawing the centre locus
+# instead would make "inside the box" read as "strike", but the box would no
+# longer be the strike zone, and the box is labelled as the strike zone.
+#
+# (The old comment's arithmetic was also wrong twice: 1.44" is the ball's
+# radius, not its diameter, and "½ ball radius" gives 9.22", not the 10" the
+# constant actually held.)
+#
+# In-zone FLAGS are the other question and correctly use the centre locus —
+# see _ABS_WIDTH and _FR_W in modules/pitch_aggregates.py.
 # ---------------------------------------------------------------------------
+PLATE_HALF_WIDTH = 0.7083  # ft — half the 17" plate; the zone's own edge
+
+# Height fallbacks, used only when strike_zone() has no measured season.
+# Named ABS_, but they are not ABS values — they are pre-ABS league averages.
+# Real ABS is 53.5% / 27% of the batter's height, which for a 6'1" batter is
+# 3.26 / 1.64 ft; the 3.38 below is 55.6% of that height, not 53.5%.
 ABS_SZ_TOP    = 3.38   # ft
 ABS_SZ_BOT    = 1.59   # ft
-ABS_SZ_WIDTH  = 0.833  # ft (half-width from center)
 # Front of home plate. Statcast measures plate_x/plate_z here and the zone is
 # judged here, so trajectories are solved to this plane and the zone must be
 # drawn on it — not at y=0, which is the back tip of the plate.
 PLATE_Y       = 1.4167  # ft
+
+# Home plate on the ground, as (x, y) feet: the 17" front edge faces the
+# pitcher at y=PLATE_Y, two 8.5" sides run back from it, and two 12" sides
+# close on the tip at y=0. The parallel sides sit at ±PLATE_HALF_WIDTH, so the
+# zone rectangle rises exactly off the plate's own edges.
+PLATE_VERTS = [
+    (0.0,               0.0),               # back tip, toward the catcher
+    (-PLATE_HALF_WIDTH, PLATE_HALF_WIDTH),
+    (-PLATE_HALF_WIDTH, PLATE_Y),
+    (PLATE_HALF_WIDTH,  PLATE_Y),
+    (PLATE_HALF_WIDTH,  PLATE_HALF_WIDTH),
+]
+# A real plate is ~1" thick and set flush with the ground, which at this
+# scene's scale is invisible. Exaggerated so the slab still reads when the
+# catcher's-eye camera looks at it nearly edge-on.
+PLATE_THICKNESS = 0.18  # ft
+
+
+def _home_plate_prism(thickness: float = PLATE_THICKNESS):
+    """
+    Home plate as a solid slab — (x, y, z) point lists for a Mesh3d.
+
+    The outline is a convex pentagon, so extruding it upward gives a convex
+    prism, and Mesh3d can derive the faces itself from the ten corner points
+    with alphahull=0 (convex hull). That beats spelling out the twenty-six
+    triangles by hand, which is twenty-six chances to transpose an index.
+    """
+    xs = [v[0] for v in PLATE_VERTS] * 2
+    ys = [v[1] for v in PLATE_VERTS] * 2
+    zs = [0.0] * len(PLATE_VERTS) + [thickness] * len(PLATE_VERTS)
+    return xs, ys, zs
 
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
@@ -3642,11 +3693,29 @@ def batter_split_heatmap(portrait: dict) -> go.Figure:
 # ---------------------------------------------------------------------------
 
 def _reconstruct_trajectory(
-    entry: dict, n_points: int = 30
-) -> tuple[list, list, list] | None:
+    entry: dict, n_points: int = 30, n_tail: int = 6
+) -> tuple[list, list, list, int] | None:
     """
     Reconstruct 3-D flight path using Statcast kinematic parameters.
-    Returns (x_path, y_path, z_path) or None if physics are invalid.
+    Returns (x_path, y_path, z_path, i_cross), or None if physics are invalid,
+    where i_cross indexes the sample at the front of the plate.
+
+    The path runs past that front edge to the plate's back tip at y=0. It used
+    to stop dead at PLATE_Y, which nothing revealed until the plate itself was
+    drawn and every pitch turned out to expire against the leading edge without
+    ever crossing the thing. The ball is still working over those 17 inches:
+    about 10 ms, in which a four-seamer drops another 1.4 inches and a curve
+    3.4 — a fifth of the zone's height.
+
+    The tail is extrapolation; the nine kinematic parameters are fit to the
+    flight up to the plate crossing. But it is 10 ms of extrapolation under
+    constant acceleration, over which drag and Magnus barely move. Past the
+    back tip is not drawn at all — the catcher receives it there, and the
+    model knows nothing about a catcher.
+
+    i_cross is returned so the caller can keep the crossing MARKER on
+    PLATE_Y, where plate_x/plate_z are measured and where the zone is judged.
+    Letting it slide to the back tip would move the measurement point.
 
     Coordinate system (raw Statcast convention — catcher's/umpire's view,
     i.e. standing behind home plate looking out toward the pitcher):
@@ -3664,22 +3733,32 @@ def _reconstruct_trajectory(
         vx0, vy0, vz0 = entry["vx0"], entry["vy0"], entry["vz0"]
         ax_, ay_, az_ = entry["ax"], entry["ay"], entry["az"]
 
-        # Solve for time of flight: y0 + vy0·t + ½·ay·t² = 1.4167 (front of plate)
+        # Time to a given distance from the plate, on the approaching root:
+        # y0 + vy0·t + ½·ay·t² = y_target
         a_c = 0.5 * ay_
         b_c = vy0
-        c_c = y0 - PLATE_Y
-        disc = b_c**2 - 4 * a_c * c_c
-        if disc < 0:
-            return None
-        t_flight = (-b_c - np.sqrt(disc)) / (2 * a_c)
-        if t_flight <= 0 or t_flight > 0.65:
+
+        def _t_at(y_target: float):
+            disc = b_c**2 - 4 * a_c * (y0 - y_target)
+            if disc < 0:
+                return None
+            return (-b_c - np.sqrt(disc)) / (2 * a_c)
+
+        t_flight = _t_at(PLATE_Y)            # front of plate — the crossing
+        if t_flight is None or t_flight <= 0 or t_flight > 0.65:
             return None
 
         t = np.linspace(0, t_flight, n_points)
+        # Tail across the plate to the back tip. If it will not solve, draw
+        # the flight on its own rather than dropping the pitch entirely.
+        t_back = _t_at(0.0)
+        if t_back is not None and t_back > t_flight:
+            t = np.concatenate([t, np.linspace(t_flight, t_back, n_tail + 1)[1:]])
+
         xs = (x0 + vx0 * t + 0.5 * ax_ * t**2).tolist()
         ys = (y0 + vy0 * t + 0.5 * ay_ * t**2).tolist()
         zs = (z0 + vz0 * t + 0.5 * az_ * t**2).tolist()
-        return xs, ys, zs
+        return xs, ys, zs, n_points - 1
     except Exception:
         return None
 
@@ -4024,7 +4103,7 @@ def pitch_arsenal_3d(portrait: dict,
         traj = _reconstruct_trajectory(p)
         if traj is None:
             continue
-        xs, ys, zs = traj
+        xs, ys, zs, i_cross = traj
 
         wr      = p["whiff_rate"]
         usage   = p["usage_pct"]
@@ -4044,15 +4123,26 @@ def pitch_arsenal_3d(portrait: dict,
         )
         p = {**p, "name": (f"{pitch_type} · {p['name']}" if multi else pitch_type)}
 
-        # Draw trajectory as 3D line
+        # Draw trajectory as 3D line — solid up to the plate crossing.
         fig.add_trace(go.Scatter3d(
-            x=xs, y=ys, z=zs,
+            x=xs[:i_cross + 1], y=ys[:i_cross + 1], z=zs[:i_cross + 1],
             mode="lines",
             line=dict(color=color, width=lw),
             name=p["name"],
             hovertemplate=label + "<extra></extra>",
             showlegend=True,
         ))
+
+        # The 17 inches over the plate, faded — still the same pitch, but past
+        # the plane the kinematics were fit to and past where it was judged.
+        if i_cross < len(xs) - 1:
+            fig.add_trace(go.Scatter3d(
+                x=xs[i_cross:], y=ys[i_cross:], z=zs[i_cross:],
+                mode="lines",
+                line=dict(color=_hex_to_rgba(color, 0.35), width=lw),
+                showlegend=False,
+                hoverinfo="skip",
+            ))
 
         # Mark release point
         fig.add_trace(go.Scatter3d(
@@ -4063,9 +4153,10 @@ def pitch_arsenal_3d(portrait: dict,
             hoverinfo="skip",
         ))
 
-        # Mark plate crossing
+        # Mark plate crossing — at i_cross, not at the end of the path, which
+        # is now the back tip. This marker is the measured plate_x/plate_z.
         fig.add_trace(go.Scatter3d(
-            x=[xs[-1]], y=[ys[-1]], z=[zs[-1]],
+            x=[xs[i_cross]], y=[ys[i_cross]], z=[zs[i_cross]],
             mode="markers",
             marker=dict(size=6, color=color, symbol="square"),
             showlegend=False,
@@ -4084,8 +4175,10 @@ def pitch_arsenal_3d(portrait: dict,
     # batter's stance, and the average moves (3.361/1.594 in 2023,
     # 3.435/1.605 in 2025). Now it is the season's own mean.
     sz_top, sz_bot = strike_zone(int(portrait.get("season") or 0))
-    sz_x = [-ABS_SZ_WIDTH, ABS_SZ_WIDTH, ABS_SZ_WIDTH, -ABS_SZ_WIDTH, -ABS_SZ_WIDTH]
-    sz_z = [sz_bot,        sz_bot,       sz_top,       sz_top,        sz_bot]
+    sz_x = [-PLATE_HALF_WIDTH, PLATE_HALF_WIDTH, PLATE_HALF_WIDTH,
+            -PLATE_HALF_WIDTH, -PLATE_HALF_WIDTH]
+    sz_z = [sz_bot,            sz_bot,           sz_top,
+            sz_top,            sz_bot]
     sz_y = [PLATE_Y] * 5
     fig.add_trace(go.Scatter3d(
         x=sz_x, y=sz_y, z=sz_z,
@@ -4094,7 +4187,47 @@ def pitch_arsenal_3d(portrait: dict,
         name="Strike Zone",
         hovertemplate=(f"<b>Strike zone</b><br>{portrait.get('season', '')} league "
                        f"average<br>Top: {sz_top:.2f} ft<br>Bottom: {sz_bot:.2f} ft"
-                       "<extra></extra>"),
+                       "<br>Width: 17 in (plate)<extra></extra>"),
+        showlegend=False,
+    ))
+
+    # Home plate, so the zone stands on a real object instead of floating.
+    # The two planes are perpendicular and meet along the plate's front edge:
+    # the zone is x–z at fixed y=PLATE_Y, the plate is x–y on the ground,
+    # running back from that edge to its tip at y=0.
+    plate_x, plate_y, plate_z = _home_plate_prism()
+    fig.add_trace(go.Mesh3d(
+        x=plate_x, y=plate_y, z=plate_z,
+        alphahull=0,
+        color="#e5e7eb",
+        opacity=0.30,
+        flatshading=True,
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    # Top face outline. The slab alone loses its shape against the dark floor
+    # at this camera; the pentagon is the part that says "home plate".
+    fig.add_trace(go.Scatter3d(
+        x=[v[0] for v in PLATE_VERTS] + [PLATE_VERTS[0][0]],
+        y=[v[1] for v in PLATE_VERTS] + [PLATE_VERTS[0][1]],
+        z=[PLATE_THICKNESS] * (len(PLATE_VERTS) + 1),
+        mode="lines",
+        line=dict(color="rgba(255,255,255,0.55)", width=2),
+        name="Home plate",
+        hovertemplate=("<b>Home plate</b><br>17 in across the front edge<br>"
+                       "Front edge at y=1.42 ft<extra></extra>"),
+        showlegend=False,
+    ))
+    # The zone's bottom corners dropped to the plate corners they stand on.
+    # Without them the rectangle and the pentagon read as unrelated objects.
+    fig.add_trace(go.Scatter3d(
+        x=[-PLATE_HALF_WIDTH, -PLATE_HALF_WIDTH, None,
+           PLATE_HALF_WIDTH, PLATE_HALF_WIDTH],
+        y=[PLATE_Y, PLATE_Y, None, PLATE_Y, PLATE_Y],
+        z=[PLATE_THICKNESS, sz_bot, None, PLATE_THICKNESS, sz_bot],
+        mode="lines",
+        line=dict(color="rgba(255,255,255,0.15)", width=1),
+        hoverinfo="skip",
         showlegend=False,
     ))
 

@@ -309,6 +309,66 @@ def tag_footer() -> html.Div:
     ], className="mt-3")
 
 
+ABS_FIRST_SEASON = 2026   # first season Statcast's zone came from a formula
+
+
+def data_notes() -> html.Div:
+    """
+    Footnotes for measurements whose DEFINITION moved, not just their value.
+
+    A chart's own subtitle cannot carry this: the axis still reads "Height
+    (ft)" on both sides of the change, so a reader comparing 2025 to 2026 has
+    no way to see that the two numbers were produced by different methods.
+
+    Zone heights are read back through charts.strike_zone rather than written
+    out here, so the note cannot drift from the table refresh.py builds.
+    """
+    try:
+        pre_t, pre_b = charts.strike_zone(ABS_FIRST_SEASON - 1)
+        abs_t, abs_b = charts.strike_zone(ABS_FIRST_SEASON)
+        pre_h, abs_h = (pre_t - pre_b) * 12, (abs_t - abs_b) * 12
+        heights = (f"The zone lost {pre_h - abs_h:.1f} inches of height across "
+                   f"that line ({pre_h:.2f} in in {ABS_FIRST_SEASON - 1}, "
+                   f"{abs_h:.2f} in in {ABS_FIRST_SEASON}). ")
+    except Exception:
+        heights = ""
+
+    para = {"fontSize": "0.72rem", "maxWidth": "820px", "marginTop": "4px",
+            "marginBottom": "8px"}
+    return html.Div([
+        html.Hr(style={"borderColor": "#374151", "marginTop": "24px"}),
+        html.Small("Notes on the data",
+                   className="text-secondary fw-semibold text-uppercase",
+                   style={"letterSpacing": "0.08em", "fontSize": "0.7rem"}),
+        html.Div([
+            html.Span("Strike zone — the definition changed in "
+                      f"{ABS_FIRST_SEASON}, not just the value. ",
+                      style={"fontWeight": "600", "color": "#d1d5db"}),
+            f"Through {ABS_FIRST_SEASON - 1}, Statcast's sz_top/sz_bot were set "
+            "per pitch from the batter's stance — 600–850 distinct values per "
+            "batter per season, with about an inch of scatter within a single "
+            f"batter. From opening day {ABS_FIRST_SEASON} they are a formula: "
+            "53.5% and 27% of the batter's height, which puts the top/bottom "
+            "ratio at exactly 1.98148 for every hitter in the league and gives "
+            f"each batter one value all year. {heights}"
+            "That is a change of definition rather than a change in how the "
+            "zone is enforced, so any season-over-season comparison straddling "
+            f"{ABS_FIRST_SEASON} is comparing two different measurements.",
+        ], className="text-secondary", style=para),
+        html.Div([
+            html.Span("Zone width. ",
+                      style={"fontWeight": "600", "color": "#d1d5db"}),
+            "Drawn at the plate — 17 inches, ±0.708 ft — because that is where "
+            "the zone ends. A pitch is a strike if any part of the ball passes "
+            "through it, so a ball centre up to about ±0.83 ft can still be "
+            "called one; the 3-D view plots centres, so a strike can land just "
+            "outside the box. Umpires in practice call wider than either "
+            "figure, and have been tightening: the 50% called-strike edge sat "
+            "at 0.94 ft in 2019 and 0.84 ft in 2026.",
+        ], className="text-secondary", style=para),
+    ], className="mt-2", style={"marginBottom": "18px"})
+
+
 def _archetype_guide_card() -> dbc.Card:
     """
     Static reference card — trait glossary, grouped by family.
@@ -1110,5 +1170,6 @@ def full_layout() -> html.Div:
             # what the whole app is written in, so it should be reachable from
             # wherever the reader hits a tag they do not recognise.
             tag_footer(),
+            data_notes(),
         ], fluid=True),
     ], style={"backgroundColor": "#111827", "minHeight": "100vh", "color": "#f9fafb"})
