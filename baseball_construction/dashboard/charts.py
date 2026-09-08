@@ -29,23 +29,33 @@ from team_portrait import kind_of  # noqa: E402
 # Strike zone geometry
 #
 # The zone ends AT the plate: 17 inches wide, so ±0.7083 ft. This was ±0.833,
-# which is a different quantity wearing the zone's name. A pitch is a strike if
-# ANY part of the ball passes through the zone, so the set of ball CENTRES that
-# produce a strike is 17" plus a ball diameter, ±0.829 ft. That widens the
-# strikes, not the zone.
+# which is a different quantity wearing the zone's name.
 #
-# The distinction bites here because this chart plots centres — plate_x/plate_z
-# and every trajectory endpoint are ball centres — so a pitch can legally end
-# just outside the drawn box and still be a strike. Drawing the centre locus
-# instead would make "inside the box" read as "strike", but the box would no
-# longer be the strike zone, and the box is labelled as the strike zone.
+# A pitch is a strike if ANY part of the ball passes through the zone, so a
+# ball merely TANGENT to the edge still counts — its centre sitting one ball
+# RADIUS outside. The locus of strike-producing centres is therefore the zone
+# grown by a radius on every side: half-width 8.5" + 1.45" = 9.95", which is
+# ±0.8291 ft. Equivalently, the FULL width goes 17" -> 19.9", one whole
+# diameter. Halves and fulls do not mix: ±(0.7083 + 2R) would put the ball
+# entirely clear of the line, which is not the rule.
 #
-# (The old comment's arithmetic was also wrong twice: 1.44" is the ball's
+# Measured, not assumed. On 2,350 ABS-challenge verdicts from 2026 — where the
+# final recorded call IS the machine's — a front-plane zone grown by exactly
+# one ball radius on all four sides agrees 99.8% of the time. Zero buffer
+# scores 56.9%. "Any part outside = ball", i.e. the ball fully inside the line,
+# scores 29.6%: the worst of every option tried, in both directions.
+#
+# Only the zone itself is drawn. Worth knowing when reading the chart, though:
+# it plots CENTRES — plate_x/plate_z and every trajectory endpoint are ball
+# centres — so a legitimate strike's marker can sit up to 1.45" outside the
+# box. A second box at ±0.8291 showing that was tried and removed as clutter.
+#
+# (The old comment's arithmetic was wrong twice over: 1.44" is the ball's
 # radius, not its diameter, and "½ ball radius" gives 9.22", not the 10" the
 # constant actually held.)
 #
-# In-zone FLAGS are the other question and correctly use the centre locus —
-# see _ABS_WIDTH and _FR_W in modules/pitch_aggregates.py.
+# In-zone FLAGS in modules/pitch_aggregates.py are the same question and
+# correctly use the grown box — see _ABS_WIDTH and _FR_W.
 # ---------------------------------------------------------------------------
 PLATE_HALF_WIDTH = 0.7083  # ft — half the 17" plate; the zone's own edge
 
@@ -58,6 +68,12 @@ ABS_SZ_BOT    = 1.59   # ft
 # Front of home plate. Statcast measures plate_x/plate_z here and the zone is
 # judged here, so trajectories are solved to this plane and the zone must be
 # drawn on it — not at y=0, which is the back tip of the plate.
+#
+# That ABS judges HERE and not at the plate's midpoint is measured, against the
+# same 2,350 challenge verdicts: agreement peaks sharply at this plane (99.8%)
+# and falls off either side — 97.2% at y=1.30, 98.5% at y=1.50, and only 84.2%
+# at the midpoint y=0.7083. Reporting on ABS had suggested the midpoint; the
+# data says otherwise, so the crossing marker belongs on this plane.
 PLATE_Y       = 1.4167  # ft
 
 # Home plate on the ground, as (x, y) feet: the 17" front edge faces the

@@ -360,11 +360,31 @@ def data_notes() -> html.Div:
                       style={"fontWeight": "600", "color": "#d1d5db"}),
             "Drawn at the plate — 17 inches, ±0.708 ft — because that is where "
             "the zone ends. A pitch is a strike if any part of the ball passes "
-            "through it, so a ball centre up to about ±0.83 ft can still be "
-            "called one; the 3-D view plots centres, so a strike can land just "
-            "outside the box. Umpires in practice call wider than either "
-            "figure, and have been tightening: the 50% called-strike edge sat "
-            "at 0.94 ft in 2019 and 0.84 ft in 2026.",
+            "through it, so a ball merely tangent to the edge counts, its "
+            "centre one ball radius (1.45 in) further out: centres to ±0.829 ft "
+            "are strikes. The 3-D view plots centres, so a strike can land just "
+            "outside the drawn box.",
+        ], className="text-secondary", style=para),
+        html.Div([
+            html.Span("Where it is judged. ",
+                      style={"fontWeight": "600", "color": "#d1d5db"}),
+            "At the front of the plate, 1.42 ft from the back tip — not the "
+            "plate's midpoint, as had been reported. Measured against 2,350 "
+            "ABS challenge verdicts from 2026, where the call recorded after "
+            "adjudication is the machine's own: a front-plane zone grown by "
+            "exactly one ball radius on all four sides reproduces 99.8% of "
+            "them, against 84.2% at the midpoint and 56.9% with no radius at "
+            "all. Requiring the whole ball inside the line scores 29.6%, the "
+            "worst of every variant tried.",
+        ], className="text-secondary", style=para),
+        html.Div([
+            html.Span("Umpires have converged on it. ",
+                      style={"fontWeight": "600", "color": "#d1d5db"}),
+            "The 50% called-strike edge — the distance off centre at which a "
+            "taken pitch through the middle of the zone is as likely to be "
+            "called a strike as a ball — was 0.945 ft in 2019 and 0.843 ft in "
+            "2026, against the rule's 0.829. A gap of 1.4 inches closing to "
+            "0.17.",
         ], className="text-secondary", style=para),
     ], className="mt-2", style={"marginBottom": "18px"})
 
