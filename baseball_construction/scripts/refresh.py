@@ -413,7 +413,30 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
     # the true value ended up 8c49e074df66b935. The portraits were CORRECT —
     # each was built against properly regenerated pools — but every one of
     # them looked stale, so the next run would have rebuilt the lot again.
+    # Did the rebuild actually achieve anything? build_league_identity catches
+    # per-team exceptions and carries on, so a season can report "30/30" with
+    # portraits it never rewrote. Seen for real: three workers hit Supabase at
+    # once at the start of a run, all three got "Server disconnected", and
+    # ATH 2015/2016/2017 stayed on the previous build while the run reported
+    # success. Counting what is still stale afterwards is the only check that
+    # speaks to the goal rather than to the attempt.
+    still = 0
+    for s in todo:
+        for team in MLB_TEAMS:
+            p = PORTRAIT_DIR / f"{team}_{s}.json"
+            try:
+                if not p.exists() or not portrait_is_current(json.loads(p.read_text())):
+                    still += 1
+            except Exception:
+                still += 1
+
     after = build_fingerprint(refresh=True)
+    if still and after == fp:
+        log.warning(
+            "  %d portrait(s) are STILL stale after the rebuild — their builds "
+            "failed and the old files were kept. Check the log above for "
+            "'FAILED'; a transient database error is the usual cause, and "
+            "re-running this stage picks up exactly those.", still)
     if after != fp:
         log.warning(
             "  fingerprint moved during the rebuild: %s -> %s.\n"
