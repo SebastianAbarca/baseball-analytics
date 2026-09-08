@@ -9,6 +9,7 @@ Master join key: key_mlbam (MLBAM ID). Never join on player name strings.
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import os
 from pathlib import Path
@@ -110,6 +111,37 @@ _STATCAST_KEY = ["game_pk", "at_bat_number", "pitch_number"]
 _TOPPED_UP: set[int] = set()
 
 
+def statcast_gap(season: int, df: Optional[pd.DataFrame] = None):
+    """
+    (last_cached_date, target_date) when a season's cache is behind, else None.
+
+    The single definition of "is this season's Statcast current?", so callers
+    that only want to REPORT staleness cannot drift from the one that acts on
+    it. Clamping to the season end is the part that matters: without it every
+    finished season looks perpetually behind, because its last game is always
+    older than yesterday.
+    """
+    _, end_s = SEASON_DATES.get(season, (None, None))
+    if end_s is None:
+        return None
+    if df is None:
+        cache = RAW_DIR / f"statcast_{season}.parquet"
+        if not cache.exists():
+            return None
+        df = pd.read_parquet(cache, columns=["game_date"])
+    if "game_date" not in df.columns or df.empty:
+        return None
+
+    last = pd.to_datetime(df["game_date"]).max().normalize()
+    # Yesterday, not today: today's games are still being played, so a cache
+    # holding yesterday is as current as it can be.
+    target = min(pd.Timestamp(end_s),
+                 pd.Timestamp.today().normalize() - pd.Timedelta(days=1))
+    if last >= target:
+        return None
+    return last.date(), target.date()
+
+
 def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame:
     """
     Append any games played since this cache was written.
@@ -117,27 +149,18 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
     No-op once the cached data reaches the end of the season or today,
     whichever is earlier, so finished seasons never touch the network.
     """
-    if season in _TOPPED_UP or "game_date" not in df.columns or df.empty:
+    if season in _TOPPED_UP:
         return df
-    start_s, end_s = SEASON_DATES.get(season, (None, None))
-    if end_s is None:
-        return df
-
-    last = pd.to_datetime(df["game_date"]).max().normalize()
-    # Yesterday, not today: today's games are still being played, so a cache
-    # that already holds yesterday is as current as it can be, and chasing
-    # today would make every call a network round trip forever.
-    target = min(pd.Timestamp(end_s),
-                 pd.Timestamp.today().normalize() - pd.Timedelta(days=1))
-    if last >= target:
-        _TOPPED_UP.add(season)
-        return df
+    gap = statcast_gap(season, df)
     _TOPPED_UP.add(season)
+    if gap is None:
+        return df
+    last, target = gap
 
-    frm = (last + pd.Timedelta(days=1)).date().isoformat()
-    to  = target.date().isoformat()
+    frm = (last + _dt.timedelta(days=1)).isoformat()
+    to  = target.isoformat()
     log.info("statcast_%d: cache ends %s, topping up %s → %s",
-             season, last.date(), frm, to)
+             season, last, frm, to)
     try:
         pybaseball.cache.enable()
         new = pybaseball.statcast(start_dt=frm, end_dt=to, verbose=True)
