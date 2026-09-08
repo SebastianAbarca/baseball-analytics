@@ -44,6 +44,18 @@ fresh copy, so refreshing one means removing it and calling its puller again.
 the pull fails, because these feeds do fail — pull_fg_batting has a
 three-step fallback chain precisely because FanGraphs answers 403.
 
+The caching is five layers deep, not four, and the outermost one is not ours:
+
+    pybaseball's HTTP cache (~/.pybaseball/cache, enabled globally)
+      -> fg_*.csv, bwar_*, fielding_oaa_*, def_runs_*, il_*
+           -> *_history_*.csv
+                -> *_prior_*.parquet
+                     -> portraits/*.json
+
+Deleting our CSV and re-pulling only reaches the second layer: pybaseball
+answers from its own store and writes back the same numbers. `sources`
+therefore disables that cache for its duration — see stage_sources.
+
 Statcast and tunnel run in the parent before any fork, so the workers only
 ever read those files. --jobs then rebuilds seasons in parallel; portraits
 and league_identity files are per-season, so nothing is shared.
@@ -176,34 +188,57 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
     it started with instead of a hole.
     """
     specs = _source_specs()
-    ok = failed = skipped = 0
-    for s in seasons:
-        for label, files, pull in specs:
-            paths = [PROCESSED / f for f in files(s)]
-            if dry:
-                have = [p for p in paths if p.exists()]
-                log.info("  %d %-13s would re-pull (%s)", s, label,
-                         ", ".join(p.name for p in have) or "no cache yet")
-                skipped += 1
-                continue
-            baks = []
-            for p in paths:
-                if p.exists():
-                    b = p.with_suffix(p.suffix + ".bak")
-                    p.rename(b)
-                    baks.append((p, b))
-            try:
-                pull(s)
-                for _, b in baks:
-                    b.unlink(missing_ok=True)
-                log.info("  %d %-13s refreshed", s, label)
-                ok += 1
-            except Exception as e:
-                for p, b in baks:          # put back what was there
-                    b.rename(p)
-                log.warning("  %d %-13s FAILED (%s) — kept existing cache",
-                            s, label, str(e)[:80])
-                failed += 1
+
+    # pybaseball keeps its OWN on-disk HTTP cache, one layer further out than
+    # anything else here, and it is enabled globally. Re-running a pull with
+    # it on rebuilds our CSV from pybaseball's stored response instead of from
+    # the source. That is not theoretical: the first run of this stage rewrote
+    # fg_batting_2026 byte-identically, and cross-checking it against Statcast
+    # (current to the day) showed the pool covering 98.6% of plate appearances
+    # — about two games behind, the age of pybaseball's copy.
+    #
+    # Disabled for the duration rather than purged: purge() drops all ~9,500
+    # entries including every cached Statcast day, which would make the next
+    # top-up re-download the season. Disabling is process-local, so the
+    # fetches reach the source and nothing else loses its cache.
+    from pybaseball import cache as _pb_cache
+    was_enabled = _pb_cache.config.enabled
+    if not dry and was_enabled:
+        _pb_cache.disable()
+        log.info("  pybaseball HTTP cache off for this stage "
+                 "(it would otherwise serve its own stored responses)")
+
+    ok = failed = 0
+    try:
+        for s in seasons:
+            for label, files, pull in specs:
+                paths = [PROCESSED / f for f in files(s)]
+                if dry:
+                    have = [p for p in paths if p.exists()]
+                    log.info("  %d %-13s would re-pull (%s)", s, label,
+                             ", ".join(p.name for p in have) or "no cache yet")
+                    continue
+                baks = []
+                for p in paths:
+                    if p.exists():
+                        b = p.with_suffix(p.suffix + ".bak")
+                        p.rename(b)
+                        baks.append((p, b))
+                try:
+                    pull(s)
+                    for _, b in baks:
+                        b.unlink(missing_ok=True)
+                    log.info("  %d %-13s refreshed", s, label)
+                    ok += 1
+                except Exception as e:
+                    for p, b in baks:          # put back what was there
+                        b.rename(p)
+                    log.warning("  %d %-13s FAILED (%s) — kept existing cache",
+                                s, label, str(e)[:80])
+                    failed += 1
+    finally:
+        if not dry and was_enabled:
+            _pb_cache.enable()
 
     derived = _derived_globs(seasons)
     if derived:
@@ -211,9 +246,9 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
                  "would clear" if dry else "clearing", len(derived))
         # The history and prior pools span every season, not just the ones
         # asked for, so touching one season's roots invalidates all of them.
-        # That is correct — the pool contains the season that just changed —
-        # but it turns "refresh 2026" into a full 12-season rebuild, which is
-        # too expensive to discover only when it starts.
+        # Correct — the pool contains the season that changed — but it turns
+        # "refresh 2026" into a full 12-season rebuild, which is too expensive
+        # to discover only when it starts.
         if any("history" in p.name or "prior" in p.name for p in derived):
             log.warning("  note: history/prior pools are cross-season, so this "
                         "forces a FULL portrait rebuild, not just %s",
