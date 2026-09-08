@@ -100,20 +100,96 @@ def load_chadwick() -> pd.DataFrame:
 # Statcast pull / cache
 # ---------------------------------------------------------------------------
 
-def pull_statcast_season(season: int) -> pd.DataFrame:
+_STATCAST_KEY = ["game_pk", "at_bat_number", "pitch_number"]
+
+# Seasons already topped up in this process. build_team_portrait calls
+# pull_statcast_season once per TEAM, so without this a 30-team rebuild would
+# fire 30 network requests per season — and the cache can never reach today
+# while today's games are still being played, so the "is it current?" test
+# would never go quiet on its own.
+_TOPPED_UP: set[int] = set()
+
+
+def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame:
+    """
+    Append any games played since this cache was written.
+
+    No-op once the cached data reaches the end of the season or today,
+    whichever is earlier, so finished seasons never touch the network.
+    """
+    if season in _TOPPED_UP or "game_date" not in df.columns or df.empty:
+        return df
+    start_s, end_s = SEASON_DATES.get(season, (None, None))
+    if end_s is None:
+        return df
+
+    last = pd.to_datetime(df["game_date"]).max().normalize()
+    # Yesterday, not today: today's games are still being played, so a cache
+    # that already holds yesterday is as current as it can be, and chasing
+    # today would make every call a network round trip forever.
+    target = min(pd.Timestamp(end_s),
+                 pd.Timestamp.today().normalize() - pd.Timedelta(days=1))
+    if last >= target:
+        _TOPPED_UP.add(season)
+        return df
+    _TOPPED_UP.add(season)
+
+    frm = (last + pd.Timedelta(days=1)).date().isoformat()
+    to  = target.date().isoformat()
+    log.info("statcast_%d: cache ends %s, topping up %s → %s",
+             season, last.date(), frm, to)
+    try:
+        pybaseball.cache.enable()
+        new = pybaseball.statcast(start_dt=frm, end_dt=to, verbose=True)
+    except Exception as e:
+        log.warning("statcast_%d top-up failed (%s) — serving cache as-is", season, e)
+        return df
+    if new is None or new.empty:
+        log.info("statcast_%d: nothing new between %s and %s", season, frm, to)
+        return df
+
+    merged = pd.concat([df, new], ignore_index=True)
+    key = [c for c in _STATCAST_KEY if c in merged.columns]
+    if key:
+        merged = merged.drop_duplicates(subset=key, keep="last")
+    merged.to_parquet(cache, index=False)
+    log.info("statcast_%d: +%d rows (%d → %d), cache now through %s",
+             season, len(merged) - len(df), len(df), len(merged),
+             pd.to_datetime(merged["game_date"]).max().date())
+    return merged
+
+
+def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:
     """
     Pull full-season Statcast pitch data.
 
-    Caches to data/raw/statcast_{season}.parquet.
-    Loads from cache on subsequent calls — never re-pulls.
+    Caches to data/raw/statcast_{season}.parquet. A finished season is
+    immutable and the cache is served forever. A season still in progress is
+    NOT immutable, and this used to serve its cache forever too: the 2026 file
+    was written on 21 May holding games through 20 May, and every read after
+    that returned 49 games per team no matter how much of the season had been
+    played. So an in-progress season is topped up — the missing days are
+    fetched and appended, rather than re-pulling months already on disk.
+
+    Falls back to the cache if the top-up fails, since stale data beats no
+    data and the caller may be offline.
+
     If the cache file is corrupt (e.g. from a failed prior download),
     deletes it and re-pulls.
+
+    Args:
+        season: season year
+        top_up: fetch days played since the cache was written (in-progress
+                seasons only). Set False for reproducible offline runs.
     """
     cache = RAW_DIR / f"statcast_{season}.parquet"
     if cache.exists():
         try:
             log.info("Loading statcast_%d from cache: %s", season, cache)
-            return pd.read_parquet(cache)
+            df = pd.read_parquet(cache)
+            if top_up:
+                df = _top_up_statcast(df, season, cache)
+            return df
         except Exception as e:
             log.warning(
                 "Cache file %s is corrupt (%s) — deleting and re-pulling", cache, e
