@@ -13,19 +13,36 @@ stale. The order is not optional, so it should not be retyped each time.
 Stages run in dependency order, each feeding the next:
 
     statcast   top up any in-progress season (finished seasons are immutable)
+    sources    re-pull the external feeds — FanGraphs/BRef/Savant aggregates,
+               fielding OAA, bWAR, defensive runs, IL — and clear the pools
+               built from them                          (opt-in)
     tunnel     regenerate tunnel_league_*.parquet where Statcast moved
     portraits  rebuild whatever the build fingerprint now marks stale,
                and rewrite league_identity_*.json
     tags       regenerate TAGS.md and dashboard/tag_reference.json
     upload     push portraits to Supabase Storage        (opt-in)
 
-Run everything:              python scripts/refresh.py
-See what would change:       python scripts/refresh.py --dry-run
-One season:                  python scripts/refresh.py --seasons 2026
-Skip the slow part:          python scripts/refresh.py --skip portraits
-Force tunnels after a code
-change rather than a data
-change:                      python scripts/refresh.py --force-tunnel
+Routine refresh (data you own, no external feeds):
+    python scripts/refresh.py
+
+EVERYTHING, including re-pulling every external source:
+    python scripts/refresh.py --stages statcast,sources,tunnel,portraits,tags
+
+See what would change, touch nothing:
+    python scripts/refresh.py --dry-run
+
+One season:            --seasons 2026
+Skip the slow part:    --skip portraits
+Parallel seasons:      --jobs 4
+After a CODE change
+rather than a data
+change:                --force-tunnel
+
+Every cache here is gated on `if cache.exists()` with no way to ask for a
+fresh copy, so refreshing one means removing it and calling its puller again.
+`sources` moves each cache aside rather than deleting it and puts it back if
+the pull fails, because these feeds do fail — pull_fg_batting has a
+three-step fallback chain precisely because FanGraphs answers 403.
 
 Statcast and tunnel run in the parent before any fork, so the workers only
 ever read those files. --jobs then rebuilds seasons in parallel; portraits
@@ -53,7 +70,9 @@ PORTRAIT_DIR  = _HERE.parent / "data" / "processed" / "portraits"
 FIRST_SEASON, LAST_SEASON = 2015, 2026
 DASHBOARD_PORT = 8050
 
-STAGES = ("statcast", "tunnel", "portraits", "tags", "upload")
+STAGES = ("statcast", "sources", "tunnel", "portraits", "tags", "upload")
+# `sources` and `upload` are opt-in: the first re-pulls every external feed
+# (slow, network-bound, and the least reliable step), the second publishes.
 DEFAULT_STAGES = ("statcast", "tunnel", "portraits", "tags")
 
 log = logging.getLogger("refresh")
@@ -109,6 +128,103 @@ def stage_statcast(seasons: list[int], dry: bool) -> list[int]:
     return moved
 
 
+PROCESSED = _HERE.parent / "data" / "processed"
+
+# External pulls, each cached "if cache.exists(): return it" with no way to
+# ask for a fresh copy. Refreshing one means removing its cache and calling
+# the puller again — so each entry is (label, filenames, how to re-pull).
+def _source_specs():
+    import ingest
+
+    def one(fn):
+        return lambda s: fn(s)
+
+    return [
+        ("fg_batting",   lambda s: [f"fg_batting_{s}.csv"],   one(ingest.pull_fg_batting)),
+        ("fg_pitching",  lambda s: [f"fg_pitching_{s}.csv"],  one(ingest.pull_fg_pitching)),
+        ("fielding_oaa", lambda s: [f"fielding_oaa_{s}.csv"], one(ingest.pull_fielding_oaa)),
+        ("bwar",         lambda s: [f"bwar_bat_{s}.csv", f"bwar_pitch_{s}.csv"],
+                         one(ingest.pull_bwar)),
+        ("def_runs",     lambda s: [f"def_runs_{s}.csv"],     one(ingest.pull_def_runs)),
+        ("il",           lambda s: [f"il_{s}.csv"],
+                         lambda s: ingest.pull_il_data(s, force=True)),
+    ]
+
+# Caches with no puller of their own: they are rebuilt as a side effect of the
+# next portrait build, so refreshing them means deleting them. The history and
+# prior pools are built FROM fg_*, so re-pulling the root without clearing
+# these would rebuild nothing — the layering trap from repair_metric_units.
+def _derived_globs(seasons: list[int]) -> list[Path]:
+    out: list[Path] = []
+    for s in seasons:
+        out += [PROCESSED / f"team_turnover_{s}.csv",
+                PROCESSED / f"est_service_time_{s}.csv"]
+    out += sorted(PROCESSED.glob("*history*.csv"))
+    out += sorted(PROCESSED.glob("*prior*.parquet"))
+    return [p for p in out if p.exists()]
+
+
+def stage_sources(seasons: list[int], dry: bool) -> None:
+    """
+    Re-pull the external season data: FanGraphs/BRef/Savant aggregates, OAA,
+    bWAR, defensive runs, IL stints.
+
+    Opt-in, because it is the slow, network-bound, and least reliable part of
+    a refresh — pull_fg_batting alone has a three-step fallback chain because
+    FanGraphs returns 403. Each cache is moved aside rather than deleted, and
+    restored if its pull fails, so a refresh that dies halfway leaves the data
+    it started with instead of a hole.
+    """
+    specs = _source_specs()
+    ok = failed = skipped = 0
+    for s in seasons:
+        for label, files, pull in specs:
+            paths = [PROCESSED / f for f in files(s)]
+            if dry:
+                have = [p for p in paths if p.exists()]
+                log.info("  %d %-13s would re-pull (%s)", s, label,
+                         ", ".join(p.name for p in have) or "no cache yet")
+                skipped += 1
+                continue
+            baks = []
+            for p in paths:
+                if p.exists():
+                    b = p.with_suffix(p.suffix + ".bak")
+                    p.rename(b)
+                    baks.append((p, b))
+            try:
+                pull(s)
+                for _, b in baks:
+                    b.unlink(missing_ok=True)
+                log.info("  %d %-13s refreshed", s, label)
+                ok += 1
+            except Exception as e:
+                for p, b in baks:          # put back what was there
+                    b.rename(p)
+                log.warning("  %d %-13s FAILED (%s) — kept existing cache",
+                            s, label, str(e)[:80])
+                failed += 1
+
+    derived = _derived_globs(seasons)
+    if derived:
+        log.info("  %s %d derived pool file(s) so they rebuild from the new roots",
+                 "would clear" if dry else "clearing", len(derived))
+        # The history and prior pools span every season, not just the ones
+        # asked for, so touching one season's roots invalidates all of them.
+        # That is correct — the pool contains the season that just changed —
+        # but it turns "refresh 2026" into a full 12-season rebuild, which is
+        # too expensive to discover only when it starts.
+        if any("history" in p.name or "prior" in p.name for p in derived):
+            log.warning("  note: history/prior pools are cross-season, so this "
+                        "forces a FULL portrait rebuild, not just %s",
+                        ", ".join(str(s) for s in seasons))
+        if not dry:
+            for p in derived:
+                p.unlink()
+    if not dry:
+        log.info("  %d refreshed, %d failed", ok, failed)
+
+
 def stage_tunnel(seasons: list[int], changed: list[int], force: bool, dry: bool) -> int:
     """
     Regenerate tunnel caches whose Statcast is newer than they are.
@@ -161,18 +277,26 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
     fp = build_fingerprint()
     log.info("  build fingerprint: %s", fp)
 
+    # Drive off the roster of teams, not off the files on disk. Globbing what
+    # exists can only ever find portraits that are present and stale; a
+    # MISSING portrait — the most obvious kind of work there is — looks like
+    # nothing at all. Deleting one team's file and being told "every portrait
+    # is current" is how this was caught.
+    from build_league_identity import MLB_TEAMS
+
     stale_by_season: dict[int, int] = {}
     for s in seasons:
         n = 0
-        for p in PORTRAIT_DIR.glob(f"*_{s}.json"):
+        for team in MLB_TEAMS:
+            p = PORTRAIT_DIR / f"{team}_{s}.json"
+            if not p.exists():
+                n += 1
+                continue
             try:
                 if not portrait_is_current(json.loads(p.read_text())):
                     n += 1
             except Exception:
                 n += 1
-        # A season with no portraits at all still needs building.
-        if not list(PORTRAIT_DIR.glob(f"*_{s}.json")):
-            n = 30
         if n:
             stale_by_season[s] = n
 
@@ -284,6 +408,8 @@ def main() -> int:
             changed = stage_statcast(seasons, args.dry_run)
             if not changed:
                 log.info("  all seasons already current")
+        elif name == "sources":
+            stage_sources(seasons, args.dry_run)
         elif name == "tunnel":
             n = stage_tunnel(seasons, changed, args.force_tunnel, args.dry_run)
             if not n:

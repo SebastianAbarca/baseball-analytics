@@ -8,7 +8,7 @@
      "tag": "deep extension",
      "side": "P",
      "family": "mechanics",
-     "fires": 493,
+     "fires": 498,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "7.62 ft release extension (100th pct) \u2014 perceived velo plays up"
@@ -17,7 +17,7 @@
      "tag": "left-handed hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 2928,
+     "fires": 2953,
      "population": "splits",
      "floor": "\u2014",
      "earned": "bats left-handed"
@@ -26,7 +26,7 @@
      "tag": "left-handed pitcher",
      "side": "P",
      "family": "handedness",
-     "fires": 2045,
+     "fires": 2100,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "throws left-handed"
@@ -44,7 +44,7 @@
      "tag": "right-handed hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 5374,
+     "fires": 5430,
      "population": "splits",
      "floor": "\u2014",
      "earned": "bats right-handed"
@@ -53,7 +53,7 @@
      "tag": "right-handed pitcher",
      "side": "P",
      "family": "handedness",
-     "fires": 5452,
+     "fires": 5608,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "throws right-handed"
@@ -62,7 +62,7 @@
      "tag": "short extension",
      "side": "P",
      "family": "mechanics",
-     "fires": 496,
+     "fires": 508,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "5.75 ft release extension (10th pct) \u2014 ball travels farther to the plate"
@@ -71,7 +71,7 @@
      "tag": "sidearm",
      "side": "P",
      "family": "mechanics",
-     "fires": 501,
+     "fires": 510,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "arm angle 24\u00b0 (bottom ~15% of slots)"
@@ -80,7 +80,7 @@
      "tag": "submarine",
      "side": "P",
      "family": "mechanics",
-     "fires": 133,
+     "fires": 138,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "arm angle -15\u00b0 \u2014 below horizontal-plus buffer"
@@ -89,7 +89,7 @@
      "tag": "switch hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 790,
+     "fires": 799,
      "population": "splits",
      "floor": "\u2014",
      "earned": "takes PAs from both sides of the plate"
@@ -98,7 +98,7 @@
      "tag": "wide release",
      "side": "P",
      "family": "mechanics",
-     "fires": 515,
+     "fires": 527,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "release 3.97 ft off-center (100th pct for handedness) \u2014 cross-fire angle"
@@ -113,7 +113,7 @@
      "tag": "cannon arm",
      "side": "H",
      "family": "fielding",
-     "fires": 254,
+     "fires": 258,
      "population": "fielders_arm",
      "floor": "\u2014",
      "earned": "arm strength 100th pct"
@@ -122,7 +122,7 @@
      "tag": "elite speed",
      "side": "H",
      "family": "athleticism",
-     "fires": 572,
+     "fires": 578,
      "population": "speed",
      "floor": "\u2014",
      "earned": "29.1 ft/s sprint speed (top ~10%)"
@@ -131,7 +131,7 @@
      "tag": "elite velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 972,
+     "fires": 986,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 100th pct"
@@ -140,7 +140,7 @@
      "tag": "fast",
      "side": "H",
      "family": "athleticism",
-     "fires": 1413,
+     "fires": 1420,
      "population": "speed",
      "floor": "\u2014",
      "earned": "28.2 ft/s sprint speed (top ~35%)"
@@ -149,7 +149,7 @@
      "tag": "high spin efficiency",
      "side": "P",
      "family": "deception",
-     "fires": 1026,
+     "fires": 1032,
      "population": "all",
      "floor": "100 (spin_efficiency)",
      "earned": "spin efficiency 100th pct \u2014 movement extracts nearly all of the raw spin"
@@ -158,7 +158,7 @@
      "tag": "plus velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 1413,
+     "fires": 1421,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 89th pct"
@@ -167,7 +167,7 @@
      "tag": "quick pop",
      "side": "H",
      "family": "catcher",
-     "fires": 123,
+     "fires": 124,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "1.88s pop to second \u2014 among the fastest exchanges in the league"
@@ -176,7 +176,7 @@
      "tag": "ride four-seam",
      "side": "P",
      "family": "arsenal",
-     "fires": 2226,
+     "fires": 2239,
      "population": "all",
      "floor": "\u2014",
      "earned": "4-seam with 1.51 ft IVB \u2014 carry through the top of the zone"
@@ -185,7 +185,7 @@
      "tag": "soft tosser",
      "side": "P",
      "family": "arsenal",
-     "fires": 905,
+     "fires": 909,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 10th pct"
@@ -194,7 +194,7 @@
      "tag": "station-to-station",
      "side": "H",
      "family": "athleticism",
-     "fires": 677,
+     "fires": 682,
      "population": "speed",
      "floor": "\u2014",
      "earned": "25.0 ft/s \u2014 bottom decile of the season's runners"
@@ -209,7 +209,7 @@
      "tag": "aggressive",
      "side": "H",
      "family": "approach",
-     "fires": 1120,
+     "fires": 1125,
      "population": "chase",
      "floor": "75 (FPS_pct)",
      "earned": "attacks first pitches and expands the zone (high FPS% + high chase%)"
@@ -218,7 +218,7 @@
      "tag": "air-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 497,
+     "fires": 498,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -227,7 +227,7 @@
      "tag": "changeup out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 1796,
+     "fires": 1811,
      "population": "all",
      "floor": "\u2014",
      "earned": "Changeup put-away pitch \u2014 17% whiffs"
@@ -236,7 +236,7 @@
      "tag": "count-shifter",
      "side": "P",
      "family": "sequencing",
-     "fires": 711,
+     "fires": 721,
      "population": "all",
      "floor": "\u2014",
      "earned": "pitch mix moves 57% between ahead and behind counts (100th pct) \u2014 a different pitcher at 0-2 than 2-0"
@@ -245,7 +245,7 @@
      "tag": "curveball out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 988,
+     "fires": 991,
      "population": "all",
      "floor": "\u2014",
      "earned": "Curveball put-away pitch \u2014 11% whiffs"
@@ -254,7 +254,7 @@
      "tag": "cutter-primary",
      "side": "P",
      "family": "arsenal",
-     "fires": 470,
+     "fires": 475,
      "population": "all",
      "floor": "\u2014",
      "earned": "cutter-led fastball family (47% usage)"
@@ -263,7 +263,7 @@
      "tag": "deep arsenal",
      "side": "P",
      "family": "arsenal",
-     "fires": 1338,
+     "fires": 1354,
      "population": "all",
      "floor": "\u2014",
      "earned": "5 pitches thrown \u22655% of the time"
@@ -272,7 +272,7 @@
      "tag": "extra base taker",
      "side": "H",
      "family": "running-game",
-     "fires": 702,
+     "fires": 728,
      "population": "xbt",
      "floor": "\u2014",
      "earned": "37 extra bases on 47 chances (100th pct) \u2014 took 3rd on 18/27 singles"
@@ -281,7 +281,7 @@
      "tag": "first-pitch attacker",
      "side": "P",
      "family": "sequencing",
-     "fires": 817,
+     "fires": 824,
      "population": "all",
      "floor": "\u2014",
      "earned": "74% first-pitch strikes (100th pct)"
@@ -299,7 +299,7 @@
      "tag": "free swinger",
      "side": "H",
      "family": "approach",
-     "fires": 911,
+     "fires": 908,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
      "earned": "chase rate 100th pct \u2014 expands the zone"
@@ -308,7 +308,7 @@
      "tag": "ground-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 299,
+     "fires": 300,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 100th pct \u2014 hits it into the ground"
@@ -317,7 +317,7 @@
      "tag": "high steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 767,
+     "fires": 768,
      "population": "steal_opps",
      "floor": "\u2014",
      "earned": "34 attempts on 185 times aboard (100th pct) \u2014 runs often"
@@ -326,7 +326,7 @@
      "tag": "knuckle-curve out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 338,
+     "fires": 342,
      "population": "all",
      "floor": "\u2014",
      "earned": "Knuckle-Curve put-away pitch \u2014 18% whiffs"
@@ -344,7 +344,7 @@
      "tag": "low steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 407,
+     "fires": 408,
      "population": "steal_opps",
      "floor": "\u2014",
      "earned": "10 attempts on 190 times aboard (14th pct) \u2014 stays put"
@@ -353,7 +353,7 @@
      "tag": "oppo bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 650,
+     "fires": 653,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "opposite-field BIP rate 100th pct"
@@ -362,7 +362,7 @@
      "tag": "patient",
      "side": "H",
      "family": "approach",
-     "fires": 916,
+     "fires": 926,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
      "earned": "chase rate 11th pct \u2014 lays off pitches outside the zone"
@@ -371,7 +371,7 @@
      "tag": "patterned",
      "side": "P",
      "family": "sequencing",
-     "fires": 736,
+     "fires": 739,
      "population": "all",
      "floor": "\u2014",
      "earned": "pitch-to-pitch entropy ratio 0.92 (10th pct) \u2014 strong repeatable sequences"
@@ -380,7 +380,7 @@
      "tag": "pull-heavy",
      "side": "H",
      "family": "batted-ball",
-     "fires": 573,
+     "fires": 569,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "pull-side BIP rate 100th pct"
@@ -389,7 +389,7 @@
      "tag": "quick pitcher",
      "side": "P",
      "family": "sequencing",
-     "fires": 388,
+     "fires": 389,
      "population": "tempo",
      "floor": "\u2014",
      "earned": "15.6s between pitches, bases empty \u2014 among the fastest workers"
@@ -398,7 +398,7 @@
      "tag": "sinker-baller",
      "side": "P",
      "family": "arsenal",
-     "fires": 2245,
+     "fires": 2261,
      "population": "all",
      "floor": "\u2014",
      "earned": "sinker-led fastball family (34% usage)"
@@ -407,7 +407,7 @@
      "tag": "slider out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 3625,
+     "fires": 3639,
      "population": "all",
      "floor": "\u2014",
      "earned": "Slider put-away pitch \u2014 10% whiffs"
@@ -416,7 +416,7 @@
      "tag": "slow pitcher",
      "side": "P",
      "family": "sequencing",
-     "fires": 418,
+     "fires": 421,
      "population": "tempo",
      "floor": "\u2014",
      "earned": "21.4s between pitches, bases empty \u2014 among the slowest workers"
@@ -434,7 +434,7 @@
      "tag": "splitter out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 409,
+     "fires": 415,
      "population": "all",
      "floor": "\u2014",
      "earned": "Splitter put-away pitch \u2014 18% whiffs"
@@ -443,7 +443,7 @@
      "tag": "steady mix",
      "side": "P",
      "family": "sequencing",
-     "fires": 708,
+     "fires": 713,
      "population": "all",
      "floor": "\u2014",
      "earned": "pitch mix moves only 10% between ahead and behind counts (10th pct) \u2014 same arsenal in any count"
@@ -452,7 +452,7 @@
      "tag": "sweeper out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 736,
+     "fires": 753,
      "population": "all",
      "floor": "\u2014",
      "earned": "Sweeper put-away pitch \u2014 20% whiffs"
@@ -461,7 +461,7 @@
      "tag": "tunneler",
      "side": "P",
      "family": "deception",
-     "fires": 2222,
+     "fires": 2256,
      "population": "all",
      "floor": "75 (tunnel_score)",
      "earned": "league tunnel score 100th pct \u2014 release paths converge, plate locations diverge"
@@ -470,7 +470,7 @@
      "tag": "two-pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 210,
+     "fires": 211,
      "population": "starters",
      "floor": "\u2014",
      "earned": "lives on two (or fewer) pitches as a starter"
@@ -479,7 +479,7 @@
      "tag": "unpredictable",
      "side": "P",
      "family": "sequencing",
-     "fires": 712,
+     "fires": 718,
      "population": "all",
      "floor": "\u2014",
      "earned": "pitch-to-pitch entropy ratio 1.04 (100th pct) \u2014 the current pitch tells you almost nothing about the next"
@@ -488,7 +488,7 @@
      "tag": "zone hunter",
      "side": "H",
      "family": "approach",
-     "fires": 899,
+     "fires": 904,
      "population": "all",
      "floor": "50 (OSwing_pct)",
      "earned": "swing discrimination 100th pct \u2014 attacks strikes and lays off balls"
@@ -503,7 +503,7 @@
      "tag": "bad blocker",
      "side": "H",
      "family": "catcher",
-     "fires": 86,
+     "fires": 88,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "blocking 11th pct among catchers (-10 blocks above average, 30 PB+WP allowed)"
@@ -512,7 +512,7 @@
      "tag": "bat-misser",
      "side": "P",
      "family": "outcome",
-     "fires": 1502,
+     "fires": 1511,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 100th pct"
@@ -521,7 +521,7 @@
      "tag": "contact suppressor",
      "side": "P",
      "family": "outcome",
-     "fires": 1073,
+     "fires": 1084,
      "population": "all",
      "floor": "100 (HardHit_allowed)",
      "earned": "hard-hit suppression 100th pct, barrel suppression 86th"
@@ -530,7 +530,7 @@
      "tag": "controls runners",
      "side": "P",
      "family": "running-game",
-     "fires": 355,
+     "fires": 390,
      "population": "runner_control",
      "floor": "\u2014",
      "earned": "runners moved mid-PA on just 1.7% of 174 chances (steals, WP and PB included)"
@@ -539,7 +539,7 @@
      "tag": "defensive liability",
      "side": "H",
      "family": "fielding",
-     "fires": 275,
+     "fires": 277,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 10th pct"
@@ -548,7 +548,7 @@
      "tag": "elite command",
      "side": "P",
      "family": "outcome",
-     "fires": 644,
+     "fires": 647,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 100th pct"
@@ -557,7 +557,7 @@
      "tag": "elite defender",
      "side": "H",
      "family": "fielding",
-     "fires": 135,
+     "fires": 136,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 100th pct"
@@ -566,7 +566,7 @@
      "tag": "elite framer",
      "side": "H",
      "family": "catcher",
-     "fires": 114,
+     "fires": 120,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "shadow-zone strike-stealing 100th pct among catchers (+7.4 pp vs league on edge pitches)"
@@ -575,7 +575,7 @@
      "tag": "fly-ball prone",
      "side": "P",
      "family": "outcome",
-     "fires": 918,
+     "fires": 930,
      "population": "all",
      "floor": "\u2014",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -593,7 +593,7 @@
      "tag": "good blocker",
      "side": "H",
      "family": "catcher",
-     "fires": 100,
+     "fires": 101,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "blocking 100th pct among catchers (+16 blocks above average, 31 PB+WP allowed)"
@@ -602,7 +602,7 @@
      "tag": "ground-baller",
      "side": "P",
      "family": "outcome",
-     "fires": 1543,
+     "fires": 1548,
      "population": "all",
      "floor": "100 (GB_pct_pitch)",
      "earned": "ground-ball rate 100th pct"
@@ -611,7 +611,7 @@
      "tag": "high steal rate",
      "side": "H",
      "family": "running-game",
-     "fires": 601,
+     "fires": 602,
      "population": "steal_attempts",
      "floor": "\u2014",
      "earned": "18 of 18 (100%) \u2014 safe when he goes"
@@ -620,7 +620,7 @@
      "tag": "high-K",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 685,
+     "fires": 704,
      "population": "all",
      "floor": "30 (K_pct)",
      "earned": "strikeout rate 89th pct (more Ks than 89% of this season's hitters)"
@@ -629,7 +629,7 @@
      "tag": "invisible ball",
      "side": "P",
      "family": "deception",
-     "fires": 795,
+     "fires": 797,
      "population": "all",
      "floor": "\u2014",
      "earned": "whiff rate +10.5% above what velocity predicts (100th pct) \u2014 misses bats the radar gun can't explain"
@@ -638,7 +638,7 @@
      "tag": "low steal rate",
      "side": "H",
      "family": "running-game",
-     "fires": 164,
+     "fires": 165,
      "population": "steal_attempts",
      "floor": "\u2014",
      "earned": "11 of 17 (65%) \u2014 caught often"
@@ -647,7 +647,7 @@
      "tag": "pitch-to-contact",
      "side": "P",
      "family": "outcome",
-     "fires": 1160,
+     "fires": 1172,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
@@ -656,7 +656,7 @@
      "tag": "platoon liability",
      "side": "H",
      "family": "platoon",
-     "fires": 1005,
+     "fires": 1063,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "wOBA 0.283 vs same-hand, 0.374 vs opposite \u2014 a 0.091 gap the opponent can exploit"
@@ -665,7 +665,7 @@
      "tag": "platoon-vulnerable",
      "side": "P",
      "family": "platoon",
-     "fires": 1586,
+     "fires": 1701,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "wOBA allowed 0.351 vs opp-hand, 0.273 vs same \u2014 a 0.078 gap"
@@ -674,7 +674,7 @@
      "tag": "plus command",
      "side": "P",
      "family": "outcome",
-     "fires": 1116,
+     "fires": 1125,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 88th pct"
@@ -692,7 +692,7 @@
      "tag": "plus power",
      "side": "H",
      "family": "bat",
-     "fires": 1421,
+     "fires": 1427,
      "population": "all",
      "floor": "150 (ISO)",
      "earned": "ISO 81th pct \u2014 real thump"
@@ -701,16 +701,16 @@
      "tag": "poor framer",
      "side": "H",
      "family": "catcher",
-     "fires": 106,
+     "fires": 112,
      "population": "catchers",
      "floor": "\u2014",
-     "earned": "shadow-zone strike rate 10th pct among catchers (-4.2 pp vs league on edge pitches)"
+     "earned": "shadow-zone strike rate 11th pct among catchers (-4.9 pp vs league on edge pitches)"
     },
     {
      "tag": "power bat",
      "side": "H",
      "family": "bat",
-     "fires": 912,
+     "fires": 914,
      "population": "all",
      "floor": "150 (ISO)",
      "earned": "ISO 100th pct \u2014 elite raw power (barrel + hard-hit composite 98th pct)"
@@ -719,7 +719,7 @@
      "tag": "rarely strikes out",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 271,
+     "fires": 273,
      "population": "pa200",
      "floor": "\u2014",
      "earned": "strikeout rate 10th pct of the season \u2014 elite bat-to-ball"
@@ -728,7 +728,7 @@
      "tag": "reverse split",
      "side": "HP",
      "family": "platoon",
-     "fires": 1389,
+     "fires": 1465,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "wOBA 0.350 vs same-hand, 0.260 vs opposite \u2014 matchup-proof the wrong way around"
@@ -737,7 +737,7 @@
      "tag": "walk machine",
      "side": "H",
      "family": "approach",
-     "fires": 1312,
+     "fires": 1317,
      "population": "all",
      "floor": "60 (BB_pct)",
      "earned": "walk rate 88th pct"
@@ -746,7 +746,7 @@
      "tag": "walk prone",
      "side": "P",
      "family": "outcome",
-     "fires": 1561,
+     "fires": 1581,
      "population": "all",
      "floor": "\u2014",
      "earned": "walk avoidance 13th pct"
@@ -755,7 +755,7 @@
      "tag": "weak contact",
      "side": "H",
      "family": "bat",
-     "fires": 420,
+     "fires": 421,
      "population": "all",
      "floor": "150 (Barrel_pct)",
      "earned": "barrel + hard-hit composite 14th pct"
@@ -770,7 +770,7 @@
      "tag": "everyday player",
      "side": "H",
      "family": "role",
-     "fires": 1340,
+     "fires": 1343,
      "population": "all",
      "floor": "\u2014",
      "earned": "747 PA \u2014 100th pct of the season (in the lineup daily)"
@@ -779,7 +779,7 @@
      "tag": "heavy usage",
      "side": "P",
      "family": "role",
-     "fires": 1238,
+     "fires": 1246,
      "population": "relievers",
      "floor": "\u2014",
      "earned": "69 appearances \u2014 an every-other-day arm"
@@ -788,7 +788,7 @@
      "tag": "high-leverage arm",
      "side": "P",
      "family": "role",
-     "fires": 648,
+     "fires": 677,
      "population": "relievers",
      "floor": "\u2014",
      "earned": "11.9% avg win-prob swing per PA \u2014 trusted with the tight spots"
@@ -797,7 +797,7 @@
      "tag": "mop-up duty",
      "side": "P",
      "family": "role",
-     "fires": 691,
+     "fires": 726,
      "population": "relievers",
      "floor": "\u2014",
      "earned": "1.4% avg win-prob swing per PA \u2014 used when the game is decided"
@@ -806,7 +806,7 @@
      "tag": "multi-inning reliever",
      "side": "P",
      "family": "role",
-     "fires": 293,
+     "fires": 300,
      "population": "relievers",
      "floor": "\u2014",
      "earned": "11.0 BF per appearance \u2014 length out of the pen"
@@ -815,7 +815,7 @@
      "tag": "platoon specialist",
      "side": "P",
      "family": "platoon",
-     "fires": 1191,
+     "fires": 1188,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "67% of BF vs same-hand hitters \u2014 deployed for the matchup"
@@ -833,7 +833,7 @@
      "tag": "super-utility",
      "side": "H",
      "family": "fielding",
-     "fires": 573,
+     "fires": 602,
      "population": "positions",
      "floor": "\u2014",
      "earned": "5 positions with real innings \u2014 3B 27% / 2B 22% / LF 17% / RF 16% / SS 15%"
@@ -842,7 +842,7 @@
      "tag": "swingman",
      "side": "P",
      "family": "role",
-     "fires": 918,
+     "fires": 920,
      "population": "all",
      "floor": "\u2014",
      "earned": "18 starts + 11 relief appearances \u2014 fills whatever role is open"
@@ -851,7 +851,7 @@
      "tag": "workhorse",
      "side": "P",
      "family": "role",
-     "fires": 461,
+     "fires": 466,
      "population": "starters",
      "floor": "\u2014",
      "earned": "831 BF \u2014 top of the league in workload"
@@ -866,7 +866,7 @@
      "tag": "lucky",
      "side": "H",
      "family": "luck",
-     "fires": 478,
+     "fires": 480,
      "population": "all",
      "floor": "100 (xwOBA)",
      "earned": "wOBA far above xwOBA (top decile of luck delta) \u2014 results outran the contact"
@@ -875,7 +875,7 @@
      "tag": "unlucky",
      "side": "H",
      "family": "luck",
-     "fires": 512,
+     "fires": 514,
      "population": "all",
      "floor": "100 (xwOBA)",
      "earned": "xwOBA far above wOBA (bottom decile of luck delta) \u2014 contact deserved better"
