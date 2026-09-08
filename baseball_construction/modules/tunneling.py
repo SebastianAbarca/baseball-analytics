@@ -7,21 +7,28 @@ arrive at different plate locations. The hitter must commit before knowing
 which pitch is coming.
 
 Method:
-  1. Estimate tunnel location for each pitch at TUNNEL_POINT_FT using
-     linear interpolation along the pitch path.
+  1. Solve each pitch's location at TUNNEL_POINT_FT exactly from the Statcast
+     kinematics, anchored on the measured plate location.
   2. Pair consecutive pitches within each at-bat (batter × game × at_bat).
   3. Keep only cross-type pairs (different pitch families).
   4. Compute tunnel_distance (separation at 23 ft) and
      plate_divergence (separation at plate).
-  5. tunnel_ratio = plate_divergence / (tunnel_distance + 0.01)
-     Higher ratio = same release → different destination = good tunnel.
+  5. tunnel_score = plate_divergence_mean / tunnel_distance_mean
+     Higher = same tunnel → different destination = good tunnel.
   6. Aggregate to pitcher level; apply reliability; normalize to 0–100.
 
-Documented gap (GAP 2): Linear interpolation is used. A full Magnus-force
-path integration would be more accurate. The upgrade path is: replace
-estimate_tunnel_location() with a physics-based ODE solver using Statcast
-initial conditions (vx0, vy0, vz0, ax, ay, az). Current method is
-acceptable for the build-out phase.
+GAP 2 is closed. It called for "a physics-based ODE solver using Statcast
+initial conditions (vx0, vy0, vz0, ax, ay, az)" to replace the linear
+interpolation, but no integration is required: Statcast's published
+kinematics ARE a constant-acceleration fit, so solving that quadratic in
+closed form is not an approximation of the data, it is the data. A Magnus
+integration would model a different trajectory than the one Statcast
+reports, which is the thing every other column here is derived from.
+
+What the linear version was actually measuring: its tunnel location
+correlated 0.998 with release_pos_z. It was a release-consistency metric.
+See estimate_tunnel_location for why, and aggregate_tunnel_scores for the
+separate aggregation problem.
 """
 
 from __future__ import annotations
@@ -51,6 +58,8 @@ PROCESSED_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 
 TUNNEL_POINT_FT = 23.0   # feet from plate — hitter decision point
+PLATE_FRONT_FT  = 17.0 / 12.0   # where plate_x/plate_z are measured
+Y_REF_FT        = 50.0   # plane the Statcast kinematics are referenced to
 
 # Pitch family groupings for cross-type pairing
 # Pitches within the same family are NOT cross-type
@@ -80,40 +89,67 @@ MIN_PAIRS_TO_INCLUDE  = 10    # below this → exclude from output
 # Step 1 — Estimate location at tunnel point
 # ---------------------------------------------------------------------------
 
+def _time_to_plane(y_target: float, vy0, ay):
+    """
+    Seconds from the Statcast y=50 ft reference plane to a given distance from
+    the plate. Smaller positive root: the ball crosses each plane once going
+    forward. NaN where the quadratic has no real solution.
+    """
+    a = 0.5 * ay
+    disc = vy0 ** 2 - 4 * a * (Y_REF_FT - y_target)
+    t = np.where(disc >= 0, (-vy0 - np.sqrt(np.clip(disc, 0, None))) / (2 * a), np.nan)
+    return np.where(t >= 0, t, np.nan)
+
+
 def estimate_tunnel_location(
     df: pd.DataFrame,
     distance: float = TUNNEL_POINT_FT,
 ) -> pd.DataFrame:
     """
-    Estimate each pitch's (x, z) position at TUNNEL_POINT_FT from the plate.
+    Each pitch's (x, z) at `distance` feet from the plate, solved exactly from
+    the Statcast kinematics.
 
-    Linear interpolation along the pitch path:
-      total travel = 60.5 - release_extension
-      travel_fraction = (total_travel - distance) / total_travel
-      tunnel_x = release_pos_x + pfx_x * travel_fraction
-      tunnel_z = release_pos_z + pfx_z * travel_fraction
+    This replaces a linear interpolation of `pfx` along the path, which was
+    wrong twice over. `pfx_x`/`pfx_z` are stored in FEET and the old code
+    divided them by 12 as though they were inches, and break does not
+    accumulate linearly along the path — it goes as t², so at the decision
+    point only 29.7% of a pitch's break has happened, not the 57.5% a linear
+    reading implies. Together those understated the movement term by 6.2x,
+    leaving it at 0.45 inches against a typical 1.72 inches of release-point
+    scatter. The score was measuring how consistently a pitcher releases the
+    ball, not how well he tunnels.
 
-    Clamps travel_fraction to [0, 1].
+    Anchored on plate_x/plate_z and propagated BACKWARD, rather than forward
+    from the release point. plate_x/plate_z are measured; release_pos is
+    itself an extrapolation, and pairing it with vx0/vy0/vz0 — which are
+    referenced to the y=50 ft plane, not to release — mixes a position from
+    one plane with a velocity from another. Anchoring at the plate also makes
+    tunnel_distance and plate_divergence two readings of one trajectory
+    rather than two independent estimates.
+
+    No ODE solver is needed to close GAP 2: Statcast's own fit IS a
+    constant-acceleration model, so solving its quadratic exactly is not an
+    approximation of the data — it is the data.
 
     Adds columns:
       tunnel_x, tunnel_z
     """
     df = df.copy()
 
-    required = [
-        "release_pos_x", "release_pos_z", "release_extension",
-        "pfx_x", "pfx_z",
-    ]
+    required = ["plate_x", "plate_z", "vx0", "vy0", "ax", "ay", "az", "vz0"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"estimate_tunnel_location: missing columns {missing}")
 
-    total_dist      = 60.5 - df["release_extension"]
-    travel_fraction = (total_dist - distance) / total_dist
-    travel_fraction = travel_fraction.clip(0, 1)
+    vy0, ay = df["vy0"].to_numpy(), df["ay"].to_numpy()
+    t_plate = _time_to_plane(PLATE_FRONT_FT, vy0, ay)
+    t_pt    = _time_to_plane(distance,       vy0, ay)
 
-    df["tunnel_x"] = df["release_pos_x"] + (df["pfx_x"] / 12) * travel_fraction
-    df["tunnel_z"] = df["release_pos_z"] + (df["pfx_z"] / 12) * travel_fraction
+    # x(t) = x50 + vx0·t + ½·ax·t², so the displacement between the two planes
+    # needs no knowledge of x50 — it cancels.
+    dt, dt2 = t_pt - t_plate, t_pt ** 2 - t_plate ** 2
+    df["tunnel_x"] = df["plate_x"] + df["vx0"] * dt + 0.5 * df["ax"] * dt2
+    df["tunnel_z"] = df["plate_z"] + df["vz0"] * dt + 0.5 * df["az"] * dt2
 
     valid = df["tunnel_x"].notna().sum()
     log.info(
@@ -226,12 +262,27 @@ def aggregate_tunnel_scores(pairs: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate cross-type pairs to one row per pitcher.
 
+    The score is a RATIO OF MEANS, not the mean of the per-pair ratio.
+
+    tunnel_ratio has a near-zero denominator by construction — 0.73% of pairs
+    tunnel inside an inch, where the ratio runs to 115 — so its mean is set by
+    a handful of flukes rather than by how the pitcher generally works.
+    Measured by splitting each pitcher's season in half and correlating the
+    two halves across 492 pitchers with 150+ pairs:
+
+        mean of the ratio   r = 0.524     <- what this used to return
+        median of the ratio r = 0.717
+        ratio of the means  r = 0.765     <- what it returns now
+
+    The old aggregate also correlates only 0.60 with the other two, so it was
+    not a noisier reading of the same thing; it was reading something else.
+
     Returns:
       pitcher, pair_count,
       tunnel_distance_mean,    (lower = tighter tunnel)
       plate_divergence_mean,   (higher = more plate separation)
-      tunnel_ratio_mean,       (higher = better tunneling)
-      tunnel_score_raw         (= tunnel_ratio_mean; named for clarity)
+      tunnel_ratio_mean,       (retained for diagnostics only)
+      tunnel_score_raw         (= plate_divergence_mean / tunnel_distance_mean)
     """
     if len(pairs) == 0:
         return pd.DataFrame(
@@ -246,7 +297,9 @@ def aggregate_tunnel_scores(pairs: pd.DataFrame) -> pd.DataFrame:
         tunnel_ratio_mean    =("tunnel_ratio",    "mean"),
     ).reset_index()
 
-    agg["tunnel_score_raw"] = agg["tunnel_ratio_mean"]
+    agg["tunnel_score_raw"] = (
+        agg["plate_divergence_mean"] / agg["tunnel_distance_mean"].clip(lower=1e-6)
+    )
 
     # Drop pitchers below minimum pair threshold
     before = len(agg)

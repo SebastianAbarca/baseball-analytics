@@ -3735,6 +3735,79 @@ def _reference_pitch(pitches: dict) -> str | None:
     return max(pool, key=lambda k: pool[k].get("usage_pct") or 0)
 
 
+_TUNNEL_GRID_MAX = 55.0    # ft; beyond the deepest release point in the data
+_TUNNEL_GRID_N   = 140
+_TUNNEL_MIN_COUNT = 50     # pitches before an arm's shape joins the average
+_TUNNEL_LEAGUE_CACHE: dict[int, dict[str, np.ndarray]] = {}
+
+
+def _tunnel_grid() -> np.ndarray:
+    return np.linspace(_TUNNEL_GRID_MAX, PLATE_Y, _TUNNEL_GRID_N)
+
+
+def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
+    """
+    The league's mean separation-from-fastball curve for each pitch type.
+
+    Answers the question the single-pitcher view cannot: is this curveball
+    hiding behind the fastball longer than a curveball normally does, or does
+    every curveball look like that? Built the same way as the pitcher's own
+    lines — each arm measured against HIS reference fastball — then averaged
+    per pitch type on a common grid.
+
+    One arm, one vote, above a minimum pitch count. Weighting by volume would
+    let a handful of high-usage starters set the shape of the league.
+    """
+    if season in _TUNNEL_LEAGUE_CACHE:
+        return _TUNNEL_LEAGUE_CACHE[season]
+
+    grid = _tunnel_grid()
+    totals: dict[str, np.ndarray] = {}
+    counts: dict[str, np.ndarray] = {}
+    try:
+        import json
+        pdir = _HERE.parent / "data" / "processed" / "portraits"
+        for path in sorted(pdir.glob(f"*_{season}.json")):
+            try:
+                p = json.loads(path.read_text())
+            except Exception:
+                continue
+            by_type = (p.get("arsenal_trajectories") or {}).get("by_pitch_type") or {}
+            arms: dict[int, dict] = {}
+            for pt, entries in by_type.items():
+                for e in entries:
+                    if (e.get("pitch_count") or 0) >= _TUNNEL_MIN_COUNT:
+                        arms.setdefault(int(e.get("player_id") or -1), {})[pt] = e
+            for pitches in arms.values():
+                ref = _reference_pitch(pitches)
+                if ref is None:
+                    continue
+                for name, e in pitches.items():
+                    if name == ref:
+                        continue
+                    try:
+                        ys, d = tunnel_separation(pitches[ref], e)
+                    except Exception:
+                        continue
+                    # ys descends; np.interp needs it ascending. Outside the
+                    # pair's own range (before the later release) stays NaN.
+                    v = np.interp(grid, ys[::-1], d[::-1],
+                                  left=np.nan, right=np.nan)
+                    ok = np.isfinite(v)
+                    if name not in totals:
+                        totals[name] = np.zeros(_TUNNEL_GRID_N)
+                        counts[name] = np.zeros(_TUNNEL_GRID_N)
+                    totals[name][ok] += v[ok]
+                    counts[name][ok] += 1
+    except Exception:
+        pass
+
+    out = {k: np.where(counts[k] > 0, totals[k] / np.maximum(counts[k], 1), np.nan)
+           for k in totals}
+    _TUNNEL_LEAGUE_CACHE[season] = out
+    return out
+
+
 def tunnel_profile(portrait: dict,
                    player_ids: list[int] | None = None,
                    pitch_types: list[str] | None = None) -> go.Figure:
@@ -3771,7 +3844,10 @@ def tunnel_profile(portrait: dict,
         return empty_figure("No pitches selected")
 
     fig = go.Figure()
-    dashes = ["solid", "dot", "dash", "longdash"]
+    # "dot" is reserved for the league-average reference lines below, so a
+    # second pitcher cannot be confused for an average.
+    dashes = ["solid", "dash", "longdash", "dashdot"]
+    shown_types: set[str] = set()
     for i, pid in enumerate([p for p in wanted if p in arms]):
         pitches = arms[pid]
         ref = _reference_pitch(pitches)
@@ -3785,11 +3861,17 @@ def tunnel_profile(portrait: dict,
             ys, d = tunnel_separation(pitches[ref], e)
             at_commit = float(np.interp(COMMIT_FT, ys[::-1], d[::-1]))
             code = _PITCH_NAME_TO_CODE.get(name, "")
+            shown_types.add(name)
             fig.add_trace(go.Scatter(
                 x=ys, y=d, mode="lines",
                 line=dict(color=_PITCH_COLORS.get(code, COLORS["subtext"]),
                           width=2, dash=dashes[i % len(dashes)]),
                 name=f"{name} · {who}" if multi else name,
+                # Grouped by pitch type so the legend toggles a pitch and its
+                # league-average reference together. The average is a property
+                # of the pitch type, so with two pitchers on the chart both
+                # sliders and the one slider average share the group.
+                legendgroup=name,
                 hovertemplate=(f"<b>{name}</b> vs {ref}"
                                "<br>%{y:.1f}\" apart at %{x:.0f} ft"
                                f"<br>At the decision point: {at_commit:.1f}\""
@@ -3798,6 +3880,28 @@ def tunnel_profile(portrait: dict,
 
     if not fig.data:
         return empty_figure("Need at least two pitches to compare")
+
+    # League average for each pitch type on the chart, drawn underneath in the
+    # same colour. Without it a curve at 2" reads as remarkable when it may
+    # just be what a curveball does.
+    league = tunnel_league_average(int(portrait.get("season") or 0))
+    grid = _tunnel_grid()
+    drew_avg = False
+    for name in sorted(shown_types):
+        avg = league.get(name)
+        if avg is None or not np.isfinite(avg).any():
+            continue
+        code = _PITCH_NAME_TO_CODE.get(name, "")
+        fig.add_trace(go.Scatter(
+            x=grid, y=avg, mode="lines",
+            line=dict(color=_PITCH_COLORS.get(code, COLORS["subtext"]),
+                      width=1, dash="dot"),
+            opacity=0.5,
+            name=f"{name} — league avg", showlegend=False, legendgroup=name,
+            hovertemplate=(f"<b>{name}</b> — league average"
+                           "<br>%{y:.1f}\" apart at %{x:.0f} ft<extra></extra>"),
+        ))
+        drew_avg = True
 
     # The decision point is the whole reason the curve matters — separation to
     # the left of this line is what the hitter gets to use.
@@ -3815,9 +3919,11 @@ def tunnel_profile(portrait: dict,
         title=dict(
             text="Tunnelling — separation from the fastball<br>"
                  f"<sup>vs {', '.join(ref_names)} · lower for longer is a "
-                 "better tunnel</sup><br>"
-                 "<sup>everything right of the dotted line is break the hitter "
-                 "cannot act on</sup>",
+                 "better tunnel"
+                 + (" · dotted = league average for that pitch" if drew_avg else "")
+                 + "</sup><br>"
+                 "<sup>everything right of the vertical line is break the "
+                 "hitter cannot act on</sup>",
             font=dict(size=13, color=COLORS["text"]), x=0.5,
         ),
         xaxis=dict(

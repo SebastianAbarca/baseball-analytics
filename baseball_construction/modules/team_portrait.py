@@ -2265,6 +2265,16 @@ _FINGERPRINT_POOL_GLOBS = (
     "*history*.csv", "*prior*.parquet",
 )
 
+# Derived pools that do NOT live in PROCESSED_DIR and so are invisible to the
+# globs above. tunneling.py writes tunnel_league_*.parquet into its own
+# modules/processed directory, which meant a change to how tunnel_score is
+# computed could not move the fingerprint: every portrait stayed a cache hit
+# and kept a `tunneler` tag cut by the old maths. Same failure as the stale
+# schema-20 portraits, one directory further out.
+_FINGERPRINT_EXTRA_POOLS = (
+    (Path(__file__).resolve().parent / "processed", "tunnel_league_*.parquet"),
+)
+
 
 def _jsonable(obj):
     """
@@ -2311,8 +2321,10 @@ def _stable_repr(v) -> str:
 
 def _pool_digest() -> str:
     parts = []
-    for pattern in _FINGERPRINT_POOL_GLOBS:
-        for path in sorted(PROCESSED_DIR.glob(pattern)):
+    targets = [(PROCESSED_DIR, pat) for pat in _FINGERPRINT_POOL_GLOBS]
+    targets += list(_FINGERPRINT_EXTRA_POOLS)
+    for directory, pattern in targets:
+        for path in sorted(directory.glob(pattern)):
             h = hashlib.sha256()
             try:
                 with open(path, "rb") as fh:
