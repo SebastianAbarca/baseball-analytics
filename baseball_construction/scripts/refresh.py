@@ -137,7 +137,50 @@ def stage_statcast(seasons: list[int], dry: bool) -> list[int]:
         if cache.stat().st_mtime > before:
             log.info("  %d: topped up", s)
             moved.append(s)
+    if not dry:
+        _write_strike_zone_table(seasons)
     return moved
+
+
+STRIKE_ZONE_TABLE = _HERE.parent / "dashboard" / "strike_zones.json"
+
+
+def _write_strike_zone_table(seasons: list[int]) -> None:
+    """
+    Precompute each season's average strike zone into a small JSON.
+
+    The dashboard draws the zone at the season's measured sz_top/sz_bot rather
+    than a fixed constant, and it was reading that straight out of the raw
+    Statcast parquet at render time: a 105 MB file resident on the serving
+    machine, opened to produce two floats. Serving would have needed the whole
+    ~977 MB of raw data for twenty-four numbers.
+
+    Computed here instead, where the raw data already lives, so the web tier
+    can hold portraits and nothing else.
+    """
+    import json
+    import pandas as pd
+
+    table = {}
+    if STRIKE_ZONE_TABLE.exists():
+        try:
+            table = json.loads(STRIKE_ZONE_TABLE.read_text())
+        except Exception:
+            table = {}
+    for s in seasons:
+        path = RAW_DIR / f"statcast_{s}.parquet"
+        if not path.exists():
+            continue
+        df = pd.read_parquet(path, columns=["sz_top", "sz_bot"])
+        top = pd.to_numeric(df["sz_top"], errors="coerce").mean()
+        bot = pd.to_numeric(df["sz_bot"], errors="coerce").mean()
+        if pd.notna(top) and pd.notna(bot) and 2.0 < top < 5.0 and 0.5 < bot < 2.5:
+            table[str(s)] = {"top": round(float(top), 4),
+                             "bot": round(float(bot), 4),
+                             "pitches": int(len(df))}
+    STRIKE_ZONE_TABLE.parent.mkdir(parents=True, exist_ok=True)
+    STRIKE_ZONE_TABLE.write_text(json.dumps(table, indent=1, sort_keys=True))
+    log.info("  wrote %s — %d seasons", STRIKE_ZONE_TABLE.name, len(table))
 
 
 PROCESSED = _HERE.parent / "data" / "processed"
@@ -356,6 +399,31 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
         for s in todo:
             _, n, secs = _rebuild_season(s)
             log.info("  %d done — %d portraits in %.0fs", s, n, secs)
+
+    # Did the fingerprint move underneath the rebuild?
+    #
+    # The history and prior pools feed the fingerprint AND are created as a
+    # side effect of building a portrait, so a rebuild that starts with them
+    # missing — which is exactly what `sources` leaves behind — writes every
+    # portrait stamped with the fingerprint of an empty pool set, and they all
+    # read as stale the moment the last pool lands. build_fingerprint is
+    # memoised per process, so no worker notices.
+    #
+    # Seen for real: a full 18-minute rebuild stamped 058b98caea4eb62e while
+    # the true value ended up 8c49e074df66b935. The portraits were CORRECT —
+    # each was built against properly regenerated pools — but every one of
+    # them looked stale, so the next run would have rebuilt the lot again.
+    after = build_fingerprint(refresh=True)
+    if after != fp:
+        log.warning(
+            "  fingerprint moved during the rebuild: %s -> %s.\n"
+            "  The pools these portraits depend on were still being written "
+            "when the build started, so they are stamped with a value that is "
+            "already out of date. The DATA is fine; the stamp is not.\n"
+            "  Run the portraits stage once more to settle it — the pools all "
+            "exist now, so the second pass converges:\n"
+            "      python scripts/refresh.py --stages portraits --jobs %d",
+            fp, after, max(1, jobs))
 
 
 def stage_tags(dry: bool) -> None:

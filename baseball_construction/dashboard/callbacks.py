@@ -42,6 +42,37 @@ from datetime import datetime as _datetime
 _PORTRAIT_CACHE = _HERE.parent / "data" / "processed" / "portraits"
 _PORTRAIT_CACHE.mkdir(parents=True, exist_ok=True)
 
+# Read-only mode: serve portraits, never build one.
+#
+# On a cache miss the dashboard otherwise loads a full season of Statcast
+# (~1.2 GB resident for 712k pitches) and builds the portrait itself, then
+# writes it. Two things wrong with that off a build machine. It needs the
+# whole ~977 MB of raw pitch data on the web tier, when the artefact a reader
+# actually consumes is a 239 KB JSON. And it makes the dashboard a WRITER —
+# which is how a portrait built against half-regenerated pools got saved
+# mid-rebuild and then looked like a valid cache hit forever.
+#
+# Set BASEBALL_READ_ONLY=1 in any deployment. Portraits then come from disk
+# or Supabase Storage, and a genuine miss reports itself instead of silently
+# spending a gigabyte to paper over it. scripts/refresh.py is the only writer.
+import os as _os
+
+READ_ONLY = _os.environ.get("BASEBALL_READ_ONLY", "").strip().lower() in (
+    "1", "true", "yes", "on")
+if READ_ONLY:
+    log.info("BASEBALL_READ_ONLY set — portraits will be served, never built")
+
+
+def _read_only_banner(team: str, season) -> "object":
+    import dash_bootstrap_components as dbc
+    from dash import html
+    return dbc.Alert(
+        [html.Strong(f"{team} {season}"),
+         " is not in the portrait cache or storage, and this instance is "
+         "read-only. Build it with scripts/refresh.py."],
+        color="warning", className="py-1 mb-0",
+    )
+
 
 def _cache_path(team: str, season: int) -> Path:
     return _PORTRAIT_CACHE / f"{team}_{season}.json"
@@ -227,6 +258,11 @@ def build_portrait(team: str, season: int):
             return storage_json, banner
         except Exception as exc:
             log.warning("Storage portrait parse failed: %s", exc)
+
+    if READ_ONLY:
+        log.warning("Portrait miss for %s %s and READ_ONLY is set — not building",
+                    team, season)
+        return no_update, _read_only_banner(team, season)
 
     try:
         statcast = pull_statcast_season(int(season))
@@ -623,6 +659,11 @@ def _build_cmp_portrait(team: str, season: int):
             return cached_json, banner
         except Exception as exc:
             log.warning("Compare portrait disk cache read failed: %s", exc)
+
+    if READ_ONLY:
+        log.warning("Compare portrait miss for %s %s and READ_ONLY is set — "
+                    "not building", team, season)
+        return no_update, _read_only_banner(team, season)
 
     try:
         statcast = pull_statcast_season(int(season))

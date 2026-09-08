@@ -458,23 +458,55 @@ def strike_zone(season: int) -> tuple[float, float]:
 
     Width is NOT computed — the plate is 17 inches by rule, so the half-width
     of 0.833 ft (plate plus a ball radius each side) is the same every year.
+
+    Read from a precomputed table rather than from raw Statcast. This used to
+    open statcast_{season}.parquet at render time — a 105 MB file, to produce
+    two floats — which meant serving the dashboard required the whole ~977 MB
+    of raw pitch data on the web tier for twenty-four numbers. refresh.py
+    computes the table where the raw data already lives.
     """
     if season in _STRIKE_ZONE_CACHE:
         return _STRIKE_ZONE_CACHE[season]
     top, bot = ABS_SZ_TOP, ABS_SZ_BOT
-    try:
-        import pandas as _pd
-        path = _HERE.parent / "data" / "raw" / f"statcast_{season}.parquet"
-        if path.exists():
-            df = _pd.read_parquet(path, columns=["sz_top", "sz_bot"])
-            t = _pd.to_numeric(df["sz_top"], errors="coerce").mean()
-            b = _pd.to_numeric(df["sz_bot"], errors="coerce").mean()
-            if _pd.notna(t) and _pd.notna(b) and 2.0 < t < 5.0 and 0.5 < b < 2.5:
-                top, bot = float(t), float(b)
-    except Exception:
-        pass
+
+    table = _strike_zone_table()
+    row = table.get(str(season))
+    if row:
+        top, bot = float(row["top"]), float(row["bot"])
+    else:
+        # Development fallback: a season the table has not been built for yet.
+        # Never reached on a deployment that ships no raw data, which is the
+        # point — it degrades to the ABS constants instead of failing.
+        try:
+            import pandas as _pd
+            path = _HERE.parent / "data" / "raw" / f"statcast_{season}.parquet"
+            if path.exists():
+                df = _pd.read_parquet(path, columns=["sz_top", "sz_bot"])
+                t = _pd.to_numeric(df["sz_top"], errors="coerce").mean()
+                b = _pd.to_numeric(df["sz_bot"], errors="coerce").mean()
+                if _pd.notna(t) and _pd.notna(b) and 2.0 < t < 5.0 and 0.5 < b < 2.5:
+                    top, bot = float(t), float(b)
+        except Exception:
+            pass
+
     _STRIKE_ZONE_CACHE[season] = (top, bot)
     return top, bot
+
+
+_STRIKE_ZONE_TABLE_CACHE: dict | None = None
+
+
+def _strike_zone_table() -> dict:
+    """Season → measured zone, written by scripts/refresh.py. Read once."""
+    global _STRIKE_ZONE_TABLE_CACHE
+    if _STRIKE_ZONE_TABLE_CACHE is None:
+        try:
+            import json
+            _STRIKE_ZONE_TABLE_CACHE = json.loads(
+                (_HERE / "strike_zones.json").read_text())
+        except Exception:
+            _STRIKE_ZONE_TABLE_CACHE = {}
+    return _STRIKE_ZONE_TABLE_CACHE
 
 
 def _pitch_mix(season: int) -> dict[int, list[dict]]:
