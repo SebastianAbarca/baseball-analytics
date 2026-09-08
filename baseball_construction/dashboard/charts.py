@@ -59,12 +59,22 @@ from team_portrait import kind_of  # noqa: E402
 # ---------------------------------------------------------------------------
 PLATE_HALF_WIDTH = 0.7083  # ft — half the 17" plate; the zone's own edge
 
-# Height fallbacks, used only when strike_zone() has no measured season.
-# Named ABS_, but they are not ABS values — they are pre-ABS league averages.
-# Real ABS is 53.5% / 27% of the batter's height, which for a 6'1" batter is
-# 3.26 / 1.64 ft; the 3.38 below is 55.6% of that height, not 53.5%.
-ABS_SZ_TOP    = 3.38   # ft
-ABS_SZ_BOT    = 1.59   # ft
+# Height fallbacks, reached only when strike_zone() has no measured season —
+# a season the table has not been built for, or a deployment shipping no raw
+# data. Named for what they are, which is where the numbers came from.
+#
+# They were ABS_SZ_TOP / ABS_SZ_BOT, which claimed an authority they do not
+# have: these are pre-ABS league averages of the old per-pitch stance
+# estimates, not ABS values. Actual ABS is 53.5% / 27% of the batter's height,
+# so a 6'1" batter gets 3.26 / 1.64 ft — the 3.38 below is 55.6% of that
+# height, not 53.5%, and the gap is most of an inch at the top.
+#
+# Left at their historical values rather than swapped for ABS-consistent ones,
+# because that is a behaviour change and not a rename. Worth revisiting: from
+# 2026 a season with no table entry is an ABS season, so these overstate its
+# top by roughly two inches.
+PRE_ABS_MEAN_SZ_TOP = 3.38   # ft
+PRE_ABS_MEAN_SZ_BOT = 1.59   # ft
 # Front of home plate. Statcast measures plate_x/plate_z here and the zone is
 # judged here, so trajectories are solved to this plane and the zone must be
 # drawn on it — not at y=0, which is the back tip of the plate.
@@ -517,14 +527,21 @@ def strike_zone(season: int) -> tuple[float, float]:
     """
     (top, bottom) of the season's average strike zone in feet.
 
-    Statcast records sz_top/sz_bot per pitch, set from the batter's stance, so
-    the zone is measured rather than assumed. The ABS constants used before
-    were a fixed 3.38/1.59 and neither matched a season nor moved with one:
-    the real average is 3.361/1.594 in 2023 and 3.435/1.605 in 2025, drifting
-    as the batter population changes.
+    Statcast records sz_top/sz_bot per pitch, so the zone is measured rather
+    than assumed. The fixed pair used before, 3.38/1.59, neither matched a
+    season nor moved with one: the real average is 3.361/1.594 in 2023 and
+    3.435/1.605 in 2025, drifting as the batter population changes. It survives
+    only as the fallback, PRE_ABS_MEAN_SZ_TOP/BOT.
 
-    Width is NOT computed — the plate is 17 inches by rule, so the half-width
-    of 0.833 ft (plate plus a ball radius each side) is the same every year.
+    Note the two eras behind these numbers. Through 2025 they average per-pitch
+    estimates of the batter's stance; from 2026 they average 53.5%/27% of
+    batter height, so what drifts is roster composition and who is being
+    pitched to. See layout.data_notes() for the reader-facing version.
+
+    Width is NOT computed — the plate is 17 inches by rule, so the zone's
+    half-width is PLATE_HALF_WIDTH every year. (Whether a given pitch is a
+    strike allows a further ball radius outside that; see the geometry note at
+    the top of this module.)
 
     Read from a precomputed table rather than from raw Statcast. This used to
     open statcast_{season}.parquet at render time — a 105 MB file, to produce
@@ -534,7 +551,7 @@ def strike_zone(season: int) -> tuple[float, float]:
     """
     if season in _STRIKE_ZONE_CACHE:
         return _STRIKE_ZONE_CACHE[season]
-    top, bot = ABS_SZ_TOP, ABS_SZ_BOT
+    top, bot = PRE_ABS_MEAN_SZ_TOP, PRE_ABS_MEAN_SZ_BOT
 
     table = _strike_zone_table()
     row = table.get(str(season))
