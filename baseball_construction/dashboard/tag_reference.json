@@ -131,7 +131,7 @@
      "tag": "elite velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 986,
+     "fires": 985,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 100th pct"
@@ -158,10 +158,10 @@
      "tag": "plus velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 1423,
+     "fires": 1419,
      "population": "all",
      "floor": "\u2014",
-     "earned": "average velocity 86th pct"
+     "earned": "average velocity 89th pct"
     },
     {
      "tag": "quick pop",
@@ -512,7 +512,7 @@
      "tag": "bat-misser",
      "side": "P",
      "family": "outcome",
-     "fires": 1512,
+     "fires": 1511,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 100th pct"
@@ -521,10 +521,10 @@
      "tag": "contact suppressor",
      "side": "P",
      "family": "outcome",
-     "fires": 1090,
+     "fires": 1084,
      "population": "all",
      "floor": "100 (HardHit_allowed)",
-     "earned": "hard-hit suppression 99th pct, barrel suppression 100th"
+     "earned": "hard-hit suppression 100th pct, barrel suppression 86th"
     },
     {
      "tag": "controls runners",
@@ -575,7 +575,7 @@
      "tag": "fly-ball prone",
      "side": "P",
      "family": "outcome",
-     "fires": 933,
+     "fires": 930,
      "population": "all",
      "floor": "\u2014",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -647,7 +647,7 @@
      "tag": "pitch-to-contact",
      "side": "P",
      "family": "outcome",
-     "fires": 1171,
+     "fires": 1172,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
