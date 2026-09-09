@@ -2340,10 +2340,17 @@ def _gate_digest() -> str:
     """Every tag gate constant and vocabulary map, from the modules that cut tags."""
     import hitter_traits
     import pitcher_traits
+    import pitch_aggregates
     import reliability
 
+    # pitch_aggregates was missing, and it is not a bystander: it owns the
+    # strike-zone geometry behind zone%, chase%, CSW% and framing, all of
+    # which feed tags. A change there moved tag output while leaving the
+    # fingerprint identical — a portrait built before it and one built after
+    # were indistinguishable, which is the exact failure this digest exists to
+    # catch.
     items = []
-    for mod in (hitter_traits, pitcher_traits, reliability):
+    for mod in (hitter_traits, pitcher_traits, pitch_aggregates, reliability):
         for name in sorted(dir(mod)):
             # Module-level CONSTANTS are the gates: thresholds, floors, maps.
             if not name.isupper() or name.startswith("_"):

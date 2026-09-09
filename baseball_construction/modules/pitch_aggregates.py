@@ -67,6 +67,38 @@ _HARD_HIT_MPH = 95.0
 _FASTBALLS: frozenset[str] = frozenset({"FF", "SI", "FT"})
 
 
+# ---------------------------------------------------------------------------
+# Strike zone
+# ---------------------------------------------------------------------------
+#
+# Half-width is a real gate: 0.833 ft is the 17" plate plus a ball radius,
+# which is where a pitch is actually judged a strike, not the plate's own
+# edge (0.7083). Measured at 99.8% agreement against 2,350 ABS challenge
+# verdicts.
+ZONE_HALF_WIDTH = 0.833   # ft from centre
+
+# Top and bottom are NOT gates — every pitch carries its own sz_top/sz_bot,
+# which is that batter's zone. These are reached only when Statcast omits
+# them (0.27% of pitches), and only if a whole slice is missing, because
+# _fill_zone prefers the median of the data in hand.
+#
+# No single pair can be correct: through 2025 sz_top was a per-pitch human
+# estimate of stance, and from 2026 it is 53.5%/27% of the batter's height,
+# which moved the league mean top from 3.435 to 3.214. The old constant here
+# (3.38/1.59) was a pre-ABS average, so it overstated the ABS zone by about
+# two inches. Deriving from the data sidesteps the question entirely; these
+# exist only so an all-missing slice degrades instead of dropping every pitch
+# out of the zone.
+ZONE_TOP_LAST_RESORT = 3.30   # ft — midway between the two eras' means
+ZONE_BOT_LAST_RESORT = 1.60   # ft
+
+
+def _fill_zone(s, last_resort: float):
+    """Per-pitch zone edge, with missing values taken from the same data."""
+    med = s.median()
+    return s.fillna(med if med == med else last_resort)
+
+
 def _contact_quality_flags(df: pd.DataFrame) -> pd.DataFrame:
     """
     Adds the batted-ball and expected-outcome flag columns shared by the batter
@@ -267,16 +299,17 @@ def _pitcher_aggregates(sc: pd.DataFrame, min_bf: int = 30) -> pd.DataFrame:
     df["_is_gb"]   = df["bb_type"] == "ground_ball"
     df["_has_bip"] = df["bb_type"].notna()
 
-    # Zone flag — use per-pitch sz_top/sz_bot, fall back to ABS-standard league averages
-    # ABS averages: top=3.38 ft, bot=1.59 ft, width=±0.833 ft (17" plate + ½ ball radius)
-    _ABS_TOP   = 3.38
-    _ABS_BOT   = 1.59
-    _ABS_WIDTH = 0.833
+    # Zone flag — per-pitch sz_top/sz_bot, which IS each batter's own zone.
+    # Missing on 0.27% of pitches; those fall back to the median of the same
+    # data rather than to a constant, so the fallback is era-correct without
+    # being told which era it is. The pair that used to sit here, 3.38/1.59,
+    # was a pre-ABS league average and overstated the 2026 zone by ~2 inches
+    # at the top — see ZONE_TOP_LAST_RESORT for why no constant is right.
     plate_x = pd.to_numeric(df["plate_x"], errors="coerce")
     plate_z = pd.to_numeric(df["plate_z"], errors="coerce")
-    sz_top  = pd.to_numeric(df["sz_top"], errors="coerce").fillna(_ABS_TOP)
-    sz_bot  = pd.to_numeric(df["sz_bot"], errors="coerce").fillna(_ABS_BOT)
-    df["_in_zone"]      = (plate_x.abs() <= _ABS_WIDTH) & (plate_z >= sz_bot) & (plate_z <= sz_top)
+    sz_top  = _fill_zone(pd.to_numeric(df["sz_top"], errors="coerce"), ZONE_TOP_LAST_RESORT)
+    sz_bot  = _fill_zone(pd.to_numeric(df["sz_bot"], errors="coerce"), ZONE_BOT_LAST_RESORT)
+    df["_in_zone"]      = (plate_x.abs() <= ZONE_HALF_WIDTH) & (plate_z >= sz_bot) & (plate_z <= sz_top)
     df["_has_location"] = plate_x.notna() & plate_z.notna()
 
     # CSW flag
@@ -612,7 +645,9 @@ def compute_pitcher_leverage(statcast: pd.DataFrame, season: int) -> pd.DataFram
 _FRAMING_CACHE: dict[int, pd.DataFrame] = {}
 
 # ABS-standard zone bounds (same convention as _pitcher_aggregates)
-_FR_TOP, _FR_BOT, _FR_W = 3.38, 1.59, 0.833
+# Framing uses the same convention; top/bottom come from the data (see
+# _fill_zone), width is the judged edge.
+_FR_W = ZONE_HALF_WIDTH
 _SHADOW_BAND = 0.25   # ft each side of the zone edge = the frameable region
 
 def compute_catcher_framing(statcast: pd.DataFrame, season: int,
@@ -637,8 +672,8 @@ def compute_catcher_framing(statcast: pd.DataFrame, season: int,
 
     px = pd.to_numeric(sc["plate_x"], errors="coerce")
     pz = pd.to_numeric(sc["plate_z"], errors="coerce")
-    top = pd.to_numeric(sc["sz_top"], errors="coerce").fillna(_FR_TOP)
-    bot = pd.to_numeric(sc["sz_bot"], errors="coerce").fillna(_FR_BOT)
+    top = _fill_zone(pd.to_numeric(sc["sz_top"], errors="coerce"), ZONE_TOP_LAST_RESORT)
+    bot = _fill_zone(pd.to_numeric(sc["sz_bot"], errors="coerce"), ZONE_BOT_LAST_RESORT)
 
     # Distance outside the zone on each axis (0 inside); shadow = within the
     # band of an edge, either side.
