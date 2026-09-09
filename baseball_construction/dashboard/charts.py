@@ -4422,6 +4422,26 @@ def scout_index_stale() -> bool:
         return False
 
 
+def tag_strength(tag: str, pct) -> float | None:
+    """
+    How strongly a player has a tag, on one 0-100 scale for every tag.
+
+    The stored percentile is the percentile of the METRIC behind the tag, and
+    for 22 of them low IS the trait — `patient` is chase rate at the 5th
+    percentile, `air-ball bat` is ground-ball rate at the 5th. Printing those
+    beside a 99 says the opposite of what they mean, which matters most in
+    Compare, where the whole point is reading two numbers against each other.
+
+    Direction comes from the index catalogue, measured rather than declared.
+    Evidence keeps the underlying figure, so nothing is hidden.
+    """
+    if not isinstance(pct, (int, float)):
+        return None
+    if scout_index().get("tags", {}).get(tag, {}).get("dir") == "low":
+        return 100.0 - float(pct)
+    return float(pct)
+
+
 def scout_tag_options(side: str | None = None,
                       kinds: list[str] | None = None) -> list[dict]:
     """
@@ -4500,9 +4520,11 @@ def scout_query(tags: list[str] | None = None,
         else:
             matched = list(p.get("tg", []))
 
-        pcts = [g[1] for g in matched if g[1] is not None]
+        # Direction-normalised, or "most extreme patient" ranks the LEAST
+        # patient first — `patient` is chase rate, where low is the trait.
+        st = [s for s in (tag_strength(g[0], g[1]) for g in matched) if s is not None]
         out.append({**p, "matched": matched,
-                    "score": sum(pcts) / len(pcts) if pcts else 0.0})
+                    "score": sum(st) / len(st) if st else 0.0})
 
     keys = {
         # "extreme" ranks by how far into the tag the player actually is —
@@ -4552,7 +4574,8 @@ def scout_results(rows: list[dict], page: int = 0):
         chips, notes = [], []
         for tag, pct, ev in r["matched"]:
             k = cat.get(tag, {}).get("kind")
-            label = f"{tag} · {pct:.0f}" if isinstance(pct, (int, float)) else tag
+            st = tag_strength(tag, pct)
+            label = f"{tag} · {st:.0f}" if st is not None else tag
             chips.append(_chip(label, k, ev))
             if ev:
                 notes.append(html.Div(
@@ -4590,4 +4613,241 @@ def scout_results(rows: list[dict], page: int = 0):
             style={"fontSize": "0.7rem", "marginBottom": "6px"}),
         html.Table([head, html.Tbody(body)],
                    style={"width": "100%", "borderCollapse": "collapse"}),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Compare — put player-seasons side by side
+# ---------------------------------------------------------------------------
+#
+# Compare used to be two TEAMS: a philosophy radar, dimension bars, batting
+# bars, an archetype mix and a league board. The radar and the bars had been
+# reading portrait["scores"], a path that stopped existing when the schema
+# nested it under philosophy, so both drew flat zero for every team and had
+# done for as long as the nesting. The archetype mix was the retired
+# vocabulary. Team identity already has its own tab.
+#
+# So this is the other half of Scout: find player-seasons by tag, then set
+# them beside each other and see where they actually differ.
+
+COMPARE_MAX = 6
+
+
+def compare_key(row: dict) -> str:
+    """Stable id for a player-season: the index has no primary key of its own."""
+    return f"{row.get('i')}|{row.get('t')}|{row.get('s')}"
+
+
+def compare_player_options(query: str | None, side: str = "H",
+                           limit: int = 40) -> list[dict]:
+    """
+    Name search over the index, resolved server-side.
+
+    The index holds 18,664 player-seasons. Handing all of them to a dropdown
+    would ship megabytes of options to the browser to filter client-side, so
+    the search runs here and only the matches travel.
+    """
+    q = (query or "").strip().lower()
+    if len(q) < 2:
+        return []
+    out = []
+    for p in scout_index().get("players", []):
+        if side and p.get("d") != side:
+            continue
+        if q not in (p.get("n") or "").lower():
+            continue
+        out.append((-(p.get("v") or 0), {
+            "label": f"{p['n']} · {p['t']} {p['s']} · "
+                     f"{p.get('v') or 0:,} {'PA' if p['d'] == 'H' else 'BF'}",
+            "value": compare_key(p)}))
+    out.sort(key=lambda x: x[0])
+    return [o for _, o in out[:limit]]
+
+
+def compare_rows(keys: list[str] | None) -> list[dict]:
+    """Index rows for the chosen keys, in the order chosen."""
+    if not keys:
+        return []
+    want = {k: i for i, k in enumerate(keys)}
+    found = {}
+    for p in scout_index().get("players", []):
+        k = compare_key(p)
+        if k in want:
+            found[k] = p
+    return [found[k] for k in keys if k in found]
+
+
+def compare_tag_matrix(rows: list[dict]):
+    """
+    Tags down the side, players across the top, grouped by kind.
+
+    A matrix rather than a list per player because the question is where they
+    DIFFER, and that is a column-scan: a row with one filled cell is the
+    interesting one. Rows are ordered so those come first within each kind.
+    """
+    if not rows:
+        return html.Div("Add two or more player-seasons to compare.",
+                        className="text-secondary small p-3")
+
+    cat = scout_index().get("tags", {})
+    per = [{t[0]: t for t in r.get("tg", [])} for r in rows]
+    tags = {t for d in per for t in d}
+
+    by_kind: dict[str, list[str]] = {}
+    for t in tags:
+        by_kind.setdefault(cat.get(t, {}).get("kind", "other"), []).append(t)
+
+    th = {"color": COLORS["subtext"], "fontSize": "0.64rem", "fontWeight": "600",
+          "textTransform": "uppercase", "letterSpacing": "0.05em",
+          "padding": "5px 6px", "borderBottom": f"1px solid {COLORS['border']}",
+          "textAlign": "center", "whiteSpace": "nowrap"}
+    head = html.Thead(html.Tr(
+        [html.Th("", style={**th, "textAlign": "left", "minWidth": "150px"})] +
+        [html.Th([r["n"], html.Br(),
+                  html.Span(f"{r['t']} {r['s']}",
+                            style={"fontWeight": "400", "opacity": 0.7})], style=th)
+         for r in rows]))
+
+    body = []
+    for kind in KIND_ORDER:
+        ts = by_kind.get(kind)
+        if not ts:
+            continue
+        # Distinguishing tags first — a tag every player has says nothing.
+        ts.sort(key=lambda t: (sum(1 for d in per if t in d), t))
+        body.append(html.Tr([html.Td(
+            kind, colSpan=len(rows) + 1,
+            style={"color": KIND_COLORS.get(kind, COLORS["subtext"]),
+                   "fontSize": "0.63rem", "fontWeight": "700",
+                   "textTransform": "uppercase", "letterSpacing": "0.07em",
+                   "padding": "8px 6px 3px",
+                   "borderBottom": f"1px solid {KIND_COLORS.get(kind, '#333')}33"})]))
+        for t in ts:
+            n_have = sum(1 for d in per if t in d)
+            cells = []
+            for d in per:
+                hit = d.get(t)
+                if not hit:
+                    cells.append(html.Td("·", style={
+                        "textAlign": "center", "color": COLORS["border"],
+                        "padding": "3px 6px", "fontSize": "0.8rem"}))
+                    continue
+                st = tag_strength(t, hit[1])
+                cells.append(html.Td(
+                    f"{st:.0f}" if st is not None else "✓",
+                    title=hit[2] or "",
+                    style={"textAlign": "center", "padding": "3px 6px",
+                           "fontSize": "0.72rem", "fontWeight": "600",
+                           "color": KIND_COLORS.get(kind, COLORS["text"]),
+                           "backgroundColor": f"{KIND_COLORS.get(kind, '#666')}18"}))
+            # Unique-to-one tags are the point of the view, so they are marked.
+            label_style = {"padding": "3px 6px", "fontSize": "0.72rem",
+                           "color": COLORS["text"] if n_have < len(rows) else COLORS["subtext"],
+                           "whiteSpace": "nowrap"}
+            body.append(html.Tr([html.Td(
+                [t, html.Span("  ◄ only one", style={
+                    "color": KIND_COLORS.get(kind, COLORS["subtext"]),
+                    "fontSize": "0.6rem", "opacity": 0.85})
+                 ] if n_have == 1 and len(rows) > 1 else t, style=label_style)] + cells))
+
+    return html.Table([head, html.Tbody(body)],
+                      style={"width": "100%", "borderCollapse": "collapse"})
+
+
+# Percentile axes, in a deliberate order: what the player brings, then what
+# happens as a result. Hitters and pitchers share no axis at all, which is why
+# a comparison cannot mix the two sides.
+_CMP_AXES_H = ["Power", "Hard Hit", "Barrel Rate", "Contact", "Contact Rate",
+               "Walk Rate", "Zone Swing", "Aggression", "Speed", "Quality",
+               "Contact-First"]
+_CMP_AXES_P = ["avg_velo_pct", "K_pct_pct", "SwStr_pct_pct", "CSW_pct_pct",
+               "GB_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
+               "Barrel_allowed_pct"]
+_CMP_AXIS_LABEL = {
+    "avg_velo_pct": "Velocity", "K_pct_pct": "Strikeouts",
+    "SwStr_pct_pct": "Swing & miss", "CSW_pct_pct": "CSW",
+    "GB_pct_pct": "Ground balls", "BB_pct_pct": "Walks allowed",
+    "HardHit_allowed_pct": "Hard hit allowed",
+    "Barrel_allowed_pct": "Barrels allowed",
+}
+
+
+def compare_metrics_bars(rows: list[dict]) -> go.Figure:
+    """
+    The same percentile axes for each player, as grouped bars.
+
+    Bars rather than a radar. A radar's area is an artefact of axis order and
+    invites reading a shape that means nothing; the question here is "who is
+    higher on this axis", which is a length comparison.
+    """
+    if not rows:
+        return empty_figure("Add player-seasons to compare")
+
+    side = rows[0].get("d", "H")
+    if any(r.get("d") != side for r in rows):
+        return empty_figure("Hitters and pitchers share no percentile axes — "
+                            "compare one side at a time")
+
+    axes = [a for a in (_CMP_AXES_H if side == "H" else _CMP_AXES_P)
+            if any(a in (r.get("m") or {}) for r in rows)]
+    if not axes:
+        return empty_figure("No percentile metrics on these player-seasons")
+
+    labels = [_CMP_AXIS_LABEL.get(a, a) for a in axes]
+    fig = go.Figure()
+    for i, r in enumerate(rows):
+        m = r.get("m") or {}
+        fig.add_trace(go.Bar(
+            name=f"{r['n']} · {r['t']} {r['s']}",
+            x=labels,
+            y=[m.get(a) for a in axes],
+            marker_color=DRIFT_LINE_COLORS[i % len(DRIFT_LINE_COLORS)],
+            hovertemplate="%{x}: %{y:.0f}th pct<extra>%{fullData.name}</extra>",
+        ))
+
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=10, r=10, t=54, b=70)},
+        barmode="group",
+        title=dict(text="Percentile by metric — "
+                        + ("hitters" if side == "H" else "pitchers"),
+                   font=dict(size=13, color=COLORS["text"]), x=0.5),
+        # Pinned 0-100: these are percentiles, and letting the axis fit the
+        # data would make a group of average players look like a spread.
+        yaxis=dict(range=[0, 100], title="percentile",
+                   gridcolor=COLORS["border"],
+                   tickfont=dict(color=COLORS["subtext"], size=9)),
+        xaxis=dict(tickangle=-30, tickfont=dict(color=COLORS["text"], size=10)),
+        legend=dict(orientation="h", y=-0.28, font=dict(color=COLORS["subtext"], size=10)),
+        height=430,
+    )
+    # 50th percentile is the league, and every bar reads against it.
+    fig.add_hline(y=50, line=dict(color=COLORS["subtext"], width=1, dash="dot"),
+                  annotation_text="league average",
+                  annotation_font=dict(size=9, color=COLORS["subtext"]))
+    return fig
+
+
+def compare_summary(rows: list[dict]):
+    """One line per player: what only they have among the group."""
+    if len(rows) < 2:
+        return html.Div()
+    cat = scout_index().get("tags", {})
+    sets = [{t[0] for t in r.get("tg", [])} for r in rows]
+    shared = set.intersection(*sets) if sets else set()
+    items = []
+    for i, r in enumerate(rows):
+        only = sets[i] - set.union(*[s for j, s in enumerate(sets) if j != i])
+        chips = [_chip(t, cat.get(t, {}).get("kind")) for t in sorted(only)] or \
+                [html.Span("nothing unique", className="text-secondary",
+                           style={"fontSize": "0.68rem"})]
+        items.append(html.Div([
+            html.Span(f"{r['n']} · {r['t']} {r['s']}  ",
+                      style={"fontSize": "0.72rem", "fontWeight": "600",
+                             "color": DRIFT_LINE_COLORS[i % len(DRIFT_LINE_COLORS)]}),
+            *chips], className="mb-1"))
+    return html.Div([
+        html.Div(f"{len(shared)} tag{'s' if len(shared) != 1 else ''} in common · "
+                 f"unique to each below", className="text-secondary",
+                 style={"fontSize": "0.68rem", "marginBottom": "6px"}),
+        *items,
     ])

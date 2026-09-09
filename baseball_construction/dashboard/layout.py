@@ -900,106 +900,92 @@ def _philosophy_collapse(code: str) -> html.Div:
 
 def compare_tab() -> dbc.Tab:
     """
-    Team A vs Team B comparison tab.
-    Each team gets its own selectors + Load button, independent of the main controls.
+    Put player-seasons side by side.
+
+    This was two TEAMS: a philosophy radar, dimension bars, batting bars, an
+    archetype mix and a league board. The radar and the dimension bars read
+    portrait["scores"], a path that stopped existing when the schema nested it
+    under `philosophy`, so both drew flat zero for every team and had done for
+    as long as the nesting — 13 and 12 values, every one 0.0. The archetype
+    mix was the retired vocabulary. Team identity has its own tab already.
+
+    So Compare is now the other half of Scout: find player-seasons by tag,
+    then see where they actually differ.
     """
-    def _team_selector(suffix: str, label: str, default_team: str, default_season: str,
-                       color: str) -> dbc.Card:
-        return dbc.Card([
+    _lbl = {"className": "text-secondary small mb-1"}
+
+    return dbc.Tab(label="Compare", tab_id="tab-compare", children=[
+        dbc.Card([
             dbc.CardHeader(
-                html.Small(label, className="fw-semibold text-uppercase",
+                html.Small("Compare player-seasons", className="fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
-                                  "color": color}),
+                                  "color": "#93c5fd"}),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Team", className="text-secondary small mb-1"),
-                        dbc.Select(
-                            id=f"cmp-team-{suffix}",
-                            options=[{"label": t, "value": t} for t in MLB_TEAMS],
-                            value=default_team,
-                        ),
+                        html.Label("Side", **_lbl),
+                        dbc.Select(id="cmp-side", value="H", options=[
+                            {"label": "Hitters", "value": "H"},
+                            {"label": "Pitchers", "value": "P"}]),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label("Search by name", **_lbl),
+                        dbc.Input(id="cmp-search", placeholder="type at least two letters",
+                                  debounce=True, value=""),
                     ], md=4),
                     dbc.Col([
-                        html.Label("Season", className="text-secondary small mb-1"),
-                        dbc.Select(
-                            id=f"cmp-season-{suffix}",
-                            options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
-                            value=default_season,
-                        ),
-                    ], md=4),
-                    dbc.Col([
-                        html.Label(" ", className="text-secondary small mb-1 d-block"),
-                        dbc.Button("Load", id=f"cmp-btn-{suffix}", color="primary",
-                                   className="w-100"),
-                    ], md=4),
-                ], className="align-items-end"),
-                # Spinner and status are separate elements for the same reason
-                # as the main controls row — see status-spinner there.
-                html.Div(id=f"cmp-spinner-{suffix}", className="mt-2"),
-                html.Div(id=f"cmp-status-{suffix}", className="mt-2"),
-            ], style={"padding": "10px"}),
-        ], style=CARD_STYLE, className="mb-0")
+                        html.Label(f"Player-seasons (up to {charts.COMPARE_MAX})", **_lbl),
+                        dcc.Dropdown(id="cmp-players", multi=True,
+                                     placeholder="search, then pick",
+                                     className="dash-dropdown"),
+                    ], md=6),
+                ], className="g-2"),
+                html.Small(
+                    "Hitters and pitchers share no percentile axes, so a comparison "
+                    "holds one side at a time.",
+                    className="text-secondary", style={"fontSize": "0.66rem"}),
+                html.Div(id="cmp-status", className="mt-2"),
+            ], style={"padding": "12px"}),
+        ], style=CARD_STYLE, className="mb-3"),
 
-    return dbc.Tab(label="Compare", tab_id="tab-compare", children=[
-        dbc.Row([
-            dbc.Col(_team_selector("a", "Team A", "HOU", "2023", "#60a5fa"), md=6),
-            dbc.Col(_team_selector("b", "MIA", "MIA", "2022", "#f97316"), md=6),
-        ], className="mb-3"),
-
-        # Overlaid philosophy radar
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Philosophy Profile — Overlay", className="text-secondary fw-semibold text-uppercase",
+                html.Small("What only one of them has",
+                           className="text-secondary fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
-            dbc.CardBody(
-                dcc.Graph(id="cmp-radar", config={"displayModeBar": False}, style={"height": "420px"}),
-                style={"padding": "8px"},
-            ),
+            dbc.CardBody(html.Div(id="cmp-summary"), style={"padding": "10px"}),
         ], style=CARD_STYLE, className="mb-3"),
 
-        # Dimension scores side-by-side
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Philosophy Scores by Dimension", className="text-secondary fw-semibold text-uppercase",
+                dbc.Row([
+                    dbc.Col(html.Small("Tags, by kind",
+                                       className="text-secondary fw-semibold text-uppercase",
+                                       style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
+                            width="auto"),
+                    dbc.Col(charts.kind_legend(), width=True),
+                ], className="align-items-center g-2"),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody(dcc.Loading(html.Div(id="cmp-matrix"), type="default"),
+                         style={"padding": "10px"}),
+        ], style=CARD_STYLE, className="mb-3"),
+
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Percentiles side by side",
+                           className="text-secondary fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
-            dbc.CardBody(
-                dcc.Graph(id="cmp-dim-bars", config={"displayModeBar": False}, style={"height": "400px"}),
-                style={"padding": "8px"},
-            ),
+            dbc.CardBody(dcc.Graph(id="cmp-metrics", config={"displayModeBar": False}),
+                         style={"padding": "6px"}),
         ], style=CARD_STYLE, className="mb-3"),
 
-        # Batting metrics + archetype dist side-by-side
-        dbc.Row([
-            dbc.Col(dbc.Card([
-                dbc.CardHeader(
-                    html.Small("Batting Metrics", className="text-secondary fw-semibold text-uppercase",
-                               style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
-                    style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-                ),
-                dbc.CardBody(
-                    dcc.Graph(id="cmp-batting", config={"displayModeBar": False}, style={"height": "380px"}),
-                    style={"padding": "8px"},
-                ),
-            ], style=CARD_STYLE), md=7),
-            dbc.Col(dbc.Card([
-                dbc.CardHeader(
-                    html.Small("Hitter Archetype Mix", className="text-secondary fw-semibold text-uppercase",
-                               style={"fontSize": "0.7rem", "letterSpacing": "0.07em"}),
-                    style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
-                ),
-                dbc.CardBody(
-                    dcc.Graph(id="cmp-archetypes", config={"displayModeBar": False}, style={"height": "380px"}),
-                    style={"padding": "8px"},
-                ),
-            ], style=CARD_STYLE), md=5),
-        ]),
 
         # ── League Identity Board ──────────────────────────────────────────
         dbc.Card([
@@ -1029,7 +1015,6 @@ def compare_tab() -> dbc.Tab:
             ], style={"padding": "10px"}),
         ], style=CARD_STYLE, className="mb-3 mt-3"),
     ])
-
 
 def scout_tab() -> dbc.Tab:
     """
@@ -1178,8 +1163,6 @@ def full_layout() -> html.Div:
             html.Div(id="team-header", className="mb-3 p-3 rounded",
                      style={"backgroundColor": "#1f2937", "border": "1px solid #374151"}),
             dcc.Store(id="portrait-store"),
-            dcc.Store(id="cmp-store-a"),
-            dcc.Store(id="cmp-store-b"),
             dcc.Loading(
                 id="global-spinner",
                 type="circle",

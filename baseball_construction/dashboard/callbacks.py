@@ -637,118 +637,59 @@ clientside_callback(
 
 
 # ---------------------------------------------------------------------------
-# Comparison Callbacks — Team A and Team B portrait builders + chart renderers
+# Compare — player-seasons side by side
 # ---------------------------------------------------------------------------
+#
+# Replaces the team-vs-team callbacks. Two of those fed charts that read
+# portrait["scores"], a key that has been nested under `philosophy` since the
+# schema changed, so cmp-radar and cmp-dim-bars had been drawing flat zero for
+# every team — 13 and 12 values, all 0.0 — for as long as the nesting.
 
-def _build_cmp_portrait(team: str, season: int):
-    """Shared portrait builder for comparison tab — checks disk cache first."""
+@callback(
+    Output("cmp-players", "options"),
+    Input("cmp-search",   "value"),
+    Input("cmp-side",     "value"),
+)
+def cmp_player_options(query, side):
+    """
+    Resolve the name search server-side.
+
+    The index holds 18,664 player-seasons; handing them all to the dropdown
+    would ship megabytes of options for the browser to filter.
+    """
+    return charts.compare_player_options(query, side or "H")
+
+
+@callback(
+    Output("cmp-summary", "children"),
+    Output("cmp-matrix",  "children"),
+    Output("cmp-metrics", "figure"),
+    Output("cmp-status",  "children"),
+    Input("cmp-players",  "value"),
+)
+def cmp_render(keys):
     import dash_bootstrap_components as dbc
-    from dash import html
 
-    cp = _cache_path(team, int(season))
+    keys = (keys or [])[:charts.COMPARE_MAX]
+    rows = charts.compare_rows(keys)
+    if not rows:
+        return (html.Div(), charts.compare_tag_matrix([]),
+                charts.empty_figure("Search for player-seasons to compare"), "")
 
-    if _cache_valid(cp, int(season)):
-        try:
-            cached_json = cp.read_text()
-            cached = json.loads(cached_json)
-            cov  = cached.get("data_coverage", 0.0)
-            banner = dbc.Alert(
-                [html.Strong(f"{team} {season}"), f" loaded · {cov:.0%} coverage · ⚡ cached"],
-                color="success", className="py-1 mb-0",
-            )
-            return cached_json, banner
-        except Exception as exc:
-            log.warning("Compare portrait disk cache read failed: %s", exc)
+    sides = {r.get("d") for r in rows}
+    status = dbc.Alert(
+        [html.Strong(f"{len(rows)} player-season{'s' if len(rows) != 1 else ''}"),
+         " · " + " vs ".join(f"{r['n']} {r['t']} {r['s']}" for r in rows)]
+        + ([html.Br(), html.Small(
+            "Mixing hitters and pitchers — they share no percentile axes, so "
+            "the chart below cannot be drawn.", className="text-warning")]
+           if len(sides) > 1 else []),
+        color="warning" if len(sides) > 1 else "success", className="py-1 mb-0")
 
-    if READ_ONLY:
-        log.warning("Compare portrait miss for %s %s and READ_ONLY is set — "
-                    "not building", team, season)
-        return no_update, _read_only_banner(team, season)
-
-    try:
-        statcast = pull_statcast_season(int(season))
-        portrait = build_team_portrait(team, int(season), statcast=statcast)
-        serialized = _serialize(portrait)
-        try:
-            cp.write_text(serialized)
-        except Exception as exc:
-            log.warning("Compare portrait disk cache write failed: %s", exc)
-        cov = portrait.get("data_coverage", 0.0)
-        banner = dbc.Alert(
-            [html.Strong(f"{team} {season}"), f" loaded · {cov:.0%} coverage"],
-            color="success", className="py-1 mb-0",
-        )
-        return serialized, banner
-    except Exception as exc:
-        log.exception("compare portrait failed: %s", exc)
-        return no_update, dbc.Alert(f"Error: {exc}", color="danger", className="py-1")
-
-
-@callback(
-    Output("cmp-store-a",    "data"),
-    Output("cmp-status-a",   "children"),
-    Input("cmp-btn-a",       "n_clicks"),
-    State("cmp-team-a",      "value"),
-    State("cmp-season-a",    "value"),
-    running=[
-        (Output("cmp-btn-a", "disabled"), True, False),
-        # Spinner goes to cmp-spinner-a, not the Output this callback
-        # writes — no_update as a `running` off-value is rendered by Dash as a
-        # literal {_dash_no_update} object child.
-        (Output("cmp-spinner-a", "children"),
-         __import__("dash_bootstrap_components").Alert(
-             "Loading Team A…", color="primary", className="py-1 mb-0"),
-         ""),
-    ],
-    prevent_initial_call=True,
-)
-def build_cmp_portrait_a(n_clicks, team, season):
-    if not team or not season:
-        return no_update, no_update
-    return _build_cmp_portrait(team, int(season))
-
-
-@callback(
-    Output("cmp-store-b",    "data"),
-    Output("cmp-status-b",   "children"),
-    Input("cmp-btn-b",       "n_clicks"),
-    State("cmp-team-b",      "value"),
-    State("cmp-season-b",    "value"),
-    running=[
-        (Output("cmp-btn-b", "disabled"), True, False),
-        # Spinner goes to cmp-spinner-b, not the Output this callback
-        # writes — no_update as a `running` off-value is rendered by Dash as a
-        # literal {_dash_no_update} object child.
-        (Output("cmp-spinner-b", "children"),
-         __import__("dash_bootstrap_components").Alert(
-             "Loading Team B…", color="warning", className="py-1 mb-0"),
-         ""),
-    ],
-    prevent_initial_call=True,
-)
-def build_cmp_portrait_b(n_clicks, team, season):
-    if not team or not season:
-        return no_update, no_update
-    return _build_cmp_portrait(team, int(season))
-
-
-@callback(
-    Output("cmp-radar",      "figure"),
-    Output("cmp-dim-bars",   "figure"),
-    Output("cmp-batting",    "figure"),
-    Output("cmp-archetypes", "figure"),
-    Input("cmp-store-a",     "data"),
-    Input("cmp-store-b",     "data"),
-)
-def update_compare_charts(data_a, data_b):
-    pa = _deserialize(data_a)
-    pb = _deserialize(data_b)
-    return (
-        charts.compare_radar(pa, pb),
-        charts.compare_dim_bars(pa, pb),
-        charts.compare_batting_bars(pa, pb),
-        charts.compare_archetype_bars(pa, pb),
-    )
+    return (charts.compare_summary(rows),
+            charts.compare_tag_matrix(rows),
+            charts.compare_metrics_bars(rows),
+            status)
 
 
 # ---------------------------------------------------------------------------

@@ -481,6 +481,7 @@ def _write_scout_index() -> None:
     GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
     cat: dict[str, dict] = {}
     counts: Counter = Counter()
+    pcts: defaultdict = defaultdict(list)
     sides: defaultdict = defaultdict(set)
     players: list[dict] = []
     seasons: set[int] = set()
@@ -506,6 +507,8 @@ def _write_scout_index() -> None:
                         cat[tag] = {"kind": kind_of(tag) or "other",
                                     "family": t.get("family")}
                     pct = t.get("pct")
+                    if isinstance(pct, (int, float)):
+                        pcts[tag].append(float(pct))
                     tg.append([tag,
                                round(float(pct), 1) if isinstance(pct, (int, float)) else None,
                                t.get("evidence")])
@@ -523,10 +526,29 @@ def _write_scout_index() -> None:
                           if isinstance(v, (int, float))},
                 })
 
+    # Direction. A tag's percentile is the percentile of the METRIC behind it,
+    # not of the trait's strength, and for 22 of them low IS the trait:
+    # `patient` is chase rate at the 5th percentile, `air-ball bat` is
+    # ground-ball rate at the 5th. Rendering a bare 5 beside a 99 says the
+    # opposite of what it means.
+    #
+    # Derivable rather than declared: measured over all 87,133 firings, 22
+    # tags never exceed the 50th percentile, 37 never fall below it, and
+    # exactly none straddle it. So the observed range settles direction
+    # without a hand-maintained list that could drift from the gates.
     for tag, meta in cat.items():
         meta["n"] = counts[tag]
         s = sides[tag]
         meta["side"] = "B" if len(s) > 1 else next(iter(s), None)
+        seen = pcts.get(tag)
+        if not seen:
+            meta["dir"] = None          # categorical: handedness, out-pitch
+        elif max(seen) <= 50:
+            meta["dir"] = "low"
+        elif min(seen) >= 50:
+            meta["dir"] = "high"
+        else:
+            meta["dir"] = "high"        # never observed; treat as ordinary
 
     out = {
         "fingerprint": build_fingerprint(),
