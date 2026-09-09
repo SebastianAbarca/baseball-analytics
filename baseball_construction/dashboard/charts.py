@@ -4902,9 +4902,30 @@ def _cosine(a: dict[str, float], b: dict[str, float]) -> float:
     return num / (na * nb) if na and nb else 0.0
 
 
+def attribute_options(side: str = "H") -> list[dict]:
+    """
+    Attribute tags for the comp filter, with incidence.
+
+    These are the tags left OUT of the similarity vector — handedness and
+    delivery geometry. Measured, they do not tilt a comp list so much as
+    collapse it: including them takes Judge's neighbours from 3-of-6 sharing
+    his handedness to 6-of-6, with Mookie Betts occupying four of the slots
+    and Votto and Belt, who are genuinely similar hitters, dropping out
+    entirely. So they are a filter instead — a constraint you ask for, rather
+    than a thumb on the scale you cannot see.
+    """
+    cat = scout_index().get("tags", {})
+    rows = [(-(m.get("n") or 0), t, m) for t, m in cat.items()
+            if m.get("kind") == "attribute"
+            and m.get("side") in (side, "B")]
+    rows.sort()
+    return [{"label": f"{t}  ·  {m.get('n', 0):,}", "value": t} for _, t, m in rows]
+
+
 def player_comps(key: str, limit: int = 8, min_vol: int = 300,
                  use_attributes: bool = False,
-                 same_season_only: bool = False) -> tuple[dict | None, list[tuple[float, dict]]]:
+                 same_season_only: bool = False,
+                 require: list[str] | None = None) -> tuple[dict | None, list[tuple[float, dict]]]:
     """
     Nearest player-seasons to `key`, by tag profile. Returns (target, comps).
 
@@ -4922,6 +4943,7 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
     if not tv:
         return target, []
 
+    need = set(require or [])
     out = []
     for p in scout_index().get("players", []):
         if p.get("d") != target.get("d"):
@@ -4929,6 +4951,11 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
         if compare_key(p) == key:
             continue
         if (p.get("v") or 0) < min_vol:
+            continue
+        # Attribute constraint. Applied to the CANDIDATES only and never to
+        # the vector, so it narrows who is eligible without changing what
+        # "similar" means for those who are.
+        if need and not need <= {t[0] for t in p.get("tg", [])}:
             continue
         if same_season_only and p.get("s") != target.get("s"):
             continue

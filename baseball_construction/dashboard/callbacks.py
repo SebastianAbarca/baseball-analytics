@@ -799,18 +799,29 @@ def comp_player_options(query, side):
 
 
 @callback(
+    Output("comp-require", "options"),
+    Input("scout-side",    "value"),
+)
+def comp_require_options(side):
+    """Attribute tags — the ones held out of the vector — offered as a filter."""
+    return charts.attribute_options(side or "H")
+
+
+@callback(
     Output("comp-results", "children"),
     Input("comp-player",   "value"),
     Input("comp-min-vol",  "value"),
+    Input("comp-require",  "value"),
 )
-def comp_render(key, min_vol):
+def comp_render(key, min_vol, require):
     """
     Nearest player-seasons by tag profile — the League Identity Board's
     mechanism one level down, computed per request rather than stored.
     """
     if not key:
         return charts.comp_results(None, [])
-    target, comps = charts.player_comps(key, min_vol=int(min_vol or 0))
+    target, comps = charts.player_comps(key, min_vol=int(min_vol or 0),
+                                        require=require or None)
     return charts.comp_results(target, comps)
 
 
