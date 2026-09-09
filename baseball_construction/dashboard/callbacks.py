@@ -646,18 +646,34 @@ clientside_callback(
 # every team — 13 and 12 values, all 0.0 — for as long as the nesting.
 
 @callback(
-    Output("cmp-players", "options"),
-    Input("cmp-search",   "value"),
-    Input("cmp-side",     "value"),
+    Output("cmp-players",  "options"),
+    Input("cmp-players",   "search_value"),
+    Input("cmp-side",      "value"),
+    State("cmp-players",   "value"),
 )
-def cmp_player_options(query, side):
+def cmp_player_options(search, side, chosen):
     """
-    Resolve the name search server-side.
+    Search from inside the dropdown, resolved server-side.
 
     The index holds 18,664 player-seasons; handing them all to the dropdown
-    would ship megabytes of options for the browser to filter.
+    would ship megabytes for the browser to filter. Driving it from
+    `search_value` means the box the user types in is the box that searches —
+    this used to be fed by a separate input beside it, so the dropdown's own
+    search filtered an empty list until you had typed somewhere else.
+
+    Already-chosen player-seasons are appended to every result. Dash renders a
+    selected value using the options list, so a selection whose option has been
+    replaced by the next search would show as a bare key or vanish.
     """
-    return charts.compare_player_options(query, side or "H")
+    opts = charts.compare_player_options(search, side or "H")
+    have = {o["value"] for o in opts}
+    for row in charts.compare_rows(chosen or []):
+        k = charts.compare_key(row)
+        if k not in have:
+            opts.append({"label": f"{row['n']} · {row['t']} {row['s']} · "
+                                  f"{row.get('v') or 0:,} {'PA' if row['d']=='H' else 'BF'}",
+                         "value": k})
+    return opts
 
 
 @callback(
@@ -790,12 +806,21 @@ def scout_paginate(prev_c, next_c, page, rows):
 
 @callback(
     Output("comp-player", "options"),
-    Input("comp-search",  "value"),
+    Input("comp-player",  "search_value"),
     Input("scout-side",   "value"),
+    State("comp-player",  "value"),
 )
-def comp_player_options(query, side):
-    """Same server-side name search as Compare; side follows the Scout filter."""
-    return charts.compare_player_options(query, side or "H")
+def comp_player_options(search, side, chosen):
+    """Searches from inside the dropdown — see cmp_player_options."""
+    opts = charts.compare_player_options(search, side or "H")
+    have = {o["value"] for o in opts}
+    for row in charts.compare_rows([chosen] if chosen else []):
+        k = charts.compare_key(row)
+        if k not in have:
+            opts.append({"label": f"{row['n']} · {row['t']} {row['s']} · "
+                                  f"{row.get('v') or 0:,} {'PA' if row['d']=='H' else 'BF'}",
+                         "value": k})
+    return opts
 
 
 @callback(

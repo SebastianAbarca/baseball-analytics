@@ -962,16 +962,12 @@ def compare_tab() -> dbc.Tab:
                             {"label": "Pitchers", "value": "P"}]),
                     ], md=2),
                     dbc.Col([
-                        html.Label("Search by name", **_lbl),
-                        dbc.Input(id="cmp-search", placeholder="type at least two letters",
-                                  debounce=True, value=""),
-                    ], md=4),
-                    dbc.Col([
                         html.Label(f"Player-seasons (up to {charts.COMPARE_MAX})", **_lbl),
+                        # Searches itself — see the note in scout_tab.
                         dcc.Dropdown(id="cmp-players", multi=True,
-                                     placeholder="search, then pick",
+                                     placeholder="type a player's name…",
                                      className="dash-dropdown"),
-                    ], md=6),
+                    ], md=10),
                 ], className="g-2"),
                 html.Small(
                     "Hitters and pitchers share no percentile axes, so a comparison "
@@ -1128,15 +1124,17 @@ def scout_tab() -> dbc.Tab:
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Search by name", **_lbl),
-                        dbc.Input(id="comp-search", placeholder="type at least two letters",
-                                  debounce=True, value=""),
-                    ], md=4),
-                    dbc.Col([
                         html.Label("Player-season", **_lbl),
-                        dcc.Dropdown(id="comp-player", placeholder="search, then pick",
+                        # The dropdown does its own searching, via search_value.
+                        # It used to sit beside a separate "search by name" box
+                        # that loaded its options, which meant the search box
+                        # inside the dropdown filtered a list that was empty
+                        # until you had typed somewhere else first. Nobody
+                        # would find that, and it read as simply broken.
+                        dcc.Dropdown(id="comp-player",
+                                     placeholder="type a player's name…",
                                      className="dash-dropdown"),
-                    ], md=5),
+                    ], md=9),
                     dbc.Col([
                         html.Label("Min PA / BF", **_lbl),
                         dbc.Input(id="comp-min-vol", type="number", value=300, min=0, step=25),
