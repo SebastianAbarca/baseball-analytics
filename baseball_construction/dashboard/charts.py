@@ -59,22 +59,41 @@ from team_portrait import kind_of  # noqa: E402
 # ---------------------------------------------------------------------------
 PLATE_HALF_WIDTH = 0.7083  # ft — half the 17" plate; the zone's own edge
 
+# First season Statcast's zone came from a formula rather than a per-pitch
+# estimate of the batter's stance. Lives here rather than in layout because
+# layout imports charts and not the other way round.
+ABS_FIRST_SEASON = 2026
+
 # Height fallbacks, reached only when strike_zone() has no measured season —
 # a season the table has not been built for, or a deployment shipping no raw
-# data. Named for what they are, which is where the numbers came from.
+# data.
 #
-# They were ABS_SZ_TOP / ABS_SZ_BOT, which claimed an authority they do not
-# have: these are pre-ABS league averages of the old per-pitch stance
-# estimates, not ABS values. Actual ABS is 53.5% / 27% of the batter's height,
-# so a 6'1" batter gets 3.26 / 1.64 ft — the 3.38 below is 55.6% of that
-# height, not 53.5%, and the gap is most of an inch at the top.
+# There are TWO of them because there are two eras, and one pair cannot serve
+# both. A single fallback of 3.38/1.59 was wrong in each direction at once:
+# it understated the pre-ABS zone and overstated the ABS zone by about two
+# inches at the top. Which era a season belongs to is knowable from the season
+# number, so the fallback picks.
 #
-# Left at their historical values rather than swapped for ABS-consistent ones,
-# because that is a behaviour change and not a rename. Worth revisiting: from
-# 2026 a season with no table entry is an ABS season, so these overstate its
-# top by roughly two inches.
-PRE_ABS_MEAN_SZ_TOP = 3.38   # ft
-PRE_ABS_MEAN_SZ_BOT = 1.59   # ft
+# Both pairs are MEASURED, not assumed — the mean of the per-season means in
+# strike_zones.json, so they are what the table would have said.
+#
+#   pre-ABS   mean of the 2015-2025 season means
+#   ABS       the 2026 mean, i.e. the formula evaluated on real batters
+#
+# That the ABS pair is the formula is checkable, and it checks out exactly:
+# 3.214/0.535 = 6.008 ft and 1.622/0.27 = 6.008 ft — the same implied batter
+# height from both ends, to four decimals. The ABS zone is 53.5%/27% of a
+# league-average batter of 6'0.1".
+#
+# Residual limitation, and the reason this is a stand-in rather than a fix:
+# ABS is defined per batter, so no single pair is right for anyone in
+# particular. It is the right average and the wrong individual. Anything
+# reasoning about a specific hitter's zone needs their height, which the
+# portraits do not currently carry. See docs note in layout.data_notes().
+PRE_ABS_MEAN_SZ_TOP = 3.409  # ft — mean of the 2015-2025 season means
+PRE_ABS_MEAN_SZ_BOT = 1.587  # ft
+ABS_MEAN_SZ_TOP     = 3.214  # ft — 53.5% of a 6'0.1" batter, as measured
+ABS_MEAN_SZ_BOT     = 1.622  # ft — 27% of the same
 # Front of home plate. Statcast measures plate_x/plate_z here and the zone is
 # judged here, so trajectories are solved to this plane and the zone must be
 # drawn on it — not at y=0, which is the back tip of the plate.
@@ -551,7 +570,11 @@ def strike_zone(season: int) -> tuple[float, float]:
     """
     if season in _STRIKE_ZONE_CACHE:
         return _STRIKE_ZONE_CACHE[season]
-    top, bot = PRE_ABS_MEAN_SZ_TOP, PRE_ABS_MEAN_SZ_BOT
+    # Era-appropriate fallback. The zone's definition changed in 2026, so
+    # which pair is right is a property of the season, not a constant.
+    top, bot = ((ABS_MEAN_SZ_TOP, ABS_MEAN_SZ_BOT)
+                if season >= ABS_FIRST_SEASON
+                else (PRE_ABS_MEAN_SZ_TOP, PRE_ABS_MEAN_SZ_BOT))
 
     table = _strike_zone_table()
     row = table.get(str(season))
@@ -4347,3 +4370,224 @@ def pitch_arsenal_3d(portrait: dict,
         height=520,
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Scout — find player-seasons by tag
+# ---------------------------------------------------------------------------
+#
+# Reads dashboard/scout_index.json, which refresh.py flattens out of the 360
+# portraits. Scout used to query Postgres and re-derive every trait through
+# hitter_traits: a second implementation of the tag system running beside the
+# one the portraits already hold, free to disagree with every other tab, and
+# a live database sitting in the serving path. The portraits already carry
+# 18,664 player-seasons and 87,133 tag firings, each with the sentence that
+# earned it.
+
+SCOUT_PAGE_SIZE = 15
+_SCOUT_INDEX: dict | None = None
+
+
+def scout_index() -> dict:
+    """The flattened player-season index. Loaded once, ~0.17s."""
+    global _SCOUT_INDEX
+    if _SCOUT_INDEX is None:
+        import json as _json
+        import logging as _logging
+        try:
+            _SCOUT_INDEX = _json.loads((_HERE / "scout_index.json").read_text())
+        except Exception as exc:
+            # Degrade to an empty index rather than raising: a missing file
+            # should leave Scout saying "no matches", not break every tab that
+            # imports this module.
+            _logging.getLogger(__name__).warning(
+                "scout_index.json unavailable (%s) — Scout will return nothing", exc)
+            _SCOUT_INDEX = {"players": [], "tags": {}, "seasons": [], "fingerprint": None}
+    return _SCOUT_INDEX
+
+
+def scout_index_stale() -> bool:
+    """
+    True when the index was flattened from a different portrait build.
+
+    Same job the portrait fingerprint does one layer down: an index left
+    behind by a rebuild is wrong in a way nothing else would reveal, because
+    it still parses and still answers queries.
+    """
+    try:
+        from team_portrait import build_fingerprint
+        fp = scout_index().get("fingerprint")
+        return bool(fp) and fp != build_fingerprint()
+    except Exception:
+        return False
+
+
+def scout_tag_options(side: str | None = None,
+                      kinds: list[str] | None = None) -> list[dict]:
+    """
+    Tag picker options, ordered by kind then incidence.
+
+    Incidence is in the label because the tags are nowhere near equally
+    selective — `right-handed pitcher` fires 5,608 times and `forkball out
+    pitch` 13 — and a plain alphabetical list buries every tag worth picking
+    among the ones that match half the league.
+    """
+    cat = scout_index().get("tags", {})
+    want = set(kinds) if kinds else None
+    rows = []
+    for tag, m in cat.items():
+        if want and m.get("kind") not in want:
+            continue
+        if side and m.get("side") not in (side, "B"):
+            continue
+        rows.append((KIND_ORDER.index(m["kind"]) if m.get("kind") in KIND_ORDER else 99,
+                     -m.get("n", 0), tag, m))
+    rows.sort()
+    return [{"label": f"{tag}  ·  {m['kind']} · {m.get('n', 0):,}", "value": tag}
+            for _, _, tag, m in rows]
+
+
+def scout_query(tags: list[str] | None = None,
+                kinds: list[str] | None = None,
+                side: str = "H",
+                match_all: bool = True,
+                season_min: int | None = None,
+                season_max: int | None = None,
+                min_vol: int = 0,
+                exclude_limited: bool = True,
+                teams: list[str] | None = None,
+                sort: str = "extreme") -> list[dict]:
+    """
+    Filter the index. Returns rows with the matched tags attached.
+
+    `match_all` is the difference between "who is BOTH a plus power bat and
+    fast" and "who is either", and it is the whole point of a tag search, so
+    it is a control rather than a default.
+    """
+    ix = scout_index()
+    cat = ix.get("tags", {})
+    want = set(tags or [])
+    kindset = set(kinds or [])
+    teamset = set(teams or [])
+    out = []
+
+    for p in ix.get("players", []):
+        if side and p.get("d") != side:
+            continue
+        if exclude_limited and p.get("l"):
+            continue
+        s = p.get("s")
+        if season_min and s < season_min:
+            continue
+        if season_max and s > season_max:
+            continue
+        if min_vol and (p.get("v") or 0) < min_vol:
+            continue
+        if teamset and p.get("t") not in teamset:
+            continue
+
+        have = {g[0] for g in p.get("tg", [])}
+        if want:
+            if match_all and not want <= have:
+                continue
+            if not match_all and not (want & have):
+                continue
+            matched = [g for g in p["tg"] if g[0] in want]
+        elif kindset:
+            matched = [g for g in p["tg"] if cat.get(g[0], {}).get("kind") in kindset]
+            if not matched:
+                continue
+        else:
+            matched = list(p.get("tg", []))
+
+        pcts = [g[1] for g in matched if g[1] is not None]
+        out.append({**p, "matched": matched,
+                    "score": sum(pcts) / len(pcts) if pcts else 0.0})
+
+    keys = {
+        # "extreme" ranks by how far into the tag the player actually is —
+        # a percentile search whose hits are unordered is just a list.
+        "extreme": lambda r: (-r["score"], -(r.get("v") or 0)),
+        "war":     lambda r: (-(r.get("w") or -99),),
+        "volume":  lambda r: (-(r.get("v") or 0),),
+        "recent":  lambda r: (-r["s"], -(r.get("v") or 0)),
+        "name":    lambda r: (r.get("n") or "",),
+    }
+    out.sort(key=keys.get(sort, keys["extreme"]))
+    return out
+
+
+def scout_results(rows: list[dict], page: int = 0):
+    """
+    Results as a table, one row per player-season, matched tags as chips with
+    the evidence that earned each one.
+
+    Evidence is shown rather than left on hover. It is the reason to search
+    tags at all: `elite velo` is a label, "average velocity 100th pct" is the
+    finding, and 100% of the 87,133 firings carry one. A results list that
+    hides it is a list of names.
+    """
+    cat = scout_index().get("tags", {})
+    if not rows:
+        return html.Div("No player-seasons match these filters.",
+                        className="text-secondary small p-3")
+
+    pages = max(1, (len(rows) + SCOUT_PAGE_SIZE - 1) // SCOUT_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    shown = rows[page * SCOUT_PAGE_SIZE:(page + 1) * SCOUT_PAGE_SIZE]
+
+    head = html.Thead(html.Tr([
+        html.Th(h, style={"color": COLORS["subtext"], "fontSize": "0.66rem",
+                          "textTransform": "uppercase", "letterSpacing": "0.06em",
+                          "fontWeight": "600", "padding": "5px 8px",
+                          "borderBottom": f"1px solid {COLORS['border']}",
+                          "textAlign": a, "whiteSpace": "nowrap"})
+        for h, a in (("Player", "left"), ("Team", "left"), ("Yr", "left"),
+                     ("Age", "right"), ("Vol", "right"), ("WAR", "right"),
+                     ("Matched tags — and what earned them", "left"))
+    ]))
+
+    body = []
+    for r in shown:
+        chips, notes = [], []
+        for tag, pct, ev in r["matched"]:
+            k = cat.get(tag, {}).get("kind")
+            label = f"{tag} · {pct:.0f}" if isinstance(pct, (int, float)) else tag
+            chips.append(_chip(label, k, ev))
+            if ev:
+                notes.append(html.Div(
+                    [html.Span(f"{tag} — ", style={"color": KIND_COLORS.get(k, COLORS['subtext'])}),
+                     html.Span(ev, style={"color": COLORS["subtext"]})],
+                    style={"fontSize": "0.66rem", "lineHeight": "1.35"}))
+
+        cell = lambda v, a="left", c=COLORS["text"], w="400": html.Td(
+            v, style={"padding": "6px 8px", "fontSize": "0.76rem", "color": c,
+                      "textAlign": a, "fontWeight": w, "whiteSpace": "nowrap",
+                      "verticalAlign": "top",
+                      "borderBottom": f"1px solid {COLORS['border']}33"})
+
+        name = r.get("n") or "—"
+        if r.get("l"):
+            name = html.Span([name, html.Span(" ·  limited", style={
+                "color": COLORS["subtext"], "fontSize": "0.62rem"})])
+        body.append(html.Tr([
+            cell(name, "left", COLORS["text"], "600"),
+            cell(r.get("t") or "—"),
+            cell(str(r.get("s") or "—")),
+            cell(r.get("a") if r.get("a") is not None else "—", "right"),
+            cell(f"{r.get('v'):,}" if r.get("v") else "—", "right"),
+            cell(f"{r['w']:.1f}" if isinstance(r.get("w"), (int, float)) else "—", "right"),
+            html.Td([html.Div(chips, className="mb-1")] + notes,
+                    style={"padding": "6px 8px", "verticalAlign": "top",
+                           "borderBottom": f"1px solid {COLORS['border']}33"}),
+        ]))
+
+    return html.Div([
+        html.Div(
+            f"{len(rows):,} player-season{'s' if len(rows) != 1 else ''} · "
+            f"page {page + 1} of {pages}",
+            className="text-secondary",
+            style={"fontSize": "0.7rem", "marginBottom": "6px"}),
+        html.Table([head, html.Tbody(body)],
+                   style={"width": "100%", "borderCollapse": "collapse"}),
+    ])

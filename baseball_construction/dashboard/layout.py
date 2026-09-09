@@ -309,7 +309,9 @@ def tag_footer() -> html.Div:
     ], className="mt-3")
 
 
-ABS_FIRST_SEASON = 2026   # first season Statcast's zone came from a formula
+# Defined in charts, which owns the zone constants and the era-aware fallback
+# that depends on it. Re-exported here so the existing references keep working.
+ABS_FIRST_SEASON = charts.ABS_FIRST_SEASON
 
 
 def data_notes() -> html.Div:
@@ -1031,123 +1033,121 @@ def compare_tab() -> dbc.Tab:
 
 def scout_tab() -> dbc.Tab:
     """
-    Player profile search — find players matching trait-tag criteria across
-    all seeded seasons. Independent of any team portrait.
-    """
-    # Spectrum band replaces the old archetype box filter
-    SPECTRUM_BANDS = [
-        ("Any spectrum",        "Any"),
-        ("Power side (≥ 60)",   "power"),
-        ("Balanced (40–60)",    "balanced"),
-        ("Contact side (≤ 40)", "contact"),
-    ]
+    Find player-seasons by tag.
 
-    # Hitter trait tags (hitter_traits.py) — search requires ALL selected
-    TRAIT_TAGS = [
-        "power bat", "plus power", "gap hitter", "weak contact",
-        "high-K", "rarely strikes out",
-        "patient", "free swinger", "zone hunter", "walk machine", "aggressive",
-        "pull-heavy", "oppo bat", "air-ball bat", "ground-ball bat",
-        "elite speed", "fast", "station-to-station",
-        "high steal attempts", "low steal attempts",
-        "high steal rate", "low steal rate", "extra base taker",
-        "elite defender", "plus defender", "defensive liability",
-        "cannon arm", "super-utility",
-        "elite framer", "poor framer", "good blocker", "bad blocker", "quick pop",
-        "left-handed hitter", "right-handed hitter", "switch hitter",
-        "platoon liability", "reverse split",
-        "everyday player", "lucky", "unlucky",
-    ]
+    Rebuilt on the portrait index. The previous Scout queried Postgres and
+    re-derived every trait through hitter_traits — a second implementation of
+    the tag system, free to disagree with every other tab, with a live
+    database in the serving path. It also filtered on the power/contact
+    spectrum, which was retired from the rest of the UI.
+
+    Tags are side-scoped by construction: 40 fire only for hitters, 53 only
+    for pitchers, and exactly one for both. So the side control comes first
+    and everything below it narrows.
+    """
+    _lbl = {"className": "text-secondary small mb-1"}
 
     return dbc.Tab(label="Scout", tab_id="tab-scout", children=[
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Player Profile Search", className="fw-semibold text-uppercase",
+                html.Small("Find players by tag", className="fw-semibold text-uppercase",
                            style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
-                                  "color": "#9ca3af"}),
+                                  "color": "#93c5fd"}),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Spectrum", className="text-secondary small mb-1"),
-                        dbc.Select(
-                            id="scout-archetype",
-                            options=[{"label": l, "value": v} for l, v in SPECTRUM_BANDS],
-                            value="Any",
-                        ),
+                        html.Label("Side", **_lbl),
+                        dbc.Select(id="scout-side", value="H", options=[
+                            {"label": "Hitters", "value": "H"},
+                            {"label": "Pitchers", "value": "P"}]),
                     ], md=2),
                     dbc.Col([
-                        html.Label("Season range", className="text-secondary small mb-1"),
-                        dbc.Row([
-                            dbc.Col(dbc.Select(
-                                id="scout-season-min",
-                                options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
-                                value=2021,
-                            ), width=6),
-                            dbc.Col(dbc.Select(
-                                id="scout-season-max",
-                                options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
-                                value=2026,
-                            ), width=6),
-                        ], className="g-1"),
-                    ], md=2),
+                        html.Label("Kind", **_lbl),
+                        dcc.Dropdown(id="scout-kinds", multi=True, placeholder="any kind",
+                                     options=[{"label": k, "value": k} for k in charts.KIND_ORDER],
+                                     className="dash-dropdown"),
+                    ], md=4),
                     dbc.Col([
-                        html.Label("Min PA", className="text-secondary small mb-1"),
-                        dbc.Input(id="scout-min-pa", type="number",
-                                  value=200, min=50, max=700, step=50,
-                                  style={"backgroundColor": "#1f2937",
-                                         "color": "#f9fafb", "border": "1px solid #374151"}),
-                    ], md=1),
-                    dbc.Col([
-                        html.Label("Show", className="text-secondary small mb-1"),
-                        dbc.Select(
-                            id="scout-mode",
-                            options=[
-                                {"label": "Most recent season", "value": "recent"},
-                                {"label": "All seasons",        "value": "all"},
-                                {"label": "Best season (xwOBA)", "value": "best"},
-                            ],
-                            value="recent",
-                        ),
-                    ], md=2),
-                    dbc.Col([
-                        html.Label(" ", className="text-secondary small mb-1 d-block"),
-                        dbc.Button("Search", id="scout-btn", color="primary",
-                                   className="w-100"),
-                    ], md=1),
-                ], className="mb-3 align-items-end"),
+                        html.Label("Tags", **_lbl),
+                        dcc.Dropdown(id="scout-tags", multi=True,
+                                     placeholder="pick one or more tags",
+                                     className="dash-dropdown"),
+                    ], md=6),
+                ], className="g-2"),
+
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Traits (must have ALL selected)",
-                                   className="text-secondary small mb-1"),
-                        dcc.Dropdown(
-                            id="scout-modifiers",
-                            options=[{"label": t, "value": t} for t in TRAIT_TAGS],
-                            value=[],
-                            multi=True,
-                            placeholder="Any traits…",
-                            style={"backgroundColor": "#1f2937", "color": "#111827"},
-                        ),
-                    ]),
-                ], className="mb-3"),
-                html.Div(id="scout-status", className="mb-2"),
+                        html.Label("Match", **_lbl),
+                        dbc.Select(id="scout-match", value="all", options=[
+                            {"label": "all tags", "value": "all"},
+                            {"label": "any tag", "value": "any"}]),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label("Seasons", **_lbl),
+                        dbc.Row([
+                            dbc.Col(dbc.Select(id="scout-season-min", value=str(SEASONS[0]),
+                                options=[{"label": str(s), "value": str(s)} for s in SEASONS]), width=6),
+                            dbc.Col(dbc.Select(id="scout-season-max", value=str(SEASONS[-1]),
+                                options=[{"label": str(s), "value": str(s)} for s in SEASONS]), width=6),
+                        ], className="g-1"),
+                    ], md=3),
+                    dbc.Col([
+                        html.Label("Min PA / BF", **_lbl),
+                        dbc.Input(id="scout-min-vol", type="number", value=200, min=0, step=25),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label("Rank by", **_lbl),
+                        dbc.Select(id="scout-sort", value="extreme", options=[
+                            {"label": "most extreme", "value": "extreme"},
+                            {"label": "WAR", "value": "war"},
+                            {"label": "playing time", "value": "volume"},
+                            {"label": "most recent", "value": "recent"},
+                            {"label": "name", "value": "name"}]),
+                    ], md=3),
+                    dbc.Col([
+                        html.Label(" ", className="text-secondary small mb-1 d-block"),
+                        dbc.Button("Search", id="scout-btn", color="primary", className="w-100"),
+                    ], md=2),
+                ], className="g-2 mt-1 align-items-end"),
+
+                dbc.Checklist(
+                    id="scout-flags", inline=True, className="mt-2",
+                    options=[{"label": "exclude limited samples", "value": "lim"}],
+                    value=["lim"],
+                    inputStyle={"marginRight": "5px"},
+                    labelStyle={"color": "#9ca3af", "fontSize": "0.72rem",
+                                "marginRight": "14px"},
+                ),
+                html.Div(id="scout-status", className="mt-2"),
             ], style={"padding": "12px"}),
         ], style=CARD_STYLE, className="mb-3"),
 
         dbc.Card([
             dbc.CardHeader(
-                html.Small("Results", className="fw-semibold text-uppercase",
-                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
-                                  "color": "#9ca3af"}),
+                dbc.Row([
+                    dbc.Col(html.Small("Results", className="fw-semibold text-uppercase",
+                                       style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                              "color": "#93c5fd"}), width="auto"),
+                    dbc.Col(charts.kind_legend(), width=True),
+                    dbc.Col(dbc.ButtonGroup([
+                        dbc.Button("‹", id="scout-prev", size="sm", outline=True,
+                                   color="secondary"),
+                        dbc.Button("›", id="scout-next", size="sm", outline=True,
+                                   color="secondary"),
+                    ]), width="auto"),
+                ], className="align-items-center g-2"),
                 style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
             ),
             dbc.CardBody(
-                dcc.Graph(id="scout-results", config={"displayModeBar": False},
-                          style={"minHeight": "400px"}),
-                style={"padding": "8px"},
+                dcc.Loading(html.Div(id="scout-results"), type="default"),
+                style={"padding": "10px"},
             ),
-        ], style=CARD_STYLE),
+        ], style=CARD_STYLE, className="mb-3"),
+
+        dcc.Store(id="scout-store"),
+        dcc.Store(id="scout-page", data=0),
     ])
 
 

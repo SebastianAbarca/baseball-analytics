@@ -756,256 +756,109 @@ def update_compare_charts(data_a, data_b):
 # ---------------------------------------------------------------------------
 
 @callback(
-    Output("scout-results", "figure"),
-    Output("scout-status",  "children"),
-    Input("scout-btn",      "n_clicks"),
-    State("scout-archetype",   "value"),
-    State("scout-modifiers",   "value"),
-    State("scout-season-min",  "value"),
-    State("scout-season-max",  "value"),
-    State("scout-min-pa",      "value"),
-    State("scout-mode",        "value"),
+    Output("scout-tags", "options"),
+    Input("scout-side",  "value"),
+    Input("scout-kinds", "value"),
+)
+def scout_tag_choices(side, kinds):
+    """
+    Narrow the tag picker to the side, and to the kinds if any are chosen.
+
+    Tags are side-scoped by construction — 40 hitter-only, 53 pitcher-only,
+    one shared — so offering all 94 regardless of side would make most of any
+    list dead options.
+    """
+    return charts.scout_tag_options(side=side or "H", kinds=kinds or None)
+
+
+@callback(
+    Output("scout-store",  "data"),
+    Output("scout-status", "children"),
+    Output("scout-page",   "data", allow_duplicate=True),
+    Input("scout-btn",     "n_clicks"),
+    State("scout-side",    "value"),
+    State("scout-kinds",   "value"),
+    State("scout-tags",    "value"),
+    State("scout-match",   "value"),
+    State("scout-season-min", "value"),
+    State("scout-season-max", "value"),
+    State("scout-min-vol", "value"),
+    State("scout-sort",    "value"),
+    State("scout-flags",   "value"),
     prevent_initial_call=True,
 )
-def scout_search(n_clicks, archetype, modifiers, season_min, season_max, min_pa, mode):
+def scout_search(n_clicks, side, kinds, tags, match, s_min, s_max, min_vol, sort, flags):
+    """
+    Run the search against the portrait index. No database, no re-derivation.
+    """
     import dash_bootstrap_components as dbc
-    import pandas as pd
-    import numpy as np
-    from ingest import normalize_percentile, pull_fg_batting
-    from database import query_batting
-    from hitter_traits import build_hitter_traits
+    from dash import html
 
     if not n_clicks:
-        return charts.empty_figure("Set filters and click Search"), ""
+        return no_update, "", 0
 
-    season_min = int(season_min or 2021)
-    season_max = int(season_max or 2026)
-    min_pa     = int(min_pa or 200)
-    modifiers  = modifiers or []
-
-    NORM_SPECS = [
-        ("iso",        "ISO_pct",        False),
-        ("obp",        "OBP_pct",        False),
-        ("bb_rate",    "BB_pct_pct",     False),
-        ("k_rate",     "K_pct_raw_pct",  True),
-        ("barrel_pct", "Barrel_pct_pct", False),
-        ("avg",        "AVG_pct",        False),
-        ("contact_pct","Contact_pct_pct",False),
-        ("xwoba",      "xwOBA_pct",      False),
-    ]
-
-    all_profiles = []
-
-    for season in range(season_min, season_max + 1):
-        try:
-            df = query_batting(season)
-            if df is None or df.empty:
-                continue
-            df = df[df["pa"] >= min_pa].copy()
-            if df.empty:
-                continue
-
-            for raw_col, pct_col, invert in NORM_SPECS:
-                if raw_col in df.columns:
-                    df[pct_col] = normalize_percentile(
-                        pd.to_numeric(df[raw_col], errors="coerce"), invert=invert)
-
-            if "k_rate" in df.columns:
-                df["K_pct_raw_pct_noninv"] = normalize_percentile(
-                    pd.to_numeric(df["k_rate"], errors="coerce"), invert=False)
-            if "obp" in df.columns and "iso" in df.columns:
-                df["OBP_ISO_gap"] = (pd.to_numeric(df["obp"], errors="coerce") -
-                                     pd.to_numeric(df["iso"], errors="coerce"))
-                df["OBP_ISO_gap_pct"] = normalize_percentile(df["OBP_ISO_gap"])
-
-            # LuckDelta
-            try:
-                fg = pull_fg_batting(season)
-                if "est_woba_minus_woba_diff" in fg.columns and "key_mlbam" in fg.columns:
-                    fg["_luck"] = pd.to_numeric(fg["est_woba_minus_woba_diff"], errors="coerce")
-                    fv = fg[fg["_luck"].notna()].copy()
-                    if len(fv) > 1:
-                        fv["LuckDelta_pct"] = normalize_percentile(fv["_luck"]).values
-                        lm = dict(zip(pd.to_numeric(fv["key_mlbam"], errors="coerce"),
-                                      fv["LuckDelta_pct"]))
-                        df["LuckDelta_pct"] = pd.to_numeric(
-                            df["key_mlbam"], errors="coerce").map(lm)
-            except Exception:
-                pass
-
-            # Attempt rate pct
-            df["_tob"] = (pd.to_numeric(df["obp"], errors="coerce").fillna(0) *
-                          pd.to_numeric(df["pa"], errors="coerce").fillna(1))
-            df["_att"] = (pd.to_numeric(df["sb"], errors="coerce").fillna(0) +
-                          pd.to_numeric(df["cs"], errors="coerce").fillna(0))
-            df["_att_rate"] = df["_att"] / df["_tob"].clip(lower=1)
-            has_att = df["_att"] >= 2
-            df["_att_rate_pct"] = np.nan
-            if has_att.sum() > 1:
-                df.loc[has_att, "_att_rate_pct"] = normalize_percentile(
-                    df.loc[has_att, "_att_rate"]).values
-
-            pct_cols = [c for c in df.columns if c.endswith("_pct") and not c.startswith("_")]
-
-            for _, row in df.iterrows():
-                metrics = {}
-                for col in pct_cols:
-                    val = row.get(col)
-                    if val is not None and not pd.isna(val):
-                        fval = float(val)
-                        metrics[col.removesuffix("_pct")] = fval
-                        metrics[col] = fval
-
-                k_ni = row.get("K_pct_raw_pct_noninv")
-                if k_ni is not None and not pd.isna(float(k_ni)):
-                    metrics["K_pct_raw"] = float(k_ni)
-                if "BB_pct" in metrics:
-                    metrics["BB_inv_pct"] = 100.0 - metrics["BB_pct"]
-
-                k_raw = row.get("k_rate")
-                if k_raw is not None and not pd.isna(k_raw):
-                    metrics["k_rate_raw"] = float(k_raw)
-
-                sprint = row.get("sprint_speed")
-                sprint_raw = float(sprint) if sprint is not None and not pd.isna(sprint) else None
-                att_pct_v = row.get("_att_rate_pct")
-                att_pct_v = float(att_pct_v) if att_pct_v is not None and not pd.isna(float(att_pct_v)) else None
-
-                traits, spectrum = build_hitter_traits(
-                    metrics=metrics,
-                    sprint_speed_raw=sprint_raw,
-                    sb=int(row.get("sb", 0) or 0),
-                    cs=int(row.get("cs", 0) or 0),
-                    opportunities=int(float(row.get("obp") or 0) * float(row.get("pa") or 1)),
-                    attempt_rate_pct=att_pct_v,
-                )
-                all_profiles.append({
-                    "name":    row.get("name", "?"),
-                    "season":  season,
-                    "pa":      int(row.get("pa", 0) or 0),
-                    "avg":     row.get("avg"),
-                    "obp":     row.get("obp"),
-                    "slg":     row.get("slg"),
-                    "iso":     row.get("iso"),
-                    "k_rate":  row.get("k_rate"),
-                    "bb_rate": row.get("bb_rate"),
-                    "xwoba":   row.get("xwoba"),
-                    "war":     row.get("war"),
-                    "tags":    {t["tag"] for t in traits},
-                    "spectrum": spectrum,
-                    "sprint_raw": sprint_raw,
-                })
-        except Exception as exc:
-            log.warning("Scout season %s failed: %s", season, exc)
-
-    if not all_profiles:
-        return (charts.empty_figure("No data for selected seasons"),
-                dbc.Alert("No players found.", color="warning", className="py-1"))
-
-    # ── Filter by spectrum band ───────────────────────────────────────────────
-    if archetype and archetype != "Any":
-        def _in_band(p):
-            s = p.get("spectrum")
-            if s is None:
-                return False
-            if archetype == "power":
-                return s >= 60
-            if archetype == "contact":
-                return s <= 40
-            return 40 < s < 60   # balanced
-        all_profiles = [p for p in all_profiles if _in_band(p)]
-
-    # ── Filter by traits (player must have ALL selected tags) ────────────────
-    for tag in modifiers:
-        all_profiles = [p for p in all_profiles if tag in p["tags"]]
-
-    if not all_profiles:
-        return (charts.empty_figure("No players match the selected criteria"),
-                dbc.Alert(f"0 results — try relaxing the filters.", color="warning", className="py-1"))
-
-    # ── Apply mode ────────────────────────────────────────────────────────────
-    if mode == "recent":
-        seen = {}
-        for p in sorted(all_profiles, key=lambda x: x["season"], reverse=True):
-            if p["name"] not in seen:
-                seen[p["name"]] = p
-        all_profiles = list(seen.values())
-    elif mode == "best":
-        seen = {}
-        for p in all_profiles:
-            xw = float(p["xwoba"] or 0)
-            if p["name"] not in seen or xw > float(seen[p["name"]]["xwoba"] or 0):
-                seen[p["name"]] = p
-        all_profiles = list(seen.values())
-
-    all_profiles.sort(key=lambda x: -(float(x.get("war") or 0)))
-
-    # ── Build results table ──────────────────────────────────────────────────
-    def _fmt(v, fmt=".3f"):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return "—"
-        return f"{float(v):{fmt}}"
-
-    def _tags_str(p):
-        return ", ".join(sorted(p["tags"])) or "—"
-
-    def _spec_str(p):
-        s = p.get("spectrum")
-        return f"{s:.0f}" if s is not None else "—"
-
-    n = len(all_profiles)
-    COLORS_TBL = {"surface": "#1f2937", "background": "#111827",
-                  "text": "#f9fafb", "subtext": "#9ca3af", "border": "#374151"}
-    row_colors = [COLORS_TBL["surface"] if i % 2 == 0 else COLORS_TBL["background"]
-                  for i in range(n)]
-
-    import plotly.graph_objects as go
-    fig = go.Figure(go.Table(
-        columnwidth=[3, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2],
-        header=dict(
-            values=["<b>Player</b>", "<b>Yr</b>", "<b>PA</b>", "<b>WAR</b>",
-                    "<b>Spectrum</b>", "<b>AVG</b>", "<b>OBP</b>",
-                    "<b>ISO</b>", "<b>K%</b>", "<b>BB%</b>", "<b>Traits</b>"],
-            fill_color=COLORS_TBL["surface"],
-            font=dict(color=COLORS_TBL["subtext"], size=11),
-            align=["left","center","center","center","left","center",
-                   "center","center","center","center","left"],
-            line_color=COLORS_TBL["border"], height=32,
-        ),
-        cells=dict(
-            values=[
-                [p["name"] for p in all_profiles],
-                [p["season"] for p in all_profiles],
-                [p["pa"] for p in all_profiles],
-                [_fmt(p.get("war"), ".1f") for p in all_profiles],
-                [_spec_str(p) for p in all_profiles],
-                [_fmt(p.get("avg")) for p in all_profiles],
-                [_fmt(p.get("obp")) for p in all_profiles],
-                [_fmt(p.get("iso")) for p in all_profiles],
-                [_fmt(p.get("k_rate"), ".1%") for p in all_profiles],
-                [_fmt(p.get("bb_rate"), ".1%") for p in all_profiles],
-                [_tags_str(p) for p in all_profiles],
-            ],
-            fill_color=[row_colors] * 11,
-            font=dict(color=COLORS_TBL["text"], size=11),
-            align=["left","center","center","center","left","center",
-                   "center","center","center","center","left"],
-            line_color=COLORS_TBL["border"], height=27,
-        ),
-    ))
-    fig.update_layout(
-        paper_bgcolor=COLORS_TBL["background"],
-        plot_bgcolor=COLORS_TBL["background"],
-        margin=dict(l=0, r=0, t=10, b=0),
+    rows = charts.scout_query(
+        tags=tags or None, kinds=kinds or None, side=side or "H",
+        match_all=(match != "any"),
+        season_min=int(s_min) if s_min else None,
+        season_max=int(s_max) if s_max else None,
+        min_vol=int(min_vol or 0),
+        exclude_limited="lim" in (flags or []),
+        sort=sort or "extreme",
     )
+
+    what = (" + " if match != "any" else " / ").join(tags) if tags else \
+           (", ".join(kinds) if kinds else "any tag")
+    note = []
+    if charts.scout_index_stale():
+        note = [html.Br(), html.Small(
+            "The index was built from a different portrait build — "
+            "re-run scripts/refresh.py.", className="text-warning")]
 
     status = dbc.Alert(
-        f"{n} player{'s' if n != 1 else ''} matched · "
-        f"spectrum={archetype} · traits={modifiers or 'any'} · "
-        f"seasons {season_min}–{season_max} · min PA={min_pa}",
-        color="success", className="py-1 mb-0",
+        [html.Strong(f"{len(rows):,} player-seasons"),
+         f" · {what} · {'hitters' if (side or 'H') == 'H' else 'pitchers'}"
+         f" · {s_min}–{s_max}", *note],
+        color="success" if rows else "secondary", className="py-1 mb-0",
     )
-    return fig, status
+    # Stored trimmed: the full row carries every tag and metric, and only the
+    # matched ones are rendered.
+    slim = [{k: r[k] for k in ("n", "t", "s", "a", "v", "w", "l", "matched", "score")}
+            for r in rows[:2000]]
+    return slim, status, 0
+
+
+@callback(
+    Output("scout-page", "data"),
+    Input("scout-prev",  "n_clicks"),
+    Input("scout-next",  "n_clicks"),
+    State("scout-page",  "data"),
+    State("scout-store", "data"),
+    prevent_initial_call=True,
+)
+def scout_paginate(prev_c, next_c, page, rows):
+    page = int(page or 0)
+    n = len(rows or [])
+    last = max(0, (n + charts.SCOUT_PAGE_SIZE - 1) // charts.SCOUT_PAGE_SIZE - 1)
+    if ctx.triggered_id == "scout-prev":
+        return max(0, page - 1)
+    if ctx.triggered_id == "scout-next":
+        return min(last, page + 1)
+    return page
+
+
+@callback(
+    Output("scout-results", "children"),
+    Input("scout-store",    "data"),
+    Input("scout-page",     "data"),
+)
+def scout_render(rows, page):
+    if not rows:
+        from dash import html
+        return html.Div("Pick a side and one or more tags, then Search.",
+                        className="text-secondary small p-3")
+    return charts.scout_results(rows, int(page or 0))
+
 
 
 # ---------------------------------------------------------------------------
