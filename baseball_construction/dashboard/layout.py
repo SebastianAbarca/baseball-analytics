@@ -1109,6 +1109,44 @@ def scout_tab() -> dbc.Tab:
             ], style={"padding": "12px"}),
         ], style=CARD_STYLE, className="mb-3"),
 
+        # ── Plays like ────────────────────────────────────────────────────
+        # The second way to find a player: not "who has this tag" but "who
+        # resembles this one". Same mechanism the League Identity Board uses
+        # for teams — a tag vector and a cosine — one level down.
+        dbc.Card([
+            dbc.CardHeader(
+                html.Small("Or find players who play like one",
+                           className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#93c5fd"}),
+                style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+            ),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Search by name", **_lbl),
+                        dbc.Input(id="comp-search", placeholder="type at least two letters",
+                                  debounce=True, value=""),
+                    ], md=4),
+                    dbc.Col([
+                        html.Label("Player-season", **_lbl),
+                        dcc.Dropdown(id="comp-player", placeholder="search, then pick",
+                                     className="dash-dropdown"),
+                    ], md=5),
+                    dbc.Col([
+                        html.Label("Min PA / BF", **_lbl),
+                        dbc.Input(id="comp-min-vol", type="number", value=300, min=0, step=25),
+                    ], md=3),
+                ], className="g-2"),
+                html.Small(
+                    "Handedness is left out of the comparison — it fires on everyone "
+                    "and would sort the league by which side they stand on before "
+                    "anything about how they play counted.",
+                    className="text-secondary", style={"fontSize": "0.66rem"}),
+                dcc.Loading(html.Div(id="comp-results", className="mt-2"), type="default"),
+            ], style={"padding": "12px"}),
+        ], style=CARD_STYLE, className="mb-3"),
+
         dbc.Card([
             dbc.CardHeader(
                 dbc.Row([

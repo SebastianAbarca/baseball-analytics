@@ -789,6 +789,32 @@ def scout_paginate(prev_c, next_c, page, rows):
 
 
 @callback(
+    Output("comp-player", "options"),
+    Input("comp-search",  "value"),
+    Input("scout-side",   "value"),
+)
+def comp_player_options(query, side):
+    """Same server-side name search as Compare; side follows the Scout filter."""
+    return charts.compare_player_options(query, side or "H")
+
+
+@callback(
+    Output("comp-results", "children"),
+    Input("comp-player",   "value"),
+    Input("comp-min-vol",  "value"),
+)
+def comp_render(key, min_vol):
+    """
+    Nearest player-seasons by tag profile — the League Identity Board's
+    mechanism one level down, computed per request rather than stored.
+    """
+    if not key:
+        return charts.comp_results(None, [])
+    target, comps = charts.player_comps(key, min_vol=int(min_vol or 0))
+    return charts.comp_results(target, comps)
+
+
+@callback(
     Output("scout-results", "children"),
     Input("scout-store",    "data"),
     Input("scout-page",     "data"),

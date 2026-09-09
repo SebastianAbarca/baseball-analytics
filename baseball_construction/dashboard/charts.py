@@ -8,6 +8,7 @@ Dash html.Div component tree (for use in collapsible breakdown panels).
 from __future__ import annotations
 
 import colorsys
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -4850,4 +4851,139 @@ def compare_summary(rows: list[dict]):
                  f"unique to each below", className="text-secondary",
                  style={"fontSize": "0.68rem", "marginBottom": "6px"}),
         *items,
+    ])
+
+
+# ---------------------------------------------------------------------------
+# "Plays like" — nearest player-seasons by tag profile
+# ---------------------------------------------------------------------------
+#
+# The League Identity Board does this for TEAMS: a tag-density fingerprint per
+# unit, cosine similarity to every other team, and a uniqueness band. The same
+# mechanism works a level down, where the vector is one player's tags rather
+# than a unit's densities.
+#
+# Computed on demand, not precomputed: 18,664 player-seasons is 174M pairs
+# stored, but a single query is one vector against ~2,600 same-side
+# candidates, which lands in tens of milliseconds.
+
+def _comp_vector(row: dict, use_attributes: bool = False) -> dict[str, float]:
+    """
+    A player-season as a sparse tag vector.
+
+    Attribute tags are excluded by default. Handedness fires on essentially
+    everyone and would dominate the cosine, sorting the league into
+    right-handed and left-handed before anything about how a player actually
+    plays got a vote. Excluding it is visible in the results: Judge's comps
+    are right-handed, Soto's are left-handed, and neither list is driven by
+    that.
+
+    Weight is the direction-normalised strength, so `patient` at a 5th
+    percentile chase rate counts as 0.95 rather than 0.05, and a categorical
+    tag counts as simply present.
+    """
+    cat = scout_index().get("tags", {})
+    v: dict[str, float] = {}
+    for tag, pct, _ev in row.get("tg", []):
+        if not use_attributes and cat.get(tag, {}).get("kind") == "attribute":
+            continue
+        s = tag_strength(tag, pct)
+        v[tag] = 1.0 if s is None else s / 100.0
+    return v
+
+
+def _cosine(a: dict[str, float], b: dict[str, float]) -> float:
+    shared = a.keys() & b.keys()
+    if not shared:
+        return 0.0
+    num = sum(a[k] * b[k] for k in shared)
+    na = math.sqrt(sum(x * x for x in a.values()))
+    nb = math.sqrt(sum(x * x for x in b.values()))
+    return num / (na * nb) if na and nb else 0.0
+
+
+def player_comps(key: str, limit: int = 8, min_vol: int = 300,
+                 use_attributes: bool = False,
+                 same_season_only: bool = False) -> tuple[dict | None, list[tuple[float, dict]]]:
+    """
+    Nearest player-seasons to `key`, by tag profile. Returns (target, comps).
+
+    Other seasons of the SAME player are kept rather than filtered out. They
+    are the metric's own check: if a player's nearest neighbour is not usually
+    himself a year later, the similarity is not measuring anything stable.
+    Skubal 2024's closest comp is Skubal 2025 at 0.873, and Soto 2024 finds
+    Soto 2023.
+    """
+    rows = compare_rows([key])
+    if not rows:
+        return None, []
+    target = rows[0]
+    tv = _comp_vector(target, use_attributes)
+    if not tv:
+        return target, []
+
+    out = []
+    for p in scout_index().get("players", []):
+        if p.get("d") != target.get("d"):
+            continue
+        if compare_key(p) == key:
+            continue
+        if (p.get("v") or 0) < min_vol:
+            continue
+        if same_season_only and p.get("s") != target.get("s"):
+            continue
+        sim = _cosine(tv, _comp_vector(p, use_attributes))
+        if sim > 0:
+            out.append((sim, p))
+    out.sort(key=lambda x: -x[0])
+    return target, out[:limit]
+
+
+def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
+    """Comps as rows, with the tags they share with the target."""
+    if not target:
+        return html.Div("Pick a player-season to find comps for.",
+                        className="text-secondary small p-3")
+    if not comps:
+        return html.Div("No comparable player-seasons at this playing-time floor.",
+                        className="text-secondary small p-3")
+
+    cat = scout_index().get("tags", {})
+    tset = {t[0] for t in target.get("tg", [])}
+    rows = []
+    for sim, p in comps:
+        shared = [t for t in p.get("tg", []) if t[0] in tset
+                  and cat.get(t[0], {}).get("kind") != "attribute"]
+        rows.append(html.Tr([
+            html.Td(f"{sim:.3f}", style={
+                "padding": "6px 8px", "fontSize": "0.78rem", "fontWeight": "700",
+                "color": COLORS["text"], "textAlign": "right",
+                "borderBottom": f"1px solid {COLORS['border']}33"}),
+            html.Td([html.Div(p["n"], style={"fontWeight": "600"}),
+                     html.Div(f"{p['t']} {p['s']} · {p.get('v') or 0:,}",
+                              style={"color": COLORS["subtext"], "fontSize": "0.66rem"})],
+                    style={"padding": "6px 8px", "fontSize": "0.76rem",
+                           "whiteSpace": "nowrap", "verticalAlign": "top",
+                           "borderBottom": f"1px solid {COLORS['border']}33"}),
+            html.Td([_chip(t[0], cat.get(t[0], {}).get("kind"), t[2]) for t in shared],
+                    style={"padding": "6px 8px", "verticalAlign": "top",
+                           "borderBottom": f"1px solid {COLORS['border']}33"}),
+        ]))
+
+    th = {"color": COLORS["subtext"], "fontSize": "0.66rem", "fontWeight": "600",
+          "textTransform": "uppercase", "letterSpacing": "0.06em",
+          "padding": "5px 8px", "borderBottom": f"1px solid {COLORS['border']}"}
+    return html.Div([
+        html.Div([html.Span("plays like  ", style={"color": COLORS["subtext"],
+                                                   "fontSize": "0.7rem"}),
+                  html.Span(f"{target['n']} · {target['t']} {target['s']}",
+                            style={"fontWeight": "700", "fontSize": "0.8rem",
+                                   "color": COLORS["text"]})],
+                 className="mb-2"),
+        html.Table([
+            html.Thead(html.Tr([html.Th("sim", style={**th, "textAlign": "right"}),
+                                html.Th("player-season", style={**th, "textAlign": "left"}),
+                                html.Th("tags in common", style={**th, "textAlign": "left"})])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse"}),
     ])
