@@ -449,18 +449,113 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
             fp, after, max(1, jobs))
 
 
+SCOUT_INDEX = _HERE.parent / "dashboard" / "scout_index.json"
+
+
+def _write_scout_index() -> None:
+    """
+    Flatten all 360 portraits into one player-season index for Scout.
+
+    Scout currently queries Postgres and re-derives every trait through
+    hitter_traits, which is a second implementation of the tag system running
+    beside the one the portraits already hold — so it can disagree with every
+    other tab, and it puts a live database in the serving path. The portraits
+    already carry all of it: 18,664 player-seasons, every tag with the
+    evidence sentence that earned it.
+
+    Shape is chosen for a filter UI, not for readability:
+
+      tags    catalogue, tag -> {kind, family, side, n}. Kind lives here
+              rather than on all 87k firings, which is most of the saving.
+      players one row per player-season, short keys, tags as
+              [tag, pct, evidence] triples.
+
+    `fingerprint` records the portrait build this was flattened from, so a
+    stale index is detectable rather than silently wrong — the same problem
+    the portrait fingerprint exists to solve.
+    """
+    import json
+    from collections import Counter, defaultdict
+    from team_portrait import kind_of, build_fingerprint
+
+    GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
+    cat: dict[str, dict] = {}
+    counts: Counter = Counter()
+    sides: defaultdict = defaultdict(set)
+    players: list[dict] = []
+    seasons: set[int] = set()
+
+    for f in sorted(PORTRAIT_DIR.glob("*.json")):
+        try:
+            p = json.loads(f.read_text())
+        except Exception as exc:
+            log.warning("  scout index: skipping %s (%s)", f.name, exc)
+            continue
+        team, season = p.get("team"), p.get("season")
+        seasons.add(season)
+        for grp, side in GROUPS:
+            for pl in (p.get("players") or {}).get(grp) or []:
+                tg = []
+                for t in (pl.get("traits") or []):
+                    tag = t.get("tag")
+                    if not tag:
+                        continue
+                    counts[tag] += 1
+                    sides[tag].add(side)
+                    if tag not in cat:
+                        cat[tag] = {"kind": kind_of(tag) or "other",
+                                    "family": t.get("family")}
+                    pct = t.get("pct")
+                    tg.append([tag,
+                               round(float(pct), 1) if isinstance(pct, (int, float)) else None,
+                               t.get("evidence")])
+                players.append({
+                    "i": pl.get("player_id"), "n": pl.get("name"),
+                    "t": team, "s": season, "d": side, "g": grp,
+                    "a": pl.get("age"),
+                    "v": pl.get("pa") if side == "H" else pl.get("bf"),
+                    "w": round(w, 2) if isinstance((w := pl.get("war")), (int, float)) else None,
+                    "l": bool(pl.get("limited_sample")),
+                    "p": pl.get("home_position"), "h": pl.get("handedness"),
+                    "pop": pl.get("populations") or [],
+                    "tg": tg,
+                    "m": {k: round(v, 1) for k, v in (pl.get("metrics_pct") or {}).items()
+                          if isinstance(v, (int, float))},
+                })
+
+    for tag, meta in cat.items():
+        meta["n"] = counts[tag]
+        s = sides[tag]
+        meta["side"] = "B" if len(s) > 1 else next(iter(s), None)
+
+    out = {
+        "fingerprint": build_fingerprint(),
+        "seasons": [min(seasons), max(seasons)] if seasons else [],
+        "n_players": len(players),
+        "tags": dict(sorted(cat.items(), key=lambda kv: -kv[1]["n"])),
+        "players": players,
+    }
+    SCOUT_INDEX.parent.mkdir(parents=True, exist_ok=True)
+    SCOUT_INDEX.write_text(json.dumps(out, separators=(",", ":")))
+    mb = SCOUT_INDEX.stat().st_size / 1e6
+    log.info("  wrote %s — %d player-seasons, %d tags, %.1f MB",
+             SCOUT_INDEX.name, len(players), len(cat), mb)
+
+
 def stage_tags(dry: bool) -> None:
     """
-    Regenerate TAGS.md and dashboard/tag_reference.json.
+    Regenerate the dashboard's reference data from the portraits: TAGS.md,
+    tag_reference.json, and the Scout index.
 
-    Must run AFTER portraits: it counts how often each tag fires by reading
-    them, so running it first documents the previous build.
+    Must run AFTER portraits — all three are counted or flattened out of them,
+    so running first documents the previous build.
     """
     if dry:
-        log.info("  would regenerate TAGS.md and tag_reference.json")
+        log.info("  would regenerate TAGS.md, tag_reference.json, scout_index.json")
         return
     import tag_reference
     tag_reference.build(False)
+    _write_scout_index()
 
 
 def stage_upload(dry: bool) -> None:
