@@ -4773,6 +4773,25 @@ _CMP_AXIS_LABEL = {
 }
 
 
+# Player colours for Compare. Not DRIFT_LINE_COLORS, which is ordered for
+# eight lines read against a legend and opens red, orange — two warm hues a
+# step apart on the wheel. Fine when a legend disambiguates them; poor as the
+# first two, which is the common case here, where two bars stand adjacent and
+# the colour IS the label.
+#
+# Ordered so the pairwise distance is greatest at the sizes that actually
+# occur. Blue then orange is the canonical two-series pair and stays separable
+# for red-green colour blindness, which red/orange does not.
+COMPARE_COLORS = [
+    "#4dabf7",   # blue
+    "#ffa94d",   # orange
+    "#69db7c",   # green
+    "#f783ac",   # pink
+    "#b197fc",   # purple
+    "#ffd43b",   # yellow
+]
+
+
 def compare_metrics_bars(rows: list[dict]) -> go.Figure:
     """
     The same percentile axes for each player, as grouped bars.
@@ -4802,7 +4821,7 @@ def compare_metrics_bars(rows: list[dict]) -> go.Figure:
             name=f"{r['n']} · {r['t']} {r['s']}",
             x=labels,
             y=[m.get(a) for a in axes],
-            marker_color=DRIFT_LINE_COLORS[i % len(DRIFT_LINE_COLORS)],
+            marker_color=COMPARE_COLORS[i % len(COMPARE_COLORS)],
             hovertemplate="%{x}: %{y:.0f}th pct<extra>%{fullData.name}</extra>",
         ))
 
@@ -4844,7 +4863,7 @@ def compare_summary(rows: list[dict]):
         items.append(html.Div([
             html.Span(f"{r['n']} · {r['t']} {r['s']}  ",
                       style={"fontSize": "0.72rem", "fontWeight": "600",
-                             "color": DRIFT_LINE_COLORS[i % len(DRIFT_LINE_COLORS)]}),
+                             "color": COMPARE_COLORS[i % len(COMPARE_COLORS)]}),
             *chips], className="mb-1"))
     return html.Div([
         html.Div(f"{len(shared)} tag{'s' if len(shared) != 1 else ''} in common · "
