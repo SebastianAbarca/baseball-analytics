@@ -12,6 +12,7 @@ Callback 2+ are lightweight — they just call charts.py functions.
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 import logging
 import sys
 from pathlib import Path
@@ -173,10 +174,72 @@ def _serialize(portrait: dict) -> str:
     return json.dumps(portrait, cls=_NumpyEncoder, default=str)
 
 
-def _deserialize(data: str | None) -> dict | None:
+# ---------------------------------------------------------------------------
+# The portrait store holds a KEY, not a portrait
+# ---------------------------------------------------------------------------
+#
+# It used to hold the serialised portrait — 286 KB of JSON. Dash sends a
+# dcc.Store's contents back to the server for every callback that reads it, and
+# 23 callbacks read this one, so a single team switch uploaded 5.41 MB from the
+# browser: the same portrait sixteen times, 330 KB apiece for the rosters, the
+# tunnel chart, the 3D arsenal and the rest. Unnoticeable on localhost and
+# punishing over a real uplink, which is the scarce direction on a home
+# connection.
+#
+# The store now holds "TEAM|SEASON" — about a dozen bytes — and the portrait
+# stays server-side in a small LRU. Callbacks resolve the key instead of
+# receiving the payload, so the upload per switch drops to a few KB and the
+# server stops re-parsing 330 KB of JSON sixteen times per switch.
+#
+# The key doubles as the cache key, and it changes exactly when the portrait
+# should be re-read, because it IS the portrait's identity.
+
+_PORTRAIT_LRU: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_PORTRAIT_LRU_MAX = 8          # a few team-seasons; each is ~1 MB parsed
+
+
+def _store_key(team: str, season) -> str:
+    return f"{team}|{season}"
+
+
+def _deserialize(data):
+    """
+    Resolve whatever the store holds into a portrait dict.
+
+    Still accepts a full-JSON payload, so a browser holding a store from before
+    this change keeps working until it reloads instead of throwing on every
+    callback.
+    """
     if not data:
         return None
-    return json.loads(data)
+    if not isinstance(data, str):
+        return data
+    if "|" not in data or data.lstrip().startswith("{"):
+        return json.loads(data)
+
+    team, _, season = data.partition("|")
+    try:
+        path = _cache_path(team, int(season))
+        mtime = path.stat().st_mtime
+    except (OSError, ValueError):
+        return None
+
+    hit = _PORTRAIT_LRU.get(data)
+    if hit and hit[0] == mtime:      # mtime guards a rebuild underneath us
+        _PORTRAIT_LRU.move_to_end(data)
+        return hit[1]
+
+    try:
+        portrait = json.loads(path.read_text())
+    except Exception as exc:
+        log.warning("Portrait resolve failed for %s: %s", data, exc)
+        return None
+
+    _PORTRAIT_LRU[data] = (mtime, portrait)
+    _PORTRAIT_LRU.move_to_end(data)
+    while len(_PORTRAIT_LRU) > _PORTRAIT_LRU_MAX:
+        _PORTRAIT_LRU.popitem(last=False)
+    return portrait
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +300,7 @@ def build_portrait(team: str, season: int):
                     color="success", className="py-1 mb-0",
                 )
                 log.info("Portrait cache hit (disk): %s %s (%.2fs)", team, season, elapsed)
-                return cached_json, banner
+                return _store_key(team, season), banner
             else:
                 log.info("Stale disk-cached portrait (schema mismatch): %s %s — rebuilding", team, season)
         except Exception as exc:
@@ -255,7 +318,7 @@ def build_portrait(team: str, season: int):
                  f" loaded · mode={mode} · coverage={cov:.0%} · ☁️ from storage"],
                 color="success", className="py-1 mb-0",
             )
-            return storage_json, banner
+            return _store_key(team, season), banner
         except Exception as exc:
             log.warning("Storage portrait parse failed: %s", exc)
 
@@ -284,7 +347,7 @@ def build_portrait(team: str, season: int):
             ],
             color="success", className="py-1 mb-0",
         )
-        return serialized, banner
+        return _store_key(team, season), banner
 
     except Exception as exc:
         log.exception("build_portrait failed: %s", exc)
