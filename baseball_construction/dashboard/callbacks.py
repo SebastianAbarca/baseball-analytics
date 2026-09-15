@@ -29,6 +29,7 @@ from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,
                            portrait_is_current)
 from ingest import pull_statcast_season
 import charts
+from dash.exceptions import PreventUpdate
 from layout import team_header
 
 log = logging.getLogger(__name__)
@@ -973,61 +974,97 @@ def team_identity_card(data):
 # Arsenal 3D trajectory — populate dropdown + render chart
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Arsenal panel — two round trips, not four
+# ---------------------------------------------------------------------------
+#
+# This was four callbacks in a chain: the portrait chose a pitcher, the
+# pitcher's value fetched his pitch list, and the pitch list drew the 3D chart
+# and then the tunnel chart. Each arrow was a full browser-server round trip
+# waiting on the one before, so loading a team took until 960 ms to finish
+# drawing the arsenal while no single callback took longer than 82 ms. The
+# cost was latency, not work.
+#
+# Both option lists come from the portrait alone — the pitch list only needs
+# to know which pitcher was picked, and the same callback is the thing picking
+# him — so they collapse into one. The two figures take identical inputs, so
+# they collapse into the other.
+
 @callback(
     Output("arsenal-pitcher-dropdown", "options"),
     Output("arsenal-pitcher-dropdown", "value"),
+    Output("arsenal-pitch-filter",     "options"),
+    Output("arsenal-pitch-filter",     "value"),
     Input("portrait-store", "data"),
 )
-def populate_arsenal_pitchers(data):
-    """One pitcher selected by default — the heaviest workload on the staff."""
+def populate_arsenal(data):
+    """
+    Pitcher list and pitch list together.
+
+    Defaults to the heaviest-workload arm with all of his pitches on. The
+    pitch list used to wait for the pitcher dropdown's value to travel back to
+    the server before it could be built, which is a round trip to learn
+    something this callback already knew.
+    """
     p = _deserialize(data)
     if not p:
-        return [], []
+        return [], [], [], []
     choices = charts.arsenal_pitcher_choices(p)
+    if not choices:
+        return [], [], [], []
     options = [{"label": f"{n}  ({c:,} pitches)", "value": pid}
                for pid, n, c in choices]
-    return options, ([choices[0][0]] if choices else [])
+    default = [choices[0][0]]
+    pitches = charts.arsenal_pitch_choices(p, default)
+    return options, default, [{"label": pt, "value": pt} for pt in pitches], pitches
 
 
 @callback(
-    Output("arsenal-pitch-filter", "options"),
-    Output("arsenal-pitch-filter", "value"),
+    Output("arsenal-pitch-filter", "options", allow_duplicate=True),
+    Output("arsenal-pitch-filter", "value",   allow_duplicate=True),
     Input("arsenal-pitcher-dropdown", "value"),
     State("portrait-store", "data"),
+    State("arsenal-pitch-filter", "options"),
+    prevent_initial_call=True,
 )
-def populate_arsenal_pitches(player_ids, data):
-    """Pitch filter follows the pitcher choice — all his pitches on by default."""
+def arsenal_pitches_for_pitcher(player_ids, data, current_options):
+    """
+    Re-derive the pitch list when the USER changes pitcher.
+
+    Fires on any change to the pitcher value, including the one
+    populate_arsenal makes when a new portrait loads — Dash cannot tell a
+    programmatic set from a click. Left alone it re-sets a pitch list that is
+    already correct, and that write re-triggers both figures, so every team
+    switch drew the arsenal twice: once at 682 ms and again at 917 ms.
+    #
+    So compare against what the filter already offers and stand down when it
+    matches. A real pitcher change yields a different pitch list and proceeds;
+    populate_arsenal's set yields an identical one and stops here.
+    """
     p = _deserialize(data)
     if not p or not player_ids:
-        return [], []
+        raise PreventUpdate
     pitches = charts.arsenal_pitch_choices(p, player_ids)
+    if [o.get("value") for o in (current_options or [])] == list(pitches):
+        raise PreventUpdate
     return [{"label": pt, "value": pt} for pt in pitches], pitches
 
 
 @callback(
-    Output("arsenal-3d-chart", "figure"),
+    Output("arsenal-3d-chart",      "figure"),
+    Output("tunnel-profile-chart",  "figure"),
     Input("arsenal-pitcher-dropdown", "value"),
-    Input("arsenal-pitch-filter", "value"),
+    Input("arsenal-pitch-filter",     "value"),
     State("portrait-store", "data"),
 )
-def arsenal_3d(player_ids, pitch_types, data):
+def arsenal_figures(player_ids, pitch_types, data):
+    """Both arsenal views in one trip — same inputs, same portrait, same work."""
     p = _deserialize(data)
     if not p:
-        return charts.empty_figure("Load a portrait to see pitch trajectories")
-    return charts.pitch_arsenal_3d(p, player_ids, pitch_types)
-
-
-@callback(
-    Output("tunnel-profile-chart", "figure"),
-    Input("arsenal-pitcher-dropdown", "value"),
-    Input("arsenal-pitch-filter", "value"),
-    State("portrait-store", "data"),
-)
-def tunnel_profile(player_ids, pitch_types, data):
-    p = _deserialize(data)
-    if not p:
-        return charts.empty_figure("Load a portrait to see tunnelling")
-    return charts.tunnel_profile(p, player_ids, pitch_types)
+        empty = charts.empty_figure("Load a portrait to see pitch trajectories")
+        return empty, charts.empty_figure("Load a portrait to see tunnelling")
+    return (charts.pitch_arsenal_3d(p, player_ids, pitch_types),
+            charts.tunnel_profile(p, player_ids, pitch_types))
 
 
 # ---------------------------------------------------------------------------
