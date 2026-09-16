@@ -3,12 +3,33 @@ services:
     name: baseball-construction
     env: docker
     dockerfilePath: ./Dockerfile
-    plan: starter          # $7/month — upgrade if needed
+    plan: starter          # 512 MB — measured usage is ~200 MB
     healthCheckPath: /
     envVars:
+      # The dashboard must never build a portrait. Without this, a cache miss
+      # makes it load a full season of Statcast (~1.2 GB) and build one — raw
+      # data this image does not have, in a container that does not have the
+      # memory. It also makes the dashboard a WRITER, which is how a portrait
+      # built against half-regenerated pools once got saved and then looked
+      # like a valid cache hit forever.
+      - key: BASEBALL_READ_ONLY
+        value: "1"
+
       - key: SUPABASE_URL
-        sync: false        # set manually in Render dashboard
-      - key: SUPABASE_SERVICE_KEY
-        sync: false        # set manually in Render dashboard
+        sync: false
+
+      # ANON, not SERVICE. The anon key respects Row Level Security and is
+      # designed to be handed out; scoped to SELECT on the portraits bucket it
+      # can read prebuilt JSON and do nothing else.
+      #
+      # This used to be SUPABASE_SERVICE_KEY — an RLS-bypassing admin
+      # credential on a public, unauthenticated dashboard whose entire use of
+      # it was downloading one JSON file. Anything that got code execution
+      # here got the database.
+      #
+      # Set it as a build variable too, so the Dockerfile can bake portraits in.
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
       - key: PYTHONUNBUFFERED
         value: "1"

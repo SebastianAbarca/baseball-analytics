@@ -1,0 +1,35 @@
+# Nothing the web tier needs, and 965 MB of it.
+#
+# The Dockerfile COPYs baseball_construction/ wholesale and carried a comment
+# claiming raw parquets were excluded. Nothing excluded them — it only ever
+# worked because .gitignore keeps them out of a clean clone, so a Render build
+# happened to miss them and a local build would not. This file makes it true
+# rather than incidental.
+
+# Raw pitch data — build-time only. 965 MB.
+baseball_construction/data/raw/
+
+# Derived pools — build-time only, rebuilt by refresh.py.
+baseball_construction/data/processed/*.csv
+baseball_construction/data/processed/*.parquet
+baseball_construction/data/processed/_stale_pre_unit_repair/
+baseball_construction/data/processed/spray/
+baseball_construction/modules/processed/
+
+# Credentials. Never.
+.env
+.env.*
+
+# Repo furniture
+.git/
+.github/
+.claude/
+docs/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+.DS_Store
+
+# Worktrees — copies of the whole repo
+.claude/worktrees/

@@ -401,13 +401,46 @@ def update_team_header(data):
 _LEAGUE_FILE_CACHE: dict[int, dict] = {}
 
 def _league_identity_file(season: int) -> dict:
+    """
+    One season's league identity, from local disk or Supabase Storage.
+
+    Local first, Storage second — the same order build_portrait uses, and for
+    the same reason: the image ships with these files, so the normal path is a
+    disk read that works with Supabase paused. The fallback exists so a season
+    uploaded after the image was built appears without a redeploy.
+
+    This used to be disk-only with no fallback, which mattered because
+    league_identity_*.json is gitignored: a Render build would have shipped
+    without it and the Identity tab would have rendered empty with nothing to
+    say why.
+    """
     if season in _LEAGUE_FILE_CACHE:
         return _LEAGUE_FILE_CACHE[season]
+    data: dict = {}
+    path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
     try:
-        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
-        data = json.loads(path.read_text()) if path.exists() else {}
-    except Exception:
-        data = {}
+        if path.exists():
+            data = json.loads(path.read_text())
+    except Exception as exc:
+        log.warning("League identity read failed for %s: %s", season, exc)
+
+    if not data:
+        try:
+            from database import get_client
+            name = f"league_identity_{season}.json"
+            blob = get_client().storage.from_("portraits").download(name)
+            if blob:
+                text = blob.decode("utf-8") if isinstance(blob, bytes) else blob
+                data = json.loads(text)
+                try:                      # keep it for the next request
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(text)
+                except Exception:
+                    pass
+                log.info("League identity %s fetched from Storage", season)
+        except Exception as exc:
+            log.debug("League identity Storage miss for %s: %s", season, exc)
+
     _LEAGUE_FILE_CACHE[season] = data
     return data
 

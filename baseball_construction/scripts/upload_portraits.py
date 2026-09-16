@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 from database import get_client
 
 PORTRAITS_DIR = Path(__file__).resolve().parents[1] / "data" / "processed" / "portraits"
+PROCESSED_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
 
 
 def upload_portraits(team_filter=None, season_filter=None, dry_run=False):
@@ -24,8 +25,20 @@ def upload_portraits(team_filter=None, season_filter=None, dry_run=False):
     bucket = client.storage.from_("portraits")
 
     files = sorted(PORTRAITS_DIR.glob("*.json"))
-    if not files:
-        log.error("No portrait files found in %s", PORTRAITS_DIR)
+
+    # league_identity_*.json goes to the same bucket. It was never uploaded,
+    # so Storage held 100 portraits and zero identity files while the Identity
+    # tab read those from local disk with no fallback — meaning a deploy from a
+    # clean clone, where they are gitignored, rendered that tab empty.
+    # Unfiltered by team because each file covers all 30.
+    identity = sorted(PROCESSED_DIR.glob("league_identity_*.json"))
+    if season_filter:
+        identity = [f for f in identity if f.stem.endswith(str(season_filter))]
+    if team_filter:
+        identity = []          # not a per-team artefact
+
+    if not files and not identity:
+        log.error("Nothing to upload from %s", PORTRAITS_DIR)
         return
 
     # Filter
@@ -34,7 +47,9 @@ def upload_portraits(team_filter=None, season_filter=None, dry_run=False):
     if season_filter:
         files = [f for f in files if f.stem.endswith("_" + str(season_filter))]
 
-    log.info("Found %d portrait files to upload", len(files))
+    files = files + identity
+    log.info("Found %d file(s) to upload (%d portraits, %d league identity)",
+             len(files), len(files) - len(identity), len(identity))
     ok = fail = skip = 0
 
     for fp in files:
