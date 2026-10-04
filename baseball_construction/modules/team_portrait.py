@@ -1305,9 +1305,10 @@ def _classify_pitchers(
             )
             profile["limited_sample"] = is_limited_sample(
                 profile.get("bf"), LIMITED_SAMPLE_BF)
-            # See the hitter equivalent. The five league frames are NOT stored
-            # per player — they are per-season and already cached as parquet
-            # in modules/processed, so a re-derive reloads them once.
+            # See the hitter equivalent. The five league frames are stored as
+            # this pitcher's row from each (pool_rows), not whole: the rows
+            # already carry the league percentiles, and storing them makes a
+            # replay independent of modules/processed on the building machine.
             profile["gate_inputs"] = _jsonable({
                 "metrics":        metrics,
                 "bf": bf, "g": g, "gs": gs, "is_starter": True,
@@ -1315,6 +1316,13 @@ def _classify_pitchers(
                 "splits":         (pitcher_splits or {}).get(player_id),
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
+                "pool_rows":      _pool_rows(
+                    player_id,
+                    league_mechanics=league_mechanics,
+                    league_sequencing=league_sequencing,
+                    league_discipline=league_discipline,
+                    league_tunnel=league_tunnel,
+                    league_spin=league_spin),
             })
             # Archetype boxes retired — traits are the identity layer now.
             # modifiers (platoon/command/arsenal/ace) is fully redundant with
@@ -1397,6 +1405,13 @@ def _classify_pitchers(
                 "splits":         (pitcher_splits or {}).get(player_id),
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
+                "pool_rows":      _pool_rows(
+                    player_id,
+                    league_mechanics=league_mechanics,
+                    league_sequencing=league_sequencing,
+                    league_discipline=league_discipline,
+                    league_tunnel=league_tunnel,
+                    league_spin=league_spin),
             })
 
     # Build collective bullpen profile from BF-weighted mean metrics
@@ -2304,6 +2319,26 @@ def _jsonable(obj):
     except (TypeError, ValueError):
         pass
     return str(obj)
+
+
+def _pool_rows(pitcher_id: int, **frames: Optional[pd.DataFrame]) -> dict:
+    """
+    This pitcher's own row from each per-season league frame, keyed by the
+    build_pitcher_traits argument name, so the stored gate inputs are enough
+    to replay his tags on their own.
+
+    The frames are already ranked league-wide, so one row carries the
+    percentile the gate compares against — the rest of the frame is only how
+    that percentile was reached. Without these rows a replay had to reload the
+    frames from modules/processed, which exists on the machine that built the
+    portrait and nowhere else.
+    """
+    from pitcher_traits import _pool_row
+    out = {}
+    for key, frame in frames.items():
+        row = _pool_row(frame, pitcher_id)
+        out[key] = _jsonable(row.to_dict()) if row is not None else None
+    return out
 
 
 def _stable_repr(v) -> str:
