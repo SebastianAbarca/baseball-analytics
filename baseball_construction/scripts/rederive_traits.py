@@ -17,8 +17,12 @@ alone is 2.9s and the actual trait classification ~0.3s.
 So portraits now store a `gate_inputs` block per player (team_portrait) and
 this script replays it. What it does NOT need: the database, the Statcast
 cache, the normalization pools, service time, park factors, tunneling, spin.
-It reloads only the five per-season pitcher league frames, which are already
-cached as parquet in modules/processed.
+
+Nor the five per-season pitcher league frames, once a portrait carries
+`pool_rows` — each pitcher's own row from them, which is all his gates read.
+Portraits from before that are replayed against the frames in
+modules/processed and get their pool_rows filled in on the way, so a single
+pass on the machine that has the frames makes every portrait self-contained.
 
 WHAT IT REWRITES
 ----------------
@@ -90,9 +94,17 @@ def _load_league_frames(season: int) -> dict:
     return out
 
 
+def _pool_frames(gi: dict) -> dict:
+    """One-row frames rebuilt from a pitcher's stored pool_rows — the shape
+    build_pitcher_traits looks him up in."""
+    return {key: (pd.DataFrame([row]) if row else None)
+            for key, row in (gi.get("pool_rows") or {}).items()}
+
+
 def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.Counter]:
     """Replay the gate inputs. Returns (portrait, tag delta counter)."""
     delta: collections.Counter = collections.Counter()
+    frames_loaded = any(v is not None for v in frames.values())
     players = portrait.get("players") or {}
     role_pool = ((portrait.get("bullpen_collective") or {}).get("role_pool")) or {}
 
@@ -129,13 +141,19 @@ def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.
             if not gi:
                 continue
             before = {t["tag"] for t in (p.get("traits") or [])}
+            # Portraits built before pool_rows existed get them filled in here
+            # from the local frames, so one replay on the building machine
+            # makes every later replay self-contained.
+            if "pool_rows" not in gi and frames_loaded:
+                gi["pool_rows"] = tp._pool_rows(p.get("player_id"), **frames)
+            pf = _pool_frames(gi) if "pool_rows" in gi else frames
             traits = build_pitcher_traits(
                 p.get("player_id"),
-                frames.get("league_mechanics"),
-                frames.get("league_sequencing"),
-                frames.get("league_discipline"),
-                frames.get("league_tunnel"),
-                frames.get("league_spin"),
+                pf.get("league_mechanics"),
+                pf.get("league_sequencing"),
+                pf.get("league_discipline"),
+                pf.get("league_tunnel"),
+                pf.get("league_spin"),
                 arsenal_profile=p.get("arsenal_profile"),
                 metrics=gi.get("metrics") or {},
                 bf=gi.get("bf"), g=gi.get("g"), gs=gi.get("gs"),
