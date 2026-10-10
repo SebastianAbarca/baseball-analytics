@@ -2270,6 +2270,7 @@ def _ordinal(n: float) -> str:
 # vocabulary map the tags were cut with. A mismatch means rebuild, decided by
 # the data rather than by remembering to bump a number.
 _FINGERPRINT_CACHE: Optional[str] = None
+_GATE_FINGERPRINT_CACHE: Optional[str] = None
 
 # Pools a portrait's percentiles are ranked against. Content-hashed rather
 # than mtime-checked: regenerating a cache byte-identically should NOT
@@ -2412,21 +2413,58 @@ def build_fingerprint(refresh: bool = False) -> str:
     return _FINGERPRINT_CACHE
 
 
-def portrait_is_current(portrait: Optional[dict]) -> bool:
+def gate_fingerprint(refresh: bool = False) -> str:
+    """
+    The code half of build_fingerprint: gate constants and vocabulary only.
+
+    build_fingerprint also hashes the pool files, and those exist only where
+    portraits are BUILT. The Docker image leaves them out on purpose, so in
+    the image the full fingerprint came out different and every baked
+    portrait read as stale — the read-only dashboard would have served none
+    of them. This half is computable anywhere the code is, and it still
+    catches the deploy risk that matters on a server: new tag logic shipped
+    over portraits cut by the old.
+    """
+    global _GATE_FINGERPRINT_CACHE
+    if _GATE_FINGERPRINT_CACHE is None or refresh:
+        _GATE_FINGERPRINT_CACHE = hashlib.sha256(
+            _gate_digest().encode()).hexdigest()[:16]
+    return _GATE_FINGERPRINT_CACHE
+
+
+def fingerprint_matches(stamped_build: Optional[str],
+                        stamped_gate: Optional[str],
+                        gates_only: bool = False) -> bool:
+    """
+    Does an artefact stamped with these fingerprints match the current build?
+
+    gates_only is for a reader that cannot see the pools — the read-only
+    dashboard. It checks the code half and trusts the writer for the data
+    half: a server that cannot rebuild has no use for knowing the pools moved,
+    and refusing to serve would only replace a slightly old portrait with
+    nothing. Artefacts stamped before a given half existed pass on that half,
+    as they always have — they cannot be checked, and refusing them would
+    force a rebuild of everything already known to be good.
+    """
+    if gates_only:
+        return stamped_gate is None or stamped_gate == gate_fingerprint()
+    return stamped_build is None or stamped_build == build_fingerprint()
+
+
+def portrait_is_current(portrait: Optional[dict], gates_only: bool = False) -> bool:
     """
     Is this stored portrait safe to serve?
 
-    Schema must match, and the build fingerprint must match when the portrait
-    carries one. Portraits predating the fingerprint are accepted on schema
-    alone — they cannot be checked, and refusing them would force a rebuild of
-    everything already known to be good.
+    Schema must match, and so must the fingerprint — the full one where the
+    pools are present, the gate half alone where they are not (gates_only;
+    see fingerprint_matches).
     """
     if not portrait:
         return False
     if portrait.get("schema_version") != PORTRAIT_SCHEMA_VERSION:
         return False
-    stamped = portrait.get("build_fingerprint")
-    return stamped is None or stamped == build_fingerprint()
+    return fingerprint_matches(portrait.get("build_fingerprint"),
+                               portrait.get("gate_fingerprint"), gates_only)
 
 
 def kind_of(tag: str) -> Optional[str]:
@@ -3587,6 +3625,8 @@ def build_team_portrait(
         # build_fingerprint: the schema catches a change of shape, this
         # catches a change of inputs.
         "build_fingerprint": build_fingerprint(),
+        # Its code half alone, for readers without the pools.
+        "gate_fingerprint":  gate_fingerprint(),
         "team":   team,
         "season": season,
         "players": {

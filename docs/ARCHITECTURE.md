@@ -119,6 +119,18 @@ flowchart TD
     Q -->|"either differs"| BUILD
 ```
 
+**Two halves, because only builders have the pools.** The pool files are
+build-time data and `.dockerignore` keeps them out of the image, so inside the
+container `build_fingerprint()` hashes nothing for the pools and can never
+match — every baked portrait read as stale and the read-only dashboard served
+none of them. Portraits (and the Scout index) therefore also carry
+`gate_fingerprint`, the gate digest alone, which any machine with the code can
+compute. `portrait_is_current(p, gates_only=True)` checks schema + that half;
+the dashboard passes `gates_only=READ_ONLY`. Builders (`refresh.py`,
+`build_league_identity.py`, `rederive_traits.py`) still check the full
+fingerprint. A reader that cannot rebuild has no use for knowing the pools
+moved, but it does need to refuse portraits cut by different tag logic.
+
 **Two gaps this had, both now closed.** `tunnel_league_*.parquet` lives in
 `modules/processed`, outside the glob, so tunnelling changes could not move the
 fingerprint. And `pitch_aggregates` was absent from the gate digest despite

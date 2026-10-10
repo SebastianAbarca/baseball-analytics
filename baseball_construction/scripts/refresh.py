@@ -476,7 +476,7 @@ def _write_scout_index() -> None:
     """
     import json
     from collections import Counter, defaultdict
-    from team_portrait import kind_of, build_fingerprint
+    from team_portrait import kind_of, build_fingerprint, gate_fingerprint
 
     GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
     cat: dict[str, dict] = {}
@@ -552,6 +552,7 @@ def _write_scout_index() -> None:
 
     out = {
         "fingerprint": build_fingerprint(),
+        "gate_fingerprint": gate_fingerprint(),
         "seasons": [min(seasons), max(seasons)] if seasons else [],
         "n_players": len(players),
         "tags": dict(sorted(cat.items(), key=lambda kv: -kv[1]["n"])),
