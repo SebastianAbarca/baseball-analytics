@@ -4407,18 +4407,22 @@ def scout_index() -> dict:
     return _SCOUT_INDEX
 
 
-def scout_index_stale() -> bool:
+def scout_index_stale(gates_only: bool = False) -> bool:
     """
     True when the index was flattened from a different portrait build.
 
     Same job the portrait fingerprint does one layer down: an index left
     behind by a rebuild is wrong in a way nothing else would reveal, because
-    it still parses and still answers queries.
+    it still parses and still answers queries. gates_only as in
+    team_portrait.fingerprint_matches — the read-only server has no pools.
     """
     try:
-        from team_portrait import build_fingerprint
-        fp = scout_index().get("fingerprint")
-        return bool(fp) and fp != build_fingerprint()
+        from team_portrait import fingerprint_matches
+        idx = scout_index()
+        if not idx.get("fingerprint"):
+            return False                # no index at all, not a stale one
+        return not fingerprint_matches(idx.get("fingerprint"),
+                                       idx.get("gate_fingerprint"), gates_only)
     except Exception:
         return False
 

@@ -96,8 +96,11 @@ def _schema_current(portrait: dict | None) -> bool:
     against the current pools and gates. See team_portrait.build_fingerprint;
     the schema alone cannot tell a portrait built before a data repair from
     one built after, which is how stale portraits reached readers.
+
+    Read-only, only the gate half is checked: the pools are not in the image,
+    so the full fingerprint can never match there.
     """
-    return portrait_is_current(portrait)
+    return portrait_is_current(portrait, gates_only=READ_ONLY)
 
 
 def _storage_download(team: str, season: int) -> str | None:
@@ -864,7 +867,7 @@ def scout_search(n_clicks, side, kinds, tags, match, s_min, s_max, min_vol, sort
     what = (" + " if match != "any" else " / ").join(tags) if tags else \
            (", ".join(kinds) if kinds else "any tag")
     note = []
-    if charts.scout_index_stale():
+    if charts.scout_index_stale(gates_only=READ_ONLY):
         note = [html.Br(), html.Small(
             "The index was built from a different portrait build — "
             "re-run scripts/refresh.py.", className="text-warning")]
