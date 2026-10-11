@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS player_pitching (
     season          INT,
     name            TEXT,
     age             INT,
+    g               INT,
     gs              INT,
     bf              INT,
     k_rate          REAL,
