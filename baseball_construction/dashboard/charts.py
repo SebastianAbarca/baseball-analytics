@@ -4187,12 +4187,15 @@ def pitch_arsenal_3d(portrait: dict,
 
     fig = go.Figure()
     commit_xs: list[float] = []     # where each pitch is at the decision point
+    commit_zs: list[float] = []
     for pitch_type, p in sorted(selected, key=lambda r: -(r[1].get("usage_pct") or 0)):
         traj = _reconstruct_trajectory(p)
         if traj is None:
             continue
         xs, ys, zs, i_cross = traj
-        commit_xs.append(float(xs[int(np.argmin(np.abs(np.asarray(ys) - COMMIT_FT)))]))
+        i_commit = int(np.argmin(np.abs(np.asarray(ys) - COMMIT_FT)))
+        commit_xs.append(float(xs[i_commit]))
+        commit_zs.append(float(zs[i_commit]))
 
         wr      = p["whiff_rate"]
         usage   = p["usage_pct"]
@@ -4320,16 +4323,18 @@ def pitch_arsenal_3d(portrait: dict,
         showlegend=False,
     ))
 
-    # The hitter's decision point, as on the tunnel chart below: a 1 ft tick
-    # rising from the ground, so it marks the distance without a plane or
-    # label crossing the pitch paths. Hover names it.
+    # The hitter's decision point, as on the tunnel chart below: a vertical
+    # line from the ground to just above the highest pitch at that distance,
+    # so it crosses the bundle where the hitter has to commit without running
+    # the height of the chart. No label; hover names it.
     #
-    # It sits under the pitch bundle, not on the centre line: at x=0 the
+    # It sits at the bundle's mean x, not on the centre line: at x=0 the
     # catcher's-eye camera puts it exactly on the bright centre gridline and
     # it disappears. Solid, because a dotted line in 3D renders as specks.
     tick_x = float(np.mean(commit_xs)) if commit_xs else 0.0
+    tick_top = (max(commit_zs) + 0.5) if commit_zs else 1.0
     fig.add_trace(go.Scatter3d(
-        x=[tick_x, tick_x], y=[COMMIT_FT, COMMIT_FT], z=[0, 1.0],
+        x=[tick_x, tick_x], y=[COMMIT_FT, COMMIT_FT], z=[0, tick_top],
         mode="lines",
         line=dict(color="rgba(229,231,235,0.85)", width=5),
         name="Decision point",
