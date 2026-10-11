@@ -109,13 +109,6 @@ def controls_row() -> dbc.Row:
             ),
         ], md=2, xs=6),
         dbc.Col([
-            # Two elements, deliberately. The `running=` spinner writes to
-            # status-spinner and the callback's return writes to status-banner.
-            # Pointing both at one Output meant `running` had to use no_update
-            # as its off-value, and Dash renders that sentinel straight through
-            # to the component — React then reports "Objects are not valid as a
-            # React child (found: object with keys {_dash_no_update})".
-            html.Div(id="status-spinner", className="mt-1"),
             html.Div(id="status-banner", className="mt-1"),
         ], md=7, xs=12),
     ], className="mb-3 align-items-end")

@@ -17,9 +17,13 @@ from pathlib import Path
 import dash
 import dash_bootstrap_components as dbc
 
-# Ensure modules are on the path
+# Ensure modules are on the path — and this directory too. `python app.py`
+# puts it there implicitly; gunicorn loading `dashboard.app:server` (the
+# Dockerfile CMD) does not, so the image could never import `layout` and died
+# on boot until this line existed.
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "modules"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import layout
 import callbacks  # registers all @callback decorators
@@ -52,5 +56,6 @@ server = app.server   # for WSGI deployment (gunicorn, etc.)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
     debug = "--debug" in sys.argv
-    app.run(debug=debug, port=8050)
+    app.run(debug=debug, port=int(os.environ.get("PORT", 8050)))

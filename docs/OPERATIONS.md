@@ -12,8 +12,13 @@ python baseball_construction/dashboard/app.py
 # http://localhost:8050
 ```
 
-Add `--debug` for hot reload. In any deployment set `BASEBALL_READ_ONLY=1`
-first — see [read-only mode](#read-only-mode).
+Add `--debug` for hot reload; `PORT=8061` to run beside another instance.
+
+It reads everything from Supabase with the anon key, locally exactly as in
+production: `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` (or the
+environment), internet access, and the project awake. There are no data files
+to have and nothing to build — what it shows is what was last published. A
+team-season that has not been published says so rather than building itself.
 
 ---
 
@@ -25,7 +30,7 @@ One command, and it is the only thing that writes:
 python baseball_construction/scripts/refresh.py
 ```
 
-Stages run in dependency order. Two are opt-in.
+Stages run in dependency order. One is opt-in.
 
 | stage | what it does | default |
 |---|---|---|
@@ -33,8 +38,8 @@ Stages run in dependency order. Two are opt-in.
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
 | `tunnel` | rebuilds tunnel caches where Statcast moved | on |
 | `portraits` | rebuilds whatever the fingerprint marks stale | on |
-| `tags` | regenerates TAGS.md, tag_reference, scout_index | on |
-| `upload` | pushes portraits to Supabase Storage | **off** |
+| `tags` | regenerates TAGS.md and tag_reference | on |
+| `publish` | writes portraits, league seasons and Scout to the serving tables | on |
 
 ### Common invocations
 
@@ -69,7 +74,8 @@ real run does, so it cannot drift from what would actually happen.
 | a tag threshold, `TAG_KIND`, a zone constant | **all 360 portraits** — the gate digest moved |
 | the in-progress season's Statcast | all 360 — the pool digest is global (see below) |
 | a chart, a layout, a callback | nothing; restart the dashboard |
-| `TAGS.md` or `scout_index` content | run `--stages tags`, about 3s |
+| `TAGS.md` content | run `--stages tags`, about 3s |
+| anything published | `publish.py` (or `--stages publish`); the dashboard picks it up within 10 min |
 
 **The global-pool caveat.** Topping up 2026 changes
 `tunnel_league_2026.parquet`, which changes the fingerprint, which marks every
@@ -110,24 +116,27 @@ from 220s to 1382s — a 6× slowdown from memory contention with the browser.
 
 ---
 
-## Read-only mode
+## Publishing
+
+`publish.py` is the only thing that writes to the tables the dashboard reads.
+It needs `SUPABASE_SERVICE_KEY` and runs where the portraits were built:
 
 ```bash
-BASEBALL_READ_ONLY=1 python baseball_construction/dashboard/app.py
+python baseball_construction/scripts/publish.py --dry-run
+python baseball_construction/scripts/publish.py
 ```
 
-Off by default so local development is unchanged. **On in every deployment.**
+It refuses any portrait that is not current for this machine's pools and gates
+— rebuild or re-derive it first — and exits 1 if it refused anything. After
+`rederive_traits.py`, run it too: a re-derive changes portraits on disk, and
+nobody sees them until they are published.
 
-Without it, a portrait that is missing from both the disk cache and Supabase
-Storage causes the dashboard to load a full season of Statcast and build it —
-inside the web container, which does not have the raw data and does not have
-the gigabyte. With it, a miss returns a banner naming the team and pointing at
-`refresh.py`.
+The schema lives in `baseball_construction/schema_serving.sql`, applied by hand
+in the Supabase SQL editor and safe to re-run.
 
-It also permanently closes the race that once wrote a portrait built against
-half-regenerated pools. `refresh.py` additionally refuses to start while
-anything is listening on :8050; `--allow-dashboard` overrides that, and
-`--dry-run` does not need it.
+Transient SSL errors on uploads (`BAD_RECORD_MAC`, `EOF occurred in violation
+of protocol`) are normal on long runs and retried with backoff; a first full
+publish hit four and lost none.
 
 ---
 
@@ -196,5 +205,5 @@ one stamp means a rebuild did not finish or some builds failed.
 | `tag_reference.py --check` | exits 1 if TAGS.md disagrees with the code; good in CI |
 | `repair_metric_units.py` | after discovering a unit bug; purges every derived layer |
 | `rederive_traits.py` | replay tags from stored `gate_inputs` — 0.8s/season vs a full rebuild |
-| `upload_portraits.py` | push to Supabase Storage |
+| `publish.py` | write to the serving tables; `--dry-run`, `--only portraits\|league\|scout`, `--seasons`, `--force` to ignore content hashes. ~5 min for everything, seconds when little changed |
 | `battery_base.py` | diagnostic: pitcher/catcher separability |

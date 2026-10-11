@@ -2418,12 +2418,9 @@ def gate_fingerprint(refresh: bool = False) -> str:
     The code half of build_fingerprint: gate constants and vocabulary only.
 
     build_fingerprint also hashes the pool files, and those exist only where
-    portraits are BUILT. The Docker image leaves them out on purpose, so in
-    the image the full fingerprint came out different and every baked
-    portrait read as stale — the read-only dashboard would have served none
-    of them. This half is computable anywhere the code is, and it still
-    catches the deploy risk that matters on a server: new tag logic shipped
-    over portraits cut by the old.
+    portraits are BUILT. This half is computable anywhere the code is, so the
+    dashboard uses it to refuse a published portrait cut by different tag
+    logic than the code it is running — new gates deployed over old portraits.
     """
     global _GATE_FINGERPRINT_CACHE
     if _GATE_FINGERPRINT_CACHE is None or refresh:
@@ -2432,39 +2429,25 @@ def gate_fingerprint(refresh: bool = False) -> str:
     return _GATE_FINGERPRINT_CACHE
 
 
-def fingerprint_matches(stamped_build: Optional[str],
-                        stamped_gate: Optional[str],
-                        gates_only: bool = False) -> bool:
+def portrait_is_current(portrait: Optional[dict]) -> bool:
     """
-    Does an artefact stamped with these fingerprints match the current build?
+    Is this stored portrait current, for the machine that builds them?
 
-    gates_only is for a reader that cannot see the pools — the read-only
-    dashboard. It checks the code half and trusts the writer for the data
-    half: a server that cannot rebuild has no use for knowing the pools moved,
-    and refusing to serve would only replace a slightly old portrait with
-    nothing. Artefacts stamped before a given half existed pass on that half,
-    as they always have — they cannot be checked, and refusing them would
+    Schema must match, and so must the full build fingerprint (pools + gates)
+    when the portrait carries one. Portraits predating the fingerprint are
+    accepted on schema alone — they cannot be checked, and refusing them would
     force a rebuild of everything already known to be good.
-    """
-    if gates_only:
-        return stamped_gate is None or stamped_gate == gate_fingerprint()
-    return stamped_build is None or stamped_build == build_fingerprint()
 
-
-def portrait_is_current(portrait: Optional[dict], gates_only: bool = False) -> bool:
-    """
-    Is this stored portrait safe to serve?
-
-    Schema must match, and so must the fingerprint — the full one where the
-    pools are present, the gate half alone where they are not (gates_only;
-    see fingerprint_matches).
+    The dashboard never calls this: it cannot see the pools. It filters
+    published portraits on schema_version and gate_fingerprint instead
+    (dashboard/store.py).
     """
     if not portrait:
         return False
     if portrait.get("schema_version") != PORTRAIT_SCHEMA_VERSION:
         return False
-    return fingerprint_matches(portrait.get("build_fingerprint"),
-                               portrait.get("gate_fingerprint"), gates_only)
+    stamped = portrait.get("build_fingerprint")
+    return stamped is None or stamped == build_fingerprint()
 
 
 def kind_of(tag: str) -> Optional[str]:

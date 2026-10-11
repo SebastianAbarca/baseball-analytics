@@ -12,32 +12,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY baseball_construction/ ./baseball_construction/
 
-# Bake the portraits in.
-#
-# portraits/ and league_identity_*.json are gitignored, so a build from a clean
-# clone has neither, and the COPY above ships an empty portrait directory. That
-# would leave every request making a Storage round trip — and a dead dashboard
-# whenever the free-tier Supabase project is paused, which it will be.
-#
-# So fetch them at build time. The running container then reads from local
-# disk: fast, and independent of Supabase being up. The runtime fallback in
-# callbacks._storage_download still covers anything uploaded after this build,
-# so new data does not need a redeploy.
-#
-# Reads with SUPABASE_ANON_KEY against an anon-readable bucket, so there is no
-# build secret to manage. NEVER fails the build — if Storage is unreachable the
-# image is still correct, just without the local copy.
-ARG SUPABASE_URL=""
-ARG SUPABASE_ANON_KEY=""
-RUN SUPABASE_URL="$SUPABASE_URL" SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-    python baseball_construction/scripts/fetch_artifacts.py || true
+# No data in the image. The dashboard reads everything it shows from the
+# serving tables in Supabase (dashboard/store.py), with SUPABASE_URL and
+# SUPABASE_ANON_KEY from the runtime environment. Nothing is baked in and
+# nothing is fetched at build time, so the image is the same whatever was
+# published when it was built.
 
 WORKDIR /app/baseball_construction
 
 EXPOSE 8050
 
-# 1 worker — Dash keeps in-process state (the portrait LRU, the league-average
-# memos), and a second worker would duplicate rather than share it.
-CMD ["gunicorn", "-w", "1", "--timeout", "120", "--bind", "0.0.0.0:8050", \
-     "--worker-class", "sync", "--log-level", "info", \
+# 1 process — store.py keeps a small in-process cache (portraits, league
+# seasons, the tag catalogue), and a second process would duplicate rather
+# than share it.
+#
+# Threaded, not sync. A page load fires ~20 callbacks at once and each can wait
+# on a database round trip; a sync worker answered them one at a time and the
+# first page took ~30s. store.py is thread-safe (one lock per cache key).
+CMD ["gunicorn", "-w", "1", "--threads", "8", "--worker-class", "gthread", \
+     "--timeout", "120", "--bind", "0.0.0.0:8050", "--log-level", "info", \
      "dashboard.app:server"]

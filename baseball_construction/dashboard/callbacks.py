@@ -2,181 +2,33 @@
 callbacks.py — Dash callback definitions.
 
 Pattern:
-  1. (team, season, button) → portrait-store   [builds portrait JSON]
-  2. portrait-store → each chart               [pure figure builders]
+  1. (team, season) → portrait-store   [a "TEAM|SEASON" key, resolved by store]
+  2. portrait-store → each chart       [pure figure builders]
 
-All heavy computation happens in callback 1.
-Callback 2+ are lightweight — they just call charts.py functions.
+Nothing here builds or writes anything. Every read goes through store.py,
+which reads the published tables in Supabase with the anon key; portraits are
+built and published by scripts/refresh.py on the build machine.
 """
 
 from __future__ import annotations
 
-import json
-from collections import OrderedDict
 import logging
 import sys
+import time
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 from dash import (Input, Output, State, callback, no_update, MATCH, ctx,
                   clientside_callback, html)
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
-from team_portrait import (build_team_portrait, PORTRAIT_SCHEMA_VERSION,
-                           portrait_is_current)
-from ingest import pull_statcast_season
 import charts
+import store
 from dash.exceptions import PreventUpdate
 from layout import team_header
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Portrait disk cache
-# ---------------------------------------------------------------------------
-
-import time as _time
-from datetime import datetime as _datetime
-
-_PORTRAIT_CACHE = _HERE.parent / "data" / "processed" / "portraits"
-_PORTRAIT_CACHE.mkdir(parents=True, exist_ok=True)
-
-# Read-only mode: serve portraits, never build one.
-#
-# On a cache miss the dashboard otherwise loads a full season of Statcast
-# (~1.2 GB resident for 712k pitches) and builds the portrait itself, then
-# writes it. Two things wrong with that off a build machine. It needs the
-# whole ~977 MB of raw pitch data on the web tier, when the artefact a reader
-# actually consumes is a 239 KB JSON. And it makes the dashboard a WRITER —
-# which is how a portrait built against half-regenerated pools got saved
-# mid-rebuild and then looked like a valid cache hit forever.
-#
-# Set BASEBALL_READ_ONLY=1 in any deployment. Portraits then come from disk
-# or Supabase Storage, and a genuine miss reports itself instead of silently
-# spending a gigabyte to paper over it. scripts/refresh.py is the only writer.
-import os as _os
-
-READ_ONLY = _os.environ.get("BASEBALL_READ_ONLY", "").strip().lower() in (
-    "1", "true", "yes", "on")
-if READ_ONLY:
-    log.info("BASEBALL_READ_ONLY set — portraits will be served, never built")
-
-
-def _read_only_banner(team: str, season) -> "object":
-    import dash_bootstrap_components as dbc
-    from dash import html
-    return dbc.Alert(
-        [html.Strong(f"{team} {season}"),
-         " is not in the portrait cache or storage, and this instance is "
-         "read-only. Build it with scripts/refresh.py."],
-        color="warning", className="py-1 mb-0",
-    )
-
-
-def _cache_path(team: str, season: int) -> Path:
-    return _PORTRAIT_CACHE / f"{team}_{season}.json"
-
-
-def _cache_valid(path: Path, season: int) -> bool:
-    """Historical seasons: cache indefinitely. Current season: 24h TTL."""
-    if not path.exists():
-        return False
-    current_year = _datetime.now().year
-    if int(season) < current_year:
-        return True
-    return (_time.time() - path.stat().st_mtime) < 86400
-
-
-def _schema_current(portrait: dict | None) -> bool:
-    """
-    True if a stored portrait is safe to serve — current schema AND built
-    against the current pools and gates. See team_portrait.build_fingerprint;
-    the schema alone cannot tell a portrait built before a data repair from
-    one built after, which is how stale portraits reached readers.
-
-    Read-only, only the gate half is checked: the pools are not in the image,
-    so the full fingerprint can never match there.
-    """
-    return portrait_is_current(portrait, gates_only=READ_ONLY)
-
-
-def _storage_download(team: str, season: int) -> str | None:
-    """
-    Try to fetch portrait JSON from Supabase Storage 'portraits' bucket.
-    Returns the JSON string if found, None otherwise.
-
-    Used in production where the local filesystem is ephemeral — portraits
-    are pre-generated and uploaded to Supabase Storage so deploys don't
-    require building from scratch.
-    """
-    try:
-        from database import get_client
-        filename = f"{team}_{season}.json"
-        data = get_client().storage.from_("portraits").download(filename)
-        if data:
-            text = data.decode("utf-8") if isinstance(data, bytes) else data
-            if not _schema_current(json.loads(text)):
-                log.info(
-                    "Stale portrait in Supabase Storage (schema mismatch): %s %s — ignoring",
-                    team, season,
-                )
-                return None
-            # Write to local cache so subsequent requests hit disk
-            cp = _cache_path(team, int(season))
-            cp.write_text(text)
-            log.info("Portrait downloaded from Supabase Storage: %s %s", team, season)
-            return text
-    except Exception as exc:
-        log.debug("Storage download miss for %s %s: %s", team, season, exc)
-    return None
-
-
-def _storage_upload(team: str, season: int, json_text: str) -> None:
-    """Upload portrait JSON to Supabase Storage (best-effort, non-blocking)."""
-    try:
-        from database import get_client
-        filename = f"{team}_{season}.json"
-        data = json_text.encode("utf-8")
-        client = get_client()
-        # Upsert: overwrite if exists
-        try:
-            client.storage.from_("portraits").remove([filename])
-        except Exception:
-            pass
-        client.storage.from_("portraits").upload(
-            filename, data,
-            file_options={"content-type": "application/json"},
-        )
-        log.info("Portrait uploaded to Supabase Storage: %s %s", team, season)
-    except Exception as exc:
-        log.warning("Storage upload failed for %s %s: %s", team, season, exc)
-
-
-# ---------------------------------------------------------------------------
-# JSON serialization helpers
-# ---------------------------------------------------------------------------
-
-class _NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, (np.bool_,)):
-            return bool(obj)
-        if isinstance(obj, (np.ndarray,)):
-            return obj.tolist()
-        if isinstance(obj, pd.DataFrame):
-            return obj.to_dict("records")
-        return super().default(obj)
-
-
-def _serialize(portrait: dict) -> str:
-    return json.dumps(portrait, cls=_NumpyEncoder, default=str)
-
 
 # ---------------------------------------------------------------------------
 # The portrait store holds a KEY, not a portrait
@@ -185,69 +37,28 @@ def _serialize(portrait: dict) -> str:
 # It used to hold the serialised portrait — 286 KB of JSON. Dash sends a
 # dcc.Store's contents back to the server for every callback that reads it, and
 # 23 callbacks read this one, so a single team switch uploaded 5.41 MB from the
-# browser: the same portrait sixteen times, 330 KB apiece for the rosters, the
-# tunnel chart, the 3D arsenal and the rest. Unnoticeable on localhost and
-# punishing over a real uplink, which is the scarce direction on a home
-# connection.
-#
-# The store now holds "TEAM|SEASON" — about a dozen bytes — and the portrait
-# stays server-side in a small LRU. Callbacks resolve the key instead of
-# receiving the payload, so the upload per switch drops to a few KB and the
-# server stops re-parsing 330 KB of JSON sixteen times per switch.
-#
-# The key doubles as the cache key, and it changes exactly when the portrait
-# should be re-read, because it IS the portrait's identity.
-
-_PORTRAIT_LRU: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
-_PORTRAIT_LRU_MAX = 8          # a few team-seasons; each is ~1 MB parsed
-
+# browser. The store holds "TEAM|SEASON" — about a dozen bytes — and the
+# portrait stays server-side, cached by store.get_portrait.
 
 def _store_key(team: str, season) -> str:
     return f"{team}|{season}"
 
 
 def _deserialize(data):
-    """
-    Resolve whatever the store holds into a portrait dict.
-
-    Still accepts a full-JSON payload, so a browser holding a store from before
-    this change keeps working until it reloads instead of throwing on every
-    callback.
-    """
-    if not data:
+    """Resolve whatever the portrait store holds into a portrait dict."""
+    if not data or not isinstance(data, str) or "|" not in data:
         return None
-    if not isinstance(data, str):
-        return data
-    if "|" not in data or data.lstrip().startswith("{"):
-        return json.loads(data)
-
     team, _, season = data.partition("|")
     try:
-        path = _cache_path(team, int(season))
-        mtime = path.stat().st_mtime
-    except (OSError, ValueError):
-        return None
-
-    hit = _PORTRAIT_LRU.get(data)
-    if hit and hit[0] == mtime:      # mtime guards a rebuild underneath us
-        _PORTRAIT_LRU.move_to_end(data)
-        return hit[1]
-
-    try:
-        portrait = json.loads(path.read_text())
+        portrait, _status = store.get_portrait(team, int(season))
     except Exception as exc:
         log.warning("Portrait resolve failed for %s: %s", data, exc)
         return None
-
-    _PORTRAIT_LRU[data] = (mtime, portrait)
-    _PORTRAIT_LRU.move_to_end(data)
-    while len(_PORTRAIT_LRU) > _PORTRAIT_LRU_MAX:
-        _PORTRAIT_LRU.popitem(last=False)
     return portrait
 
 
 # ---------------------------------------------------------------------------
-# Callback 1 — Build portrait on button click
+# Callback 1 — Resolve the selected portrait
 # ---------------------------------------------------------------------------
 
 @callback(
@@ -255,28 +66,6 @@ def _deserialize(data):
     Output("status-banner",  "children"),
     Input("team-dropdown",   "value"),
     Input("season-dropdown", "value"),
-    running=[
-        (Output("team-dropdown", "disabled"), True, False),
-        (Output("season-dropdown", "disabled"), True, False),
-        # Targets status-spinner, NOT status-banner: this callback returns the
-        # banner itself, and aiming `running` at the same Output forced
-        # no_update as the off-value, which Dash renders as a literal
-        # {_dash_no_update} object child. Empty string clears the spinner
-        # cleanly and leaves the banner to the return value.
-        (Output("status-spinner", "children"),
-         __import__("dash_bootstrap_components").Alert(
-             [
-                 __import__("dash").html.Span(
-                     className="spinner-border spinner-border-sm me-2",
-                     style={"width": "14px", "height": "14px"},
-                     **{"role": "status"},
-                 ),
-                 "Loading team… a first-time build takes 10–30 seconds",
-             ],
-             color="primary", className="py-1 mb-0 d-flex align-items-center",
-         ),
-         ""),
-    ],
 )
 def build_portrait(team: str, season: int):
     import dash_bootstrap_components as dbc
@@ -285,77 +74,33 @@ def build_portrait(team: str, season: int):
     if not team or not season:
         return no_update, dbc.Alert("Select a team and season.", color="warning", className="py-1")
 
-    # ── Check portrait cache first ────────────────────────────────────────
-    cp = _cache_path(team, int(season))
-
-    # 1. Local disk cache (fast — sub-millisecond)
-    if _cache_valid(cp, int(season)):
-        try:
-            t0 = _time.perf_counter()
-            cached_json = cp.read_text()
-            cached = json.loads(cached_json)
-            if _schema_current(cached):
-                elapsed = _time.perf_counter() - t0
-                mode = cached.get("temporal", {}).get("mode", "—")
-                cov  = cached.get("data_coverage", 0.0)
-                banner = dbc.Alert(
-                    [html.Strong(f"{team} {season}"),
-                     f" loaded · mode={mode} · coverage={cov:.0%} · ⚡ cached ({elapsed:.2f}s)"],
-                    color="success", className="py-1 mb-0",
-                )
-                log.info("Portrait cache hit (disk): %s %s (%.2fs)", team, season, elapsed)
-                return _store_key(team, season), banner
-            else:
-                log.info("Stale disk-cached portrait (schema mismatch): %s %s — rebuilding", team, season)
-        except Exception as exc:
-            log.warning("Portrait disk cache read failed: %s", exc)
-
-    # 2. Supabase Storage (production fallback — ~1-2s download)
-    storage_json = _storage_download(team, int(season))
-    if storage_json:
-        try:
-            cached = json.loads(storage_json)
-            mode = cached.get("temporal", {}).get("mode", "—")
-            cov  = cached.get("data_coverage", 0.0)
-            banner = dbc.Alert(
-                [html.Strong(f"{team} {season}"),
-                 f" loaded · mode={mode} · coverage={cov:.0%} · ☁️ from storage"],
-                color="success", className="py-1 mb-0",
-            )
-            return _store_key(team, season), banner
-        except Exception as exc:
-            log.warning("Storage portrait parse failed: %s", exc)
-
-    if READ_ONLY:
-        log.warning("Portrait miss for %s %s and READ_ONLY is set — not building",
-                    team, season)
-        return no_update, _read_only_banner(team, season)
-
+    t0 = time.perf_counter()
     try:
-        statcast = pull_statcast_season(int(season))
-        portrait = build_team_portrait(team, int(season), statcast=statcast)
-        serialized = _serialize(portrait)
-        # Save to local disk cache
-        try:
-            cp.write_text(serialized)
-        except Exception as exc:
-            log.warning("Portrait disk cache write failed: %s", exc)
-        # Also upload to Supabase Storage (async-ish — non-blocking on failure)
-        _storage_upload(team, int(season), serialized)
-        mode = portrait.get("temporal", {}).get("mode", "—")
-        cov  = portrait.get("data_coverage", 0.0)
-        banner = dbc.Alert(
-            [
-                html.Strong(f"{team} {season}"),
-                f" loaded · mode={mode} · coverage={cov:.0%}",
-            ],
-            color="success", className="py-1 mb-0",
-        )
-        return _store_key(team, season), banner
-
+        portrait, status = store.get_portrait(team, int(season))
     except Exception as exc:
-        log.exception("build_portrait failed: %s", exc)
-        return no_update, dbc.Alert(f"Error: {exc}", color="danger", className="py-1")
+        log.exception("portrait read failed for %s %s", team, season)
+        return no_update, dbc.Alert(
+            [html.Strong(f"{team} {season}"),
+             f" could not be loaded — the database did not answer ({exc})."],
+            color="danger", className="py-1 mb-0")
+
+    if status == store.MISSING:
+        return no_update, dbc.Alert(
+            [html.Strong(f"{team} {season}"), " has not been published yet."],
+            color="warning", className="py-1 mb-0")
+    if status == store.OUTDATED:
+        return no_update, dbc.Alert(
+            [html.Strong(f"{team} {season}"),
+             " was built by an older version of the tag logic and is being "
+             "replaced. It will appear after the next publish."],
+            color="warning", className="py-1 mb-0")
+
+    mode = portrait.get("temporal", {}).get("mode", "—")
+    cov = portrait.get("data_coverage", 0.0)
+    log.info("Portrait %s %s served in %.2fs", team, season, time.perf_counter() - t0)
+    return _store_key(team, season), dbc.Alert(
+        [html.Strong(f"{team} {season}"), f" loaded · mode={mode} · coverage={cov:.0%}"],
+        color="success", className="py-1 mb-0")
 
 
 # ---------------------------------------------------------------------------
@@ -401,51 +146,9 @@ def update_team_header(data):
 # Callback 8 — Hitter archetype pie
 # ---------------------------------------------------------------------------
 
-_LEAGUE_FILE_CACHE: dict[int, dict] = {}
-
 def _league_identity_file(season: int) -> dict:
-    """
-    One season's league identity, from local disk or Supabase Storage.
-
-    Local first, Storage second — the same order build_portrait uses, and for
-    the same reason: the image ships with these files, so the normal path is a
-    disk read that works with Supabase paused. The fallback exists so a season
-    uploaded after the image was built appears without a redeploy.
-
-    This used to be disk-only with no fallback, which mattered because
-    league_identity_*.json is gitignored: a Render build would have shipped
-    without it and the Identity tab would have rendered empty with nothing to
-    say why.
-    """
-    if season in _LEAGUE_FILE_CACHE:
-        return _LEAGUE_FILE_CACHE[season]
-    data: dict = {}
-    path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
-    try:
-        if path.exists():
-            data = json.loads(path.read_text())
-    except Exception as exc:
-        log.warning("League identity read failed for %s: %s", season, exc)
-
-    if not data:
-        try:
-            from database import get_client
-            name = f"league_identity_{season}.json"
-            blob = get_client().storage.from_("portraits").download(name)
-            if blob:
-                text = blob.decode("utf-8") if isinstance(blob, bytes) else blob
-                data = json.loads(text)
-                try:                      # keep it for the next request
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(text)
-                except Exception:
-                    pass
-                log.info("League identity %s fetched from Storage", season)
-        except Exception as exc:
-            log.debug("League identity Storage miss for %s: %s", season, exc)
-
-    _LEAGUE_FILE_CACHE[season] = data
-    return data
+    """One season's league identity, {} if that season is unpublished."""
+    return store.get_league(season, "identity")
 
 
 def _drift_seasons() -> dict:
@@ -530,24 +233,9 @@ def drift_chart(team, tags, comp_id):
     return charts.team_drift_chart(team, unit, _drift_seasons(), tags=tags)
 
 
-_BASELINE_CACHE: dict[int, dict] = {}
-
 def _league_baselines(season) -> dict:
-    """League mean trait densities per unit, from league_identity_{season}.json."""
-    try:
-        season = int(season)
-    except (TypeError, ValueError):
-        return {}
-    if season in _BASELINE_CACHE:
-        return _BASELINE_CACHE[season]
-    try:
-        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
-        base = json.loads(path.read_text()).get("_baselines", {}) if path.exists() else {}
-    except Exception:
-        base = {}
-    _BASELINE_CACHE[season] = base
-    return base
-
+    """League mean trait densities per unit, from the season's league identity."""
+    return _league_identity_file(season).get("_baselines", {})
 
 @callback(Output("hitter-pie", "figure"), Input("portrait-store", "data"))
 def hitter_pie(data):
@@ -846,7 +534,7 @@ def scout_tag_choices(side, kinds):
 )
 def scout_search(n_clicks, side, kinds, tags, match, s_min, s_max, min_vol, sort, flags):
     """
-    Run the search against the portrait index. No database, no re-derivation.
+    Run the search in the database (scout_search). No re-derivation.
     """
     import dash_bootstrap_components as dbc
     from dash import html
@@ -854,7 +542,7 @@ def scout_search(n_clicks, side, kinds, tags, match, s_min, s_max, min_vol, sort
     if not n_clicks:
         return no_update, "", 0
 
-    rows = charts.scout_query(
+    rows, total = charts.scout_query(
         tags=tags or None, kinds=kinds or None, side=side or "H",
         match_all=(match != "any"),
         season_min=int(s_min) if s_min else None,
@@ -866,23 +554,16 @@ def scout_search(n_clicks, side, kinds, tags, match, s_min, s_max, min_vol, sort
 
     what = (" + " if match != "any" else " / ").join(tags) if tags else \
            (", ".join(kinds) if kinds else "any tag")
-    note = []
-    if charts.scout_index_stale(gates_only=READ_ONLY):
-        note = [html.Br(), html.Small(
-            "The index was built from a different portrait build — "
-            "re-run scripts/refresh.py.", className="text-warning")]
-
     status = dbc.Alert(
-        [html.Strong(f"{len(rows):,} player-seasons"),
+        [html.Strong(f"{total:,} player-seasons"),
          f" · {what} · {'hitters' if (side or 'H') == 'H' else 'pitchers'}"
-         f" · {s_min}–{s_max}", *note],
+         f" · {s_min}–{s_max}"]
+        + ([html.Br(), html.Small(f"showing the first {len(rows):,}")]
+           if total > len(rows) else []),
         color="success" if rows else "secondary", className="py-1 mb-0",
     )
-    # Stored trimmed: the full row carries every tag and metric, and only the
-    # matched ones are rendered.
-    slim = [{k: r[k] for k in ("n", "t", "s", "a", "v", "w", "l", "matched", "score")}
-            for r in rows[:2000]]
-    return slim, status, 0
+    # The database already returns slim rows — only what the table renders.
+    return rows, status, 0
 
 
 @callback(
@@ -987,9 +668,8 @@ def team_identity_card(data):
         return "Load a portrait to see team identity."
     fingerprint = position = None
     try:
-        path = _LEAGUE_IDENTITY_DIR / f"league_identity_{p.get('season')}.json"
-        if path.exists():
-            league = json.loads(path.read_text())
+        league = _league_identity_file(p.get("season"))
+        if league:
             entry = league.get(p.get("team")) or {}
             fingerprint = entry.get("fingerprint")
             # Where the team sits relative to everyone else — this is what
@@ -1107,9 +787,6 @@ def arsenal_figures(player_ids, pitch_types, data):
 # League Identity Board
 # ---------------------------------------------------------------------------
 
-_LEAGUE_IDENTITY_DIR = _HERE.parent / "data" / "processed"
-
-
 @callback(
     Output("league-board-table", "children"),
     Input("league-board-season", "value"),
@@ -1118,12 +795,8 @@ def league_identity_board(season):
     if not season:
         return "Select a season."
 
-    path = _LEAGUE_IDENTITY_DIR / f"league_identity_{season}.json"
-    if not path.exists():
-        return dbc_alert_no_data(season)
-
     try:
-        league = json.loads(path.read_text())
+        league = _league_identity_file(season)
     except Exception as exc:
         return f"Failed to load league identity data: {exc}"
 
@@ -1218,7 +891,7 @@ def league_identity_board(season):
 def dbc_alert_no_data(season):
     import dash_bootstrap_components as dbc
     return dbc.Alert(
-        f"No league identity data for {season}. Run "
-        f"'python3 scripts/build_league_identity.py {season}' to generate it.",
+        f"No league identity data for {season} has been published. On the "
+        f"build machine: build_league_identity.py {season}, then publish.py.",
         color="warning", className="py-2 mb-0",
     )
