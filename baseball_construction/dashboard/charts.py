@@ -4186,11 +4186,13 @@ def pitch_arsenal_3d(portrait: dict,
     who = " vs ".join(names_in_view) if multi else names_in_view[0]
 
     fig = go.Figure()
+    commit_xs: list[float] = []     # where each pitch is at the decision point
     for pitch_type, p in sorted(selected, key=lambda r: -(r[1].get("usage_pct") or 0)):
         traj = _reconstruct_trajectory(p)
         if traj is None:
             continue
         xs, ys, zs, i_cross = traj
+        commit_xs.append(float(xs[int(np.argmin(np.abs(np.asarray(ys) - COMMIT_FT)))]))
 
         wr      = p["whiff_rate"]
         usage   = p["usage_pct"]
@@ -4315,6 +4317,25 @@ def pitch_arsenal_3d(portrait: dict,
         mode="lines",
         line=dict(color="rgba(255,255,255,0.15)", width=1),
         hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    # The hitter's decision point, as on the tunnel chart below: a 1 ft tick
+    # rising from the ground, so it marks the distance without a plane or
+    # label crossing the pitch paths. Hover names it.
+    #
+    # It sits under the pitch bundle, not on the centre line: at x=0 the
+    # catcher's-eye camera puts it exactly on the bright centre gridline and
+    # it disappears. Solid, because a dotted line in 3D renders as specks.
+    tick_x = float(np.mean(commit_xs)) if commit_xs else 0.0
+    fig.add_trace(go.Scatter3d(
+        x=[tick_x, tick_x], y=[COMMIT_FT, COMMIT_FT], z=[0, 1.0],
+        mode="lines",
+        line=dict(color="rgba(229,231,235,0.85)", width=5),
+        name="Decision point",
+        hovertemplate=(f"<b>Decision point</b><br>{COMMIT_FT:.0f} ft from the plate"
+                       "<br>break after this is break the hitter cannot act on"
+                       "<extra></extra>"),
         showlegend=False,
     ))
 
