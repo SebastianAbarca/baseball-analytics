@@ -31,7 +31,8 @@ flowchart TD
     E["prior slices<br/>*_prior_*.parquet"]
     F["league layer<br/>tunnel_league · pitch_mix<br/>spin · plate_discipline"]
     G["portraits<br/>portraits/TEAM_SEASON.json<br/>360 files · 88 MB"]
-    H["reference data<br/>scout_index · tag_reference<br/>TAGS.md · strike_zones"]
+    H["reference data<br/>tag_reference · TAGS.md<br/>strike_zones"]
+    I["serving tables · Supabase<br/>portraits · league_seasons<br/>scout_players · scout_tags"]
 
     A --> C
     B --> C
@@ -39,6 +40,8 @@ flowchart TD
     C --> D --> E --> G
     F --> G
     G --> H
+    G -->|publish| I
+    F -->|publish| I
 
     style A stroke-dasharray: 5 5
     style G stroke-width:3px
@@ -120,16 +123,15 @@ flowchart TD
 ```
 
 **Two halves, because only builders have the pools.** The pool files are
-build-time data and `.dockerignore` keeps them out of the image, so inside the
-container `build_fingerprint()` hashes nothing for the pools and can never
-match — every baked portrait read as stale and the read-only dashboard served
-none of them. Portraits (and the Scout index) therefore also carry
+build-time data and exist only on the machine that builds portraits, so only
+that machine can compute `build_fingerprint()`. Portraits therefore also carry
 `gate_fingerprint`, the gate digest alone, which any machine with the code can
-compute. `portrait_is_current(p, gates_only=True)` checks schema + that half;
-the dashboard passes `gates_only=READ_ONLY`. Builders (`refresh.py`,
-`build_league_identity.py`, `rederive_traits.py`) still check the full
-fingerprint. A reader that cannot rebuild has no use for knowing the pools
-moved, but it does need to refuse portraits cut by different tag logic.
+compute. The builders (`refresh.py`, `build_league_identity.py`,
+`rederive_traits.py`) and `publish.py` check the full fingerprint, and publish
+refuses any portrait that fails it. The dashboard checks only the gate half: it
+reads a published row only when `schema_version` and `gate_fingerprint` match
+the code it is running, so tag logic deployed over older portraits shows "being
+replaced" rather than old tags under new rules.
 
 **Two gaps this had, both now closed.** `tunnel_league_*.parquet` lives in
 `modules/processed`, outside the glob, so tunnelling changes could not move the
@@ -149,8 +151,8 @@ cross-season pool, so that part legitimately spans all years.
 
 ## The refresh pipeline
 
-One command, stages in dependency order. Two are opt-in because they are slow,
-network-bound, or destructive.
+One command, stages in dependency order. One is opt-in because it is slow and
+network-bound.
 
 ```mermaid
 flowchart LR
@@ -158,19 +160,18 @@ flowchart LR
     S2["<b>sources</b><br/>re-pull external feeds<br/><i>opt-in</i>"]
     S3["<b>tunnel</b><br/>rebuild where Statcast moved"]
     S4["<b>portraits</b><br/>rebuild what the<br/>fingerprint marks stale"]
-    S5["<b>tags</b><br/>TAGS.md · tag_reference<br/>scout_index"]
-    S6["<b>upload</b><br/>push to Supabase Storage<br/><i>opt-in</i>"]
+    S5["<b>tags</b><br/>TAGS.md · tag_reference"]
+    S6["<b>publish</b><br/>portraits · league seasons<br/>Scout → serving tables"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> S6
 
     style S2 stroke-dasharray: 5 5
-    style S6 stroke-dasharray: 5 5
 ```
 
 Order is not optional — every stale-cache bug in this project came from running
-it partially or out of sequence. Refusing to start while the dashboard is
-listening on :8050 is a guard, not a courtesy: the dashboard is a writer on a
-cache miss and can save a portrait built against half-regenerated pools.
+it partially or out of sequence. `publish` comes last so nothing reaches the
+dashboard until the build that produced it is complete; it skips any portrait
+or league season whose content hash has not changed.
 
 ---
 
@@ -227,44 +228,70 @@ maps and therefore cannot drift from the code.
 
 ## Serving
 
-The dashboard reads portraits and nothing else. It holds no raw data, computes
-no aggregates, and in a deployment writes nothing.
+The dashboard reads published tables through Supabase's REST API and nothing
+else. It holds no data files, computes no aggregates, builds nothing and writes
+nothing — not because of a mode it was started in, but because its credential
+is the anon key and Row Level Security limits that key to SELECT on the serving
+tables (`schema_serving.sql`). `scripts/publish.py`, with the service key, is
+the only writer. Every read goes through `dashboard/store.py`.
 
 ```mermaid
 flowchart TD
     U["user picks team and season"]
     CB1["build_portrait callback"]
-    DISK["portraits/TEAM_SEASON.json"]
     STORE["dcc.Store<br/><b>holds &quot;LAD|2025&quot;</b><br/>about 12 bytes"]
-    LRU["server-side LRU<br/>8 portraits<br/>keyed by name + mtime"]
+    LRU["store.py LRU<br/>8 portraits"]
+    DB["Supabase · portraits table<br/>anon key, read-only"]
     CBS["22 chart callbacks<br/>each resolves the key"]
     FIG["figures"]
 
-    U --> CB1 --> DISK
+    U --> CB1 --> LRU
     CB1 --> STORE
     STORE -->|"key travels to<br/>browser and back"| CBS
     CBS --> LRU
-    LRU -.->|"miss, or mtime changed"| DISK
+    LRU -.->|"miss, or older than 10 min<br/>and built_at changed"| DB
     CBS --> FIG
 ```
 
 **Why a key and not the portrait.** Dash sends a `dcc.Store`'s contents back to
 the server on every callback that reads it. With the portrait in the store, one
 team switch uploaded **5.41 MB** — the same 286 KB payload sixteen times over.
-With a key it is **11 KB**. The LRU is keyed by mtime as well as name, so a
-rebuild underneath a running dashboard invalidates it rather than serving
-whatever the process happened to load first.
+With a key it is **11 KB**.
 
-**Scout and Compare do not read portraits at all.** They read
-`scout_index.json`: all 18,664 player-seasons flattened into one 13 MB file
-(1.9 MB gzipped) that loads in 0.1s and answers a tag query in 6 ms. That is
-also what took the live database out of the serving path.
+**Freshness without restarts.** A cached entry is reused for ten minutes; after
+that one tiny `built_at` query decides whether to refetch. A publish therefore
+appears within ten minutes without restarting anything and without
+re-downloading rows that did not change. Concurrent misses for the same row
+share one request — a page load fires a dozen callbacks at once.
+
+**Measured** (no data on disk, anon key only): first portrait 1.3s including
+the connection, a new team-season 0.4–0.6s, a repeat 0.00s.
+
+**League-season data** — the identity file, the league tunnel average and the
+pitch mix — is published per season to `league_seasons` and read per part, so
+the year-over-year view, which needs identity for twelve seasons, does not pull
+twelve seasons of pitch mix. The tunnel average used to be computed per request
+by reading all 30 portraits of a season; it is now computed once at publish.
+
+**Scout and Compare** query `scout_players` through SQL functions —
+`scout_search`, `scout_name_search`, `scout_rows`, `scout_comps` — that mirror
+the in-memory filters, scoring, five sorts and tie order they replaced, so the
+database filters and only the drawn page travels. Comp vectors and their norms
+are computed at publish by the same Python that defines them; the cosine runs
+in SQL. Only the 94-tag catalogue is cached in-process.
+
+**JSON, not JSONB, for anything published as built.** JSONB re-sorts object
+keys, and the dashboard reads meaning into key order: the identity card shows
+the first two entries of a densest-first `trait_density`. Stored as JSONB,
+HOU 2025's rotation read "swingman 30% · patterned 24%" instead of "deep
+arsenal 61% · contact suppressor 53%". Only `tag_detail` and `vec`, which the
+SQL functions query and whose key order means nothing, are JSONB.
 
 ---
 
 ## Deployment topology
 
-The two jobs want different machines.
+The two jobs want different machines, and the database sits between them.
 
 ```mermaid
 flowchart LR
@@ -273,27 +300,32 @@ flowchart LR
         RAW2["data/raw · 977 MB"]
         REF["refresh.py<br/>1.23 GB peak per worker"]
         PROC["data/processed · 171 MB"]
-        RAW2 --> REF --> PROC
+        PUB["publish.py<br/>service key"]
+        RAW2 --> REF --> PROC --> PUB
     end
 
-    subgraph web["Web tier · 200 MB RSS"]
-        direction TB
-        PORT["portraits · 88 MB"]
-        IDX["scout_index · 13 MB"]
-        APP["Dash app<br/>BASEBALL_READ_ONLY=1"]
-        PORT --> APP
-        IDX --> APP
+    subgraph db["Supabase"]
+        T["portraits · league_seasons<br/>scout_players · scout_tags<br/>+ scout_* functions"]
     end
 
-    REF -->|"88 MB of portraits"| PORT
-    REF -->|"reference data"| IDX
+    subgraph web["Web tier"]
+        APP["Dash app<br/>anon key · no data files"]
+    end
+
+    PUB -->|"upsert"| T
+    T -->|"REST, read-only"| APP
+    KA["keepalive.yml<br/>every 2 days"] -.-> T
 ```
 
-Measured: the dashboard idles at 186 MB and reaches 200 MB after serving 37
-portraits — flat, because the portrait goes to the browser rather than
-accumulating server-side. A cache miss *without* `BASEBALL_READ_ONLY` would try
-to download a full season and build it inside that container, which is why the
-flag exists.
+The image carries code only; `.dockerignore` excludes every data directory.
+Nothing is baked in or fetched at build time, so an image is the same whatever
+was published when it was built, and new data needs a publish, not a redeploy.
+
+The free-tier project pauses after about a week without activity, which with
+the dashboard reading straight from it would take the site down. The weekly
+seed job was not enough on its own — it succeeded on 2026-09-21 and the project
+had paused by the 2026-09-28 run — so `keepalive.yml` reads one published row
+with the anon key every two days and fails loudly if it cannot.
 
 ---
 
@@ -309,8 +341,10 @@ flag exists.
 | `tunneling.py` | tunnel score from exact kinematics |
 | `pitch_mix.py`, `spin_efficiency.py` | arsenal shape and spin |
 | `philosophy.py`, `temporal.py`, `park_effects.py` | team-level context |
-| `scripts/refresh.py` | the only writer |
-| `dashboard/` | read-only presentation |
+| `scripts/refresh.py` | the build: every derived layer, in order |
+| `scripts/publish.py` | the only writer to the serving tables |
+| `dashboard/store.py` | every read the dashboard makes, cached |
+| `dashboard/` | presentation; reads through `store.py` with the anon key |
 
 `hitter_archetypes.py` and `pitcher_archetypes.py` predate the tag taxonomy and
 are no longer on the portrait path.

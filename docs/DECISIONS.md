@@ -230,15 +230,38 @@ goal rather than the attempt.
 
 ### It must never write
 
-On a cache miss the dashboard would load a full season of Statcast (~1.2 GB)
+On a cache miss the dashboard used to load a full season of Statcast (~1.2 GB)
 and build the portrait itself, then save it. Two things wrong with that. It
 needs the whole ~977 MB of raw data on the web tier, when the artefact a reader
 consumes is 239 KB. And it makes the dashboard a **writer** — which is how a
 portrait built against half-regenerated pools got saved mid-rebuild and then
 looked like a valid cache hit forever.
 
-`BASEBALL_READ_ONLY=1` in any deployment. `refresh.py` is the only writer, and
-it refuses to start while anything is listening on :8050.
+The first fix was a `BASEBALL_READ_ONLY` flag, with portraits baked into the
+Docker image and a Storage bucket behind them. It worked, but as a stack of
+workarounds: a mode to remember, copies of the data in three places, league
+files with a fallback at one of four call sites, a pitch mix the image never
+had, Scout reading a 13 MB file committed to git. And the baked copies made the
+image reject every portrait, because the fingerprint hashed files the image
+left out.
+
+### It reads one database, with a key that cannot write
+
+So the dashboard reads published tables in Supabase and nothing else, through
+the REST API Supabase already serves for every table — no API service of our
+own to run. Its credential is the anon key; Row Level Security limits that key
+to SELECT on the serving tables, so "read-only" is what the credential can do,
+not a flag. `publish.py`, with the service key, is the only writer. Local
+development reads the same way, deliberately: one path, no modes, no fallbacks.
+
+Chosen against our own API service (more control, but a second thing to deploy
+and keep awake, with no second consumer to justify it yet) and against keeping
+files as a fallback (a second code path is the problem being removed). The cost
+is that the site depends on the database being awake; the free tier pauses
+after a week idle, so `keepalive.yml` reads a row every two days.
+
+Published JSON is stored as `json`, not `jsonb`, because `jsonb` re-sorts
+object keys and the dashboard reads meaning into key order.
 
 ### The store holds a key, not the portrait
 

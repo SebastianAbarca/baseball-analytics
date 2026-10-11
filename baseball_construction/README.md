@@ -121,8 +121,8 @@ looks odd in this repo is odd for a reason that is written down there.
 ```
 baseball_construction/
   modules/       ingest, aggregates, portrait build, tag gates, reliability
-  scripts/       refresh.py (the only writer) + maintenance tools
-  dashboard/     Dash app — read-only presentation
+  scripts/       refresh.py (the build), publish.py (the only writer) + tools
+  dashboard/     Dash app — reads the published tables, writes nothing
   data/
     raw/         Statcast parquet, one per season
     processed/   derived pools + portraits/
@@ -131,6 +131,6 @@ docs/            architecture, operations, decisions
 
 Requires Python 3.12. `pip install -r baseball_construction/requirements.txt`.
 
-Supabase credentials go in `.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`) and
-are only needed for Storage upload and the seeding scripts — the dashboard runs
-without them off local portraits.
+Supabase credentials go in `.env`: `SUPABASE_URL` and `SUPABASE_ANON_KEY` to run
+the dashboard, which reads the published tables; `SUPABASE_SERVICE_KEY` as well
+to build, seed and publish (`scripts/publish.py`).

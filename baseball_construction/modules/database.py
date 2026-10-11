@@ -34,16 +34,17 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 
 # Two keys, deliberately. SUPABASE_SERVICE_KEY bypasses Row Level Security on
 # every table and belongs only where data is WRITTEN — seeding, uploads, the
-# refresh pipeline. SUPABASE_ANON_KEY is the one designed to be handed out; on
-# the web tier it reads the portraits bucket and can do nothing else.
+# refresh pipeline, scripts/publish.py. SUPABASE_ANON_KEY is the one designed
+# to be handed out; the dashboard reads the serving tables with it
+# (get_read_client) and can do nothing else.
 #
 # The service key used to be the only option, so render.yaml handed an
 # RLS-bypassing admin credential to a public, unauthenticated dashboard whose
 # entire use of it was downloading one JSON file. Anything that got code
 # execution there got the database.
 #
-# Service key wins when both are present, so a build machine with a full .env
-# keeps working unchanged.
+# get_client prefers the service key when both are present, so a build machine
+# with a full .env keeps working unchanged.
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SUPABASE_ANON_KEY    = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_KEY = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
@@ -62,13 +63,33 @@ def get_client() -> Client:
     if _CLIENT is None:
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise EnvironmentError(
-                "SUPABASE_URL plus one of SUPABASE_SERVICE_KEY (write) or "
-                "SUPABASE_ANON_KEY (read-only) must be set in .env"
+                "SUPABASE_URL plus one of SUPABASE_SERVICE_KEY (build, seed, "
+                "publish) or SUPABASE_ANON_KEY (dashboard reads) must be set in .env"
             )
         _CLIENT = create_client(SUPABASE_URL, SUPABASE_KEY)
         log.info("Supabase client connected to %s using the %s key",
                  SUPABASE_URL, "service" if SUPABASE_SERVICE_KEY else "anon")
     return _CLIENT
+
+
+_READ_CLIENT: Optional[Client] = None
+
+
+def get_read_client() -> Client:
+    """
+    The dashboard's client: always the ANON key, even where the service key is
+    also in the environment. Row Level Security then limits it to reading the
+    serving tables — the same on a laptop as in production, so local
+    development exercises exactly the access the public site has.
+    """
+    global _READ_CLIENT
+    if _READ_CLIENT is None:
+        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+            raise EnvironmentError(
+                "SUPABASE_URL and SUPABASE_ANON_KEY must be set (.env or the "
+                "environment) — the dashboard reads with the anon key only")
+        _READ_CLIENT = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    return _READ_CLIENT
 
 
 # ---------------------------------------------------------------------------

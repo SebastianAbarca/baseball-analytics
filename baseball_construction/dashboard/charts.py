@@ -579,23 +579,11 @@ def strike_zone(season: int) -> tuple[float, float]:
 
     table = _strike_zone_table()
     row = table.get(str(season))
+    # A season missing from the table keeps the era constants above. The
+    # table is written by scripts/refresh.py for every season it builds; the
+    # dashboard reads no raw pitch data.
     if row:
         top, bot = float(row["top"]), float(row["bot"])
-    else:
-        # Development fallback: a season the table has not been built for yet.
-        # Never reached on a deployment that ships no raw data, which is the
-        # point — it degrades to the ABS constants instead of failing.
-        try:
-            import pandas as _pd
-            path = _HERE.parent / "data" / "raw" / f"statcast_{season}.parquet"
-            if path.exists():
-                df = _pd.read_parquet(path, columns=["sz_top", "sz_bot"])
-                t = _pd.to_numeric(df["sz_top"], errors="coerce").mean()
-                b = _pd.to_numeric(df["sz_bot"], errors="coerce").mean()
-                if _pd.notna(t) and _pd.notna(b) and 2.0 < t < 5.0 and 0.5 < b < 2.5:
-                    top, bot = float(t), float(b)
-        except Exception:
-            pass
 
     _STRIKE_ZONE_CACHE[season] = (top, bot)
     return top, bot
@@ -617,27 +605,32 @@ def _strike_zone_table() -> dict:
     return _STRIKE_ZONE_TABLE_CACHE
 
 
+def compute_pitch_mix(df) -> dict[int, list[dict]]:
+    """
+    {pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage, from a
+    pitch_mix_{season}.parquet frame. Run by scripts/publish.py; the
+    dashboard reads the result from league_seasons.
+    """
+    import pandas as _pd
+    out: dict[int, list[dict]] = {}
+    for pid, grp in df.groupby("pitcher"):
+        rows = grp.sort_values("usage_pct", ascending=False)
+        out[int(pid)] = [{
+            "pitch": r.pitch_type,
+            "usage": float(r.usage_pct or 0),
+            "velo":  float(r.avg_velo) if _pd.notna(r.avg_velo) else None,
+            "whiff": float(r.whiff_pct) if _pd.notna(r.whiff_pct) else None,
+        } for r in rows.itertuples()]
+    return out
+
+
 def _pitch_mix(season: int) -> dict[int, list[dict]]:
     """{pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage."""
     if season in _PITCH_MIX_CACHE:
         return _PITCH_MIX_CACHE[season]
-    out: dict[int, list[dict]] = {}
-    try:
-        import pandas as _pd
-        path = (_HERE.parent / "modules" / "processed"
-                / f"pitch_mix_{season}.parquet")
-        if path.exists():
-            df = _pd.read_parquet(path)
-            for pid, grp in df.groupby("pitcher"):
-                rows = grp.sort_values("usage_pct", ascending=False)
-                out[int(pid)] = [{
-                    "pitch": r.pitch_type,
-                    "usage": float(r.usage_pct or 0),
-                    "velo":  float(r.avg_velo) if _pd.notna(r.avg_velo) else None,
-                    "whiff": float(r.whiff_pct) if _pd.notna(r.whiff_pct) else None,
-                } for r in rows.itertuples()]
-    except Exception:
-        out = {}
+    import store
+    raw = store.get_league(season, "pitch_mix")
+    out = {int(k): v for k, v in raw.items()}     # JSON keys are strings
     _PITCH_MIX_CACHE[season] = out
     return out
 
@@ -3913,7 +3906,7 @@ def _tunnel_grid() -> np.ndarray:
     return np.linspace(_TUNNEL_GRID_MAX, PLATE_Y, _TUNNEL_GRID_N)
 
 
-def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
+def compute_tunnel_league_average(portraits) -> dict[str, list]:
     """
     The league's mean separation-from-fastball curve for each pitch type.
 
@@ -3925,21 +3918,17 @@ def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
 
     One arm, one vote, above a minimum pitch count. Weighting by volume would
     let a handful of high-usage starters set the shape of the league.
-    """
-    if season in _TUNNEL_LEAGUE_CACHE:
-        return _TUNNEL_LEAGUE_CACHE[season]
 
+    Pure function over one season's portrait dicts, run by scripts/publish.py.
+    It used to run here on every request, reading all 30 portrait files from
+    local disk — which a server without those files could not do.
+    Returns JSON-ready lists, None where no arm reached that point.
+    """
     grid = _tunnel_grid()
     totals: dict[str, np.ndarray] = {}
     counts: dict[str, np.ndarray] = {}
     try:
-        import json
-        pdir = _HERE.parent / "data" / "processed" / "portraits"
-        for path in sorted(pdir.glob(f"*_{season}.json")):
-            try:
-                p = json.loads(path.read_text())
-            except Exception:
-                continue
+        for p in portraits:
             by_type = (p.get("arsenal_trajectories") or {}).get("by_pitch_type") or {}
             arms: dict[int, dict] = {}
             for pt, entries in by_type.items():
@@ -3972,6 +3961,18 @@ def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
 
     out = {k: np.where(counts[k] > 0, totals[k] / np.maximum(counts[k], 1), np.nan)
            for k in totals}
+    return {k: [None if not np.isfinite(x) else float(x) for x in v]
+            for k, v in out.items()}
+
+
+def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
+    """The season's league curves, as published to league_seasons."""
+    if season in _TUNNEL_LEAGUE_CACHE:
+        return _TUNNEL_LEAGUE_CACHE[season]
+    import store
+    raw = store.get_league(season, "tunnel_average")
+    out = {k: np.array([np.nan if x is None else x for x in v], dtype=float)
+           for k, v in raw.items()}
     _TUNNEL_LEAGUE_CACHE[season] = out
     return out
 
@@ -4377,57 +4378,23 @@ def pitch_arsenal_3d(portrait: dict,
 # Scout — find player-seasons by tag
 # ---------------------------------------------------------------------------
 #
-# Reads dashboard/scout_index.json, which refresh.py flattens out of the 360
-# portraits. Scout used to query Postgres and re-derive every trait through
-# hitter_traits: a second implementation of the tag system running beside the
-# one the portraits already hold, free to disagree with every other tab, and
-# a live database sitting in the serving path. The portraits already carry
-# 18,664 player-seasons and 87,133 tag firings, each with the sentence that
-# earned it.
+# Reads the scout_players / scout_tags tables through the scout_* SQL functions
+# (schema_serving.sql), which publish.py flattens out of the 360 portraits.
+# Scout used to load all 18,664 player-seasons into memory from a 13 MB file
+# committed to git; now the database filters and sorts, and only the page that
+# is drawn travels. The tag catalogue is the one thing held here, because
+# every renderer below needs a tag's kind and direction.
 
 SCOUT_PAGE_SIZE = 15
-_SCOUT_INDEX: dict | None = None
 
 
-def scout_index() -> dict:
-    """The flattened player-season index. Loaded once, ~0.17s."""
-    global _SCOUT_INDEX
-    if _SCOUT_INDEX is None:
-        import json as _json
-        import logging as _logging
-        try:
-            _SCOUT_INDEX = _json.loads((_HERE / "scout_index.json").read_text())
-        except Exception as exc:
-            # Degrade to an empty index rather than raising: a missing file
-            # should leave Scout saying "no matches", not break every tab that
-            # imports this module.
-            _logging.getLogger(__name__).warning(
-                "scout_index.json unavailable (%s) — Scout will return nothing", exc)
-            _SCOUT_INDEX = {"players": [], "tags": {}, "seasons": [], "fingerprint": None}
-    return _SCOUT_INDEX
+def scout_catalogue() -> dict:
+    """tag -> {kind, family, side, n, dir}, from the scout_tags table."""
+    import store
+    return store.scout_tags()
 
 
-def scout_index_stale(gates_only: bool = False) -> bool:
-    """
-    True when the index was flattened from a different portrait build.
-
-    Same job the portrait fingerprint does one layer down: an index left
-    behind by a rebuild is wrong in a way nothing else would reveal, because
-    it still parses and still answers queries. gates_only as in
-    team_portrait.fingerprint_matches — the read-only server has no pools.
-    """
-    try:
-        from team_portrait import fingerprint_matches
-        idx = scout_index()
-        if not idx.get("fingerprint"):
-            return False                # no index at all, not a stale one
-        return not fingerprint_matches(idx.get("fingerprint"),
-                                       idx.get("gate_fingerprint"), gates_only)
-    except Exception:
-        return False
-
-
-def tag_strength(tag: str, pct) -> float | None:
+def tag_strength(tag: str, pct, cat: dict | None = None) -> float | None:
     """
     How strongly a player has a tag, on one 0-100 scale for every tag.
 
@@ -4442,7 +4409,7 @@ def tag_strength(tag: str, pct) -> float | None:
     """
     if not isinstance(pct, (int, float)):
         return None
-    if scout_index().get("tags", {}).get(tag, {}).get("dir") == "low":
+    if (cat if cat is not None else scout_catalogue()).get(tag, {}).get("dir") == "low":
         return 100.0 - float(pct)
     return float(pct)
 
@@ -4457,7 +4424,7 @@ def scout_tag_options(side: str | None = None,
     pitch` 13 — and a plain alphabetical list buries every tag worth picking
     among the ones that match half the league.
     """
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     want = set(kinds) if kinds else None
     rows = []
     for tag, m in cat.items():
@@ -4481,67 +4448,26 @@ def scout_query(tags: list[str] | None = None,
                 min_vol: int = 0,
                 exclude_limited: bool = True,
                 teams: list[str] | None = None,
-                sort: str = "extreme") -> list[dict]:
+                sort: str = "extreme") -> tuple[list[dict], int]:
     """
     Filter the index. Returns rows with the matched tags attached.
 
     `match_all` is the difference between "who is BOTH a plus power bat and
     fast" and "who is either", and it is the whole point of a tag search, so
     it is a control rather than a default.
+
+    Returns (rows, total): up to 2,000 slim rows — what the results table
+    draws — and the full match count. Filtering, scoring and sorting run in
+    the scout_search SQL function, which mirrors what this did in memory.
     """
-    ix = scout_index()
-    cat = ix.get("tags", {})
-    want = set(tags or [])
-    kindset = set(kinds or [])
-    teamset = set(teams or [])
-    out = []
-
-    for p in ix.get("players", []):
-        if side and p.get("d") != side:
-            continue
-        if exclude_limited and p.get("l"):
-            continue
-        s = p.get("s")
-        if season_min and s < season_min:
-            continue
-        if season_max and s > season_max:
-            continue
-        if min_vol and (p.get("v") or 0) < min_vol:
-            continue
-        if teamset and p.get("t") not in teamset:
-            continue
-
-        have = {g[0] for g in p.get("tg", [])}
-        if want:
-            if match_all and not want <= have:
-                continue
-            if not match_all and not (want & have):
-                continue
-            matched = [g for g in p["tg"] if g[0] in want]
-        elif kindset:
-            matched = [g for g in p["tg"] if cat.get(g[0], {}).get("kind") in kindset]
-            if not matched:
-                continue
-        else:
-            matched = list(p.get("tg", []))
-
-        # Direction-normalised, or "most extreme patient" ranks the LEAST
-        # patient first — `patient` is chase rate, where low is the trait.
-        st = [s for s in (tag_strength(g[0], g[1]) for g in matched) if s is not None]
-        out.append({**p, "matched": matched,
-                    "score": sum(st) / len(st) if st else 0.0})
-
-    keys = {
-        # "extreme" ranks by how far into the tag the player actually is —
-        # a percentile search whose hits are unordered is just a list.
-        "extreme": lambda r: (-r["score"], -(r.get("v") or 0)),
-        "war":     lambda r: (-(r.get("w") or -99),),
-        "volume":  lambda r: (-(r.get("v") or 0),),
-        "recent":  lambda r: (-r["s"], -(r.get("v") or 0)),
-        "name":    lambda r: (r.get("n") or "",),
-    }
-    out.sort(key=keys.get(sort, keys["extreme"]))
-    return out
+    import store
+    return store.scout_search(
+        p_tags=list(tags) if tags else None,
+        p_kinds=list(kinds) if kinds else None,
+        p_side=side, p_match_all=match_all,
+        p_season_min=season_min, p_season_max=season_max,
+        p_min_vol=int(min_vol or 0), p_exclude_limited=exclude_limited,
+        p_teams=list(teams) if teams else None, p_sort=sort)
 
 
 def scout_results(rows: list[dict], page: int = 0):
@@ -4554,7 +4480,7 @@ def scout_results(rows: list[dict], page: int = 0):
     finding, and 100% of the 87,133 firings carry one. A results list that
     hides it is a list of names.
     """
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     if not rows:
         return html.Div("No player-seasons match these filters.",
                         className="text-secondary small p-3")
@@ -4652,34 +4578,20 @@ def compare_player_options(query: str | None, side: str = "H",
     would ship megabytes of options to the browser to filter client-side, so
     the search runs here and only the matches travel.
     """
-    q = (query or "").strip().lower()
+    q = (query or "").strip()
     if len(q) < 2:
         return []
-    out = []
-    for p in scout_index().get("players", []):
-        if side and p.get("d") != side:
-            continue
-        if q not in (p.get("n") or "").lower():
-            continue
-        out.append((-(p.get("v") or 0), {
-            "label": f"{p['n']} · {p['t']} {p['s']} · "
-                     f"{p.get('v') or 0:,} {'PA' if p['d'] == 'H' else 'BF'}",
-            "value": compare_key(p)}))
-    out.sort(key=lambda x: x[0])
-    return [o for _, o in out[:limit]]
+    import store
+    return [{"label": f"{p['n']} · {p['t']} {p['s']} · "
+                      f"{p.get('v') or 0:,} {'PA' if p['d'] == 'H' else 'BF'}",
+             "value": compare_key(p)}
+            for p in store.scout_name_search(q, side, limit)]
 
 
 def compare_rows(keys: list[str] | None) -> list[dict]:
-    """Index rows for the chosen keys, in the order chosen."""
-    if not keys:
-        return []
-    want = {k: i for i, k in enumerate(keys)}
-    found = {}
-    for p in scout_index().get("players", []):
-        k = compare_key(p)
-        if k in want:
-            found[k] = p
-    return [found[k] for k in keys if k in found]
+    """Full rows for the chosen keys, in the order chosen."""
+    import store
+    return store.scout_rows(keys or [])
 
 
 def compare_tag_matrix(rows: list[dict]):
@@ -4694,7 +4606,7 @@ def compare_tag_matrix(rows: list[dict]):
         return html.Div("Add two or more player-seasons to compare.",
                         className="text-secondary small p-3")
 
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     per = [{t[0]: t for t in r.get("tg", [])} for r in rows]
     tags = {t for d in per for t in d}
 
@@ -4855,7 +4767,7 @@ def compare_summary(rows: list[dict]):
     """One line per player: what only they have among the group."""
     if len(rows) < 2:
         return html.Div()
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     sets = [{t[0] for t in r.get("tg", [])} for r in rows]
     shared = set.intersection(*sets) if sets else set()
     items = []
@@ -4890,7 +4802,7 @@ def compare_summary(rows: list[dict]):
 # stored, but a single query is one vector against ~2,600 same-side
 # candidates, which lands in tens of milliseconds.
 
-def _comp_vector(row: dict, use_attributes: bool = False) -> dict[str, float]:
+def _comp_vector(row: dict, cat: dict) -> dict[str, float]:
     """
     A player-season as a sparse tag vector.
 
@@ -4905,24 +4817,13 @@ def _comp_vector(row: dict, use_attributes: bool = False) -> dict[str, float]:
     percentile chase rate counts as 0.95 rather than 0.05, and a categorical
     tag counts as simply present.
     """
-    cat = scout_index().get("tags", {})
     v: dict[str, float] = {}
     for tag, pct, _ev in row.get("tg", []):
-        if not use_attributes and cat.get(tag, {}).get("kind") == "attribute":
+        if cat.get(tag, {}).get("kind") == "attribute":
             continue
-        s = tag_strength(tag, pct)
+        s = tag_strength(tag, pct, cat)
         v[tag] = 1.0 if s is None else s / 100.0
     return v
-
-
-def _cosine(a: dict[str, float], b: dict[str, float]) -> float:
-    shared = a.keys() & b.keys()
-    if not shared:
-        return 0.0
-    num = sum(a[k] * b[k] for k in shared)
-    na = math.sqrt(sum(x * x for x in a.values()))
-    nb = math.sqrt(sum(x * x for x in b.values()))
-    return num / (na * nb) if na and nb else 0.0
 
 
 def attribute_options(side: str = "H") -> list[dict]:
@@ -4937,7 +4838,7 @@ def attribute_options(side: str = "H") -> list[dict]:
     entirely. So they are a filter instead — a constraint you ask for, rather
     than a thumb on the scale you cannot see.
     """
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     rows = [(-(m.get("n") or 0), t, m) for t, m in cat.items()
             if m.get("kind") == "attribute"
             and m.get("side") in (side, "B")]
@@ -4946,7 +4847,6 @@ def attribute_options(side: str = "H") -> list[dict]:
 
 
 def player_comps(key: str, limit: int = 8, min_vol: int = 300,
-                 use_attributes: bool = False,
                  same_season_only: bool = False,
                  require: list[str] | None = None) -> tuple[dict | None, list[tuple[float, dict]]]:
     """
@@ -4957,36 +4857,16 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
     himself a year later, the similarity is not measuring anything stable.
     Skubal 2024's closest comp is Skubal 2025 at 0.873, and Soto 2024 finds
     Soto 2023.
+
+    Cosine similarity over the comp vectors runs in the scout_comps SQL
+    function; the vectors themselves are built by _comp_vector at publish.
     """
     rows = compare_rows([key])
     if not rows:
         return None, []
-    target = rows[0]
-    tv = _comp_vector(target, use_attributes)
-    if not tv:
-        return target, []
-
-    need = set(require or [])
-    out = []
-    for p in scout_index().get("players", []):
-        if p.get("d") != target.get("d"):
-            continue
-        if compare_key(p) == key:
-            continue
-        if (p.get("v") or 0) < min_vol:
-            continue
-        # Attribute constraint. Applied to the CANDIDATES only and never to
-        # the vector, so it narrows who is eligible without changing what
-        # "similar" means for those who are.
-        if need and not need <= {t[0] for t in p.get("tg", [])}:
-            continue
-        if same_season_only and p.get("s") != target.get("s"):
-            continue
-        sim = _cosine(tv, _comp_vector(p, use_attributes))
-        if sim > 0:
-            out.append((sim, p))
-    out.sort(key=lambda x: -x[0])
-    return target, out[:limit]
+    import store
+    comps = store.scout_comps(key, limit, int(min_vol or 0), require, same_season_only)
+    return rows[0], [(c.pop("sim"), c) for c in comps]
 
 
 def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
@@ -4998,7 +4878,7 @@ def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
         return html.Div("No comparable player-seasons at this playing-time floor.",
                         className="text-secondary small p-3")
 
-    cat = scout_index().get("tags", {})
+    cat = scout_catalogue()
     tset = {t[0] for t in target.get("tg", [])}
     rows = []
     for sim, p in comps:

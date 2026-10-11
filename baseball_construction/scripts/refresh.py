@@ -4,7 +4,7 @@ refresh.py — one command to bring every derived layer up to date.
 
 A full refresh has always been a sequence run by hand: top up Statcast,
 regenerate the tunnel caches, rebuild portraits season by season, regenerate
-the tag reference, upload. Every stale-cache bug this project has had came
+the tag reference, publish. Every stale-cache bug this project has had came
 from that sequence being run partially or out of order — portraits rebuilt
 from a half-regenerated pool, thirty-one schema-20 portraits skipped as cache
 hits, a tunnel cache built from a Statcast file that was itself three months
@@ -20,13 +20,14 @@ Stages run in dependency order, each feeding the next:
     portraits  rebuild whatever the build fingerprint now marks stale,
                and rewrite league_identity_*.json
     tags       regenerate TAGS.md and dashboard/tag_reference.json
-    upload     push portraits to Supabase Storage        (opt-in)
+    publish    write portraits, league seasons and Scout to the serving
+               tables the dashboard reads (scripts/publish.py)
 
 Routine refresh (data you own, no external feeds):
     python scripts/refresh.py
 
 EVERYTHING, including re-pulling every external source:
-    python scripts/refresh.py --stages statcast,sources,tunnel,portraits,tags
+    python scripts/refresh.py --stages statcast,sources,tunnel,portraits,tags,publish
 
 See what would change, touch nothing:
     python scripts/refresh.py --dry-run
@@ -65,7 +66,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import socket
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -80,12 +80,12 @@ TUNNEL_DIR    = _HERE.parent / "modules" / "processed"
 PORTRAIT_DIR  = _HERE.parent / "data" / "processed" / "portraits"
 
 FIRST_SEASON, LAST_SEASON = 2015, 2026
-DASHBOARD_PORT = 8050
 
-STAGES = ("statcast", "sources", "tunnel", "portraits", "tags", "upload")
-# `sources` and `upload` are opt-in: the first re-pulls every external feed
-# (slow, network-bound, and the least reliable step), the second publishes.
-DEFAULT_STAGES = ("statcast", "tunnel", "portraits", "tags")
+STAGES = ("statcast", "sources", "tunnel", "portraits", "tags", "publish")
+# `sources` is opt-in: it re-pulls every external feed (slow, network-bound,
+# and the least reliable step). `publish` is on: a build nobody can read is
+# not finished.
+DEFAULT_STAGES = ("statcast", "tunnel", "portraits", "tags", "publish")
 
 log = logging.getLogger("refresh")
 
@@ -93,21 +93,6 @@ log = logging.getLogger("refresh")
 # ---------------------------------------------------------------------------
 # Guards
 # ---------------------------------------------------------------------------
-
-def dashboard_is_running(port: int = DASHBOARD_PORT) -> bool:
-    """
-    Is something listening on the dashboard port?
-
-    The dashboard is a WRITER: on a cache miss it builds the portrait itself
-    and saves it. During a rebuild that means it can serve a request against
-    half-regenerated pools and write the result, which then looks like a valid
-    cache hit forever. That is not hypothetical — it is how a bad HOU_2025
-    portrait got created mid-rebuild. So refuse to start while it is up.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex(("127.0.0.1", port)) == 0
-
 
 # ---------------------------------------------------------------------------
 # Stages
@@ -449,141 +434,34 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
             fp, after, max(1, jobs))
 
 
-SCOUT_INDEX = _HERE.parent / "dashboard" / "scout_index.json"
-
-
-def _write_scout_index() -> None:
-    """
-    Flatten all 360 portraits into one player-season index for Scout.
-
-    Scout currently queries Postgres and re-derives every trait through
-    hitter_traits, which is a second implementation of the tag system running
-    beside the one the portraits already hold — so it can disagree with every
-    other tab, and it puts a live database in the serving path. The portraits
-    already carry all of it: 18,664 player-seasons, every tag with the
-    evidence sentence that earned it.
-
-    Shape is chosen for a filter UI, not for readability:
-
-      tags    catalogue, tag -> {kind, family, side, n}. Kind lives here
-              rather than on all 87k firings, which is most of the saving.
-      players one row per player-season, short keys, tags as
-              [tag, pct, evidence] triples.
-
-    `fingerprint` records the portrait build this was flattened from, so a
-    stale index is detectable rather than silently wrong — the same problem
-    the portrait fingerprint exists to solve.
-    """
-    import json
-    from collections import Counter, defaultdict
-    from team_portrait import kind_of, build_fingerprint, gate_fingerprint
-
-    GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
-    cat: dict[str, dict] = {}
-    counts: Counter = Counter()
-    pcts: defaultdict = defaultdict(list)
-    sides: defaultdict = defaultdict(set)
-    players: list[dict] = []
-    seasons: set[int] = set()
-
-    for f in sorted(PORTRAIT_DIR.glob("*.json")):
-        try:
-            p = json.loads(f.read_text())
-        except Exception as exc:
-            log.warning("  scout index: skipping %s (%s)", f.name, exc)
-            continue
-        team, season = p.get("team"), p.get("season")
-        seasons.add(season)
-        for grp, side in GROUPS:
-            for pl in (p.get("players") or {}).get(grp) or []:
-                tg = []
-                for t in (pl.get("traits") or []):
-                    tag = t.get("tag")
-                    if not tag:
-                        continue
-                    counts[tag] += 1
-                    sides[tag].add(side)
-                    if tag not in cat:
-                        cat[tag] = {"kind": kind_of(tag) or "other",
-                                    "family": t.get("family")}
-                    pct = t.get("pct")
-                    if isinstance(pct, (int, float)):
-                        pcts[tag].append(float(pct))
-                    tg.append([tag,
-                               round(float(pct), 1) if isinstance(pct, (int, float)) else None,
-                               t.get("evidence")])
-                players.append({
-                    "i": pl.get("player_id"), "n": pl.get("name"),
-                    "t": team, "s": season, "d": side, "g": grp,
-                    "a": pl.get("age"),
-                    "v": pl.get("pa") if side == "H" else pl.get("bf"),
-                    "w": round(w, 2) if isinstance((w := pl.get("war")), (int, float)) else None,
-                    "l": bool(pl.get("limited_sample")),
-                    "p": pl.get("home_position"), "h": pl.get("handedness"),
-                    "pop": pl.get("populations") or [],
-                    "tg": tg,
-                    "m": {k: round(v, 1) for k, v in (pl.get("metrics_pct") or {}).items()
-                          if isinstance(v, (int, float))},
-                })
-
-    # Direction. A tag's percentile is the percentile of the METRIC behind it,
-    # not of the trait's strength, and for 22 of them low IS the trait:
-    # `patient` is chase rate at the 5th percentile, `air-ball bat` is
-    # ground-ball rate at the 5th. Rendering a bare 5 beside a 99 says the
-    # opposite of what it means.
-    #
-    # Derivable rather than declared: measured over all 87,133 firings, 22
-    # tags never exceed the 50th percentile, 37 never fall below it, and
-    # exactly none straddle it. So the observed range settles direction
-    # without a hand-maintained list that could drift from the gates.
-    for tag, meta in cat.items():
-        meta["n"] = counts[tag]
-        s = sides[tag]
-        meta["side"] = "B" if len(s) > 1 else next(iter(s), None)
-        seen = pcts.get(tag)
-        if not seen:
-            meta["dir"] = None          # categorical: handedness, out-pitch
-        elif max(seen) <= 50:
-            meta["dir"] = "low"
-        elif min(seen) >= 50:
-            meta["dir"] = "high"
-        else:
-            meta["dir"] = "high"        # never observed; treat as ordinary
-
-    out = {
-        "fingerprint": build_fingerprint(),
-        "gate_fingerprint": gate_fingerprint(),
-        "seasons": [min(seasons), max(seasons)] if seasons else [],
-        "n_players": len(players),
-        "tags": dict(sorted(cat.items(), key=lambda kv: -kv[1]["n"])),
-        "players": players,
-    }
-    SCOUT_INDEX.parent.mkdir(parents=True, exist_ok=True)
-    SCOUT_INDEX.write_text(json.dumps(out, separators=(",", ":")))
-    mb = SCOUT_INDEX.stat().st_size / 1e6
-    log.info("  wrote %s — %d player-seasons, %d tags, %.1f MB",
-             SCOUT_INDEX.name, len(players), len(cat), mb)
-
-
 def stage_tags(dry: bool) -> None:
     """
-    Regenerate the dashboard's reference data from the portraits: TAGS.md,
-    tag_reference.json, and the Scout index.
+    Regenerate the tag reference from the portraits: TAGS.md and
+    tag_reference.json.
 
-    Must run AFTER portraits — all three are counted or flattened out of them,
-    so running first documents the previous build.
+    Must run AFTER portraits — both are counted out of them, so running first
+    documents the previous build.
     """
     if dry:
-        log.info("  would regenerate TAGS.md, tag_reference.json, scout_index.json")
+        log.info("  would regenerate TAGS.md, tag_reference.json")
         return
     import tag_reference
     tag_reference.build(False)
-    _write_scout_index()
 
 
-def stage_upload(dry: bool) -> None:
-    import upload_portraits
-    upload_portraits.upload_portraits(dry_run=dry)
+def stage_publish(seasons: list[int], dry: bool) -> None:
+    """
+    Write the built artefacts to the serving tables. Must run AFTER portraits
+    and tags; refuses any portrait that is not current for this machine.
+    """
+    import publish
+    client = publish._write_client()
+    root = _HERE.parent
+    refused = publish.publish_portraits(root, set(seasons), client, dry, False)
+    publish.publish_league(root, set(seasons), client, dry, False)
+    publish.publish_scout(root, client, dry)
+    if refused:
+        log.warning("  %d portrait(s) refused as not current — see above", refused)
 
 
 # ---------------------------------------------------------------------------
@@ -603,9 +481,6 @@ def main() -> int:
                          "(use after changing tunnelling code)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what each stage would do, change nothing")
-    ap.add_argument("--allow-dashboard", action="store_true",
-                    help="run even if the dashboard is up (it can write "
-                         "portraits mid-rebuild — see dashboard_is_running)")
     args = ap.parse_args()
 
     # stdout, not the default stderr: stage headers are printed and stage
@@ -628,15 +503,6 @@ def main() -> int:
     if bad:
         print(f"unknown stage(s): {', '.join(sorted(bad))}", file=sys.stderr)
         return 2
-
-    if "portraits" in stages and not args.dry_run and not args.allow_dashboard:
-        if dashboard_is_running():
-            print(f"\nThe dashboard is listening on :{DASHBOARD_PORT}.\n"
-                  "It writes portraits on a cache miss, so a rebuild racing it can\n"
-                  "leave a portrait built from half-regenerated pools looking like a\n"
-                  "valid cache hit. Stop it first, or pass --allow-dashboard.\n",
-                  file=sys.stderr)
-            return 1
 
     t0 = time.time()
     head = "DRY RUN — nothing will change" if args.dry_run else "refresh"
@@ -662,8 +528,8 @@ def main() -> int:
             stage_portraits(seasons, max(1, args.jobs), args.dry_run)
         elif name == "tags":
             stage_tags(args.dry_run)
-        elif name == "upload":
-            stage_upload(args.dry_run)
+        elif name == "publish":
+            stage_publish(seasons, args.dry_run)
         print(f"  ({time.time() - ts:.0f}s)\n")
 
     print(f"done in {time.time() - t0:.0f}s")

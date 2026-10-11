@@ -56,8 +56,8 @@ what looks odd in this repo is odd for a reason written down in DECISIONS.
 ```
 baseball_construction/
   modules/       ingest, aggregates, portrait build, tag gates, reliability
-  scripts/       refresh.py (the only writer) + maintenance tools
-  dashboard/     Dash app — read-only presentation
+  scripts/       refresh.py (the build), publish.py (the only writer) + tools
+  dashboard/     Dash app — reads the published tables, writes nothing
   data/raw/      Statcast parquet, one per season
   data/processed/  derived pools + portraits/
 docs/            architecture, operations, decisions
@@ -65,6 +65,6 @@ Dockerfile       web tier
 render.yaml      deployment
 ```
 
-Python 3.12. Supabase credentials (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`) go
-in `.env` and are only needed for Storage upload and seeding — the dashboard
-runs without them off local portraits.
+Python 3.12. Supabase credentials go in `.env`: `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` to run the dashboard, which reads the published tables;
+`SUPABASE_SERVICE_KEY` as well to build, seed and publish.
