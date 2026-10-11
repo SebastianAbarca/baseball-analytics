@@ -767,20 +767,57 @@ def arsenal_pitches_for_pitcher(player_ids, data, current_options):
 
 
 @callback(
+    Output("tunnel-baseline", "options"),
+    Output("tunnel-baseline", "value"),
+    Input("arsenal-pitch-filter", "options"),
+    State("tunnel-baseline", "value"),
+)
+def tunnel_baseline_choices(pitch_options, current):
+    """
+    Baseline choices follow the selected pitcher's arsenal — every pitch he
+    throws, whether or not it is ticked in the filter, since the baseline is
+    the reference rather than one of the lines.
+
+    The value is only written when it has to change (the old baseline is not
+    in the new arsenal). Writing it unchanged would re-fire arsenal_figures
+    and draw the arsenal twice per team switch — the same double draw
+    arsenal_pitches_for_pitcher guards against.
+    """
+    pitches = [o.get("value") for o in (pitch_options or [])]
+    # "auto", not "": dbc.Select renders its own blank placeholder option with
+    # value "", and an auto option sharing that value displayed as the blank.
+    options = ([{"label": "Primary fastball (auto)", "value": "auto"}]
+               + [{"label": pt, "value": pt} for pt in pitches])
+    if current in (None, "", "auto") or current in pitches:
+        return options, no_update
+    return options, "auto"
+
+
+@callback(
     Output("arsenal-3d-chart",      "figure"),
     Output("tunnel-profile-chart",  "figure"),
     Input("arsenal-pitcher-dropdown", "value"),
     Input("arsenal-pitch-filter",     "value"),
+    Input("tunnel-baseline",          "value"),
+    Input("tunnel-league-avg",        "value"),
     State("portrait-store", "data"),
 )
-def arsenal_figures(player_ids, pitch_types, data):
-    """Both arsenal views in one trip — same inputs, same portrait, same work."""
+def arsenal_figures(player_ids, pitch_types, baseline, show_league, data):
+    """
+    Both arsenal views in one trip — same inputs, same portrait, same work.
+    The baseline and league-average controls only concern the tunnel chart,
+    so the 3D view is left as drawn when they change.
+    """
     p = _deserialize(data)
     if not p:
         empty = charts.empty_figure("Load a portrait to see pitch trajectories")
         return empty, charts.empty_figure("Load a portrait to see tunnelling")
-    return (charts.pitch_arsenal_3d(p, player_ids, pitch_types),
-            charts.tunnel_profile(p, player_ids, pitch_types))
+    tunnel = charts.tunnel_profile(p, player_ids, pitch_types,
+                                   None if baseline in (None, "", "auto") else baseline,
+                                   show_league=show_league is not False)
+    if ctx.triggered_id in ("tunnel-baseline", "tunnel-league-avg"):
+        return no_update, tunnel
+    return charts.pitch_arsenal_3d(p, player_ids, pitch_types), tunnel
 
 
 # ---------------------------------------------------------------------------

@@ -3979,9 +3979,19 @@ def tunnel_league_average(season: int) -> dict[str, np.ndarray]:
 
 def tunnel_profile(portrait: dict,
                    player_ids: list[int] | None = None,
-                   pitch_types: list[str] | None = None) -> go.Figure:
+                   pitch_types: list[str] | None = None,
+                   baseline: str | None = None,
+                   show_league: bool = True) -> go.Figure:
     """
     How well each pitch mirrors the fastball, from release to the plate.
+
+    `baseline` picks the pitch everything is measured against instead of the
+    primary fastball — a sinker/four-seam pitcher's other fastball, or a
+    slider-curveball pair. An arm that does not throw it keeps his own primary
+    fastball. The baseline is drawn against even when the pitch filter has it
+    unticked: it is the reference, not one of the compared lines.
+
+    `show_league` turns the dotted league-average lines off.
 
     The single-number tunnel score in tunneling.py samples one instant and
     calls it deception. What matters is the SHAPE: two pitches that sit on
@@ -3990,7 +4000,7 @@ def tunnel_profile(portrait: dict,
     separation continuously and marks the decision point on it, rather than
     reporting the value there and discarding the curve.
 
-    y = separation from the reference fastball, in inches
+    y = separation from the reference pitch, in inches
     x = distance to the plate, release on the left
     """
     arsenal = portrait.get("arsenal_trajectories", {})
@@ -4007,7 +4017,8 @@ def tunnel_profile(portrait: dict,
     for pt, entries in by_type.items():
         for e in entries:
             pid = int(e.get("player_id") or -1)
-            if pid in wanted and (not pitch_types or pt in pitch_types):
+            if pid in wanted and (not pitch_types or pt in pitch_types
+                                  or pt == baseline):
                 arms.setdefault(pid, {})[pt] = e
     if not arms:
         return empty_figure("No pitches selected")
@@ -4017,9 +4028,13 @@ def tunnel_profile(portrait: dict,
     # second pitcher cannot be confused for an average.
     dashes = ["solid", "dash", "longdash", "dashdot"]
     shown_types: set[str] = set()
+    # An unticked baseline is only in `arms` to be measured against, so it is
+    # always the reference when present — never one of the lines.
+    refs = {pid: baseline if baseline in pitches else _reference_pitch(pitches)
+            for pid, pitches in arms.items()}
     for i, pid in enumerate([p for p in wanted if p in arms]):
         pitches = arms[pid]
-        ref = _reference_pitch(pitches)
+        ref = refs[pid]
         others = {k: v for k, v in pitches.items() if k != ref}
         if ref is None or not others:
             continue
@@ -4053,7 +4068,16 @@ def tunnel_profile(portrait: dict,
     # League average for each pitch type on the chart, drawn underneath in the
     # same colour. Without it a curve at 2" reads as remarkable when it may
     # just be what a curveball does.
-    league = tunnel_league_average(int(portrait.get("season") or 0))
+    #
+    # The averages are measured from each arm's own primary fastball, so they
+    # only mean anything when every arm on the chart is on that default.
+    # Against a chosen baseline they would be comparing different distances.
+    on_default = all(
+        refs[pid] == _reference_pitch(
+            {k: v for k, v in arms[pid].items() if not pitch_types or k in pitch_types})
+        for pid in arms)
+    league = (tunnel_league_average(int(portrait.get("season") or 0))
+              if on_default and show_league else {})
     grid = _tunnel_grid()
     drew_avg = False
     for name in sorted(shown_types):
@@ -4082,14 +4106,19 @@ def tunnel_profile(portrait: dict,
                        text="decision point", showarrow=False,
                        font=dict(size=9, color="#9ca3af"))
 
-    ref_names = sorted({_reference_pitch(p) for p in arms.values()} - {None})
+    ref_names = sorted(set(refs.values()) - {None})
+    against = ("the fastball" if on_default
+               else ref_names[0] if len(ref_names) == 1 else "the baseline")
     fig.update_layout(
         **{**_DARK_LAYOUT, "margin": dict(l=54, r=16, t=78, b=44)},
         title=dict(
-            text="Tunnelling — separation from the fastball<br>"
+            text=f"Tunnelling — separation from {against}<br>"
                  f"<sup>vs {', '.join(ref_names)} · lower for longer is a "
                  "better tunnel"
                  + (" · dotted = league average for that pitch" if drew_avg else "")
+                 + ("" if on_default or not show_league else
+                    " · league averages are measured from the primary "
+                    "fastball, so they are hidden")
                  + "</sup><br>"
                  "<sup>everything right of the vertical line is break the "
                  "hitter cannot act on</sup>",

@@ -774,7 +774,23 @@ def arsenal_3d_card() -> dbc.Card:
                       style={"height": "520px"}),
             # Same pitcher, same pitch filter, second question. The 3D view
             # shows where each pitch goes; this shows how long it looked like
-            # the fastball on the way there. One set of controls drives both.
+            # the fastball on the way there. One set of controls drives both,
+            # plus the baseline, which only this chart has: which pitch the
+            # others are measured against. Defaults to the primary fastball.
+            dbc.Row([
+                dbc.Col(html.Small("Baseline pitch", className="text-secondary",
+                                   style={"fontSize": "0.7rem"}),
+                        width="auto", className="d-flex align-items-center"),
+                dbc.Col(dbc.Select(id="tunnel-baseline", options=[], value="auto",
+                                   size="sm", style={"minWidth": "220px"}),
+                        width="auto"),
+                dbc.Col(dbc.Switch(id="tunnel-league-avg", value=True,
+                                   label="League average",
+                                   label_style={"fontSize": "0.7rem",
+                                                "color": "#d1d5db"},
+                                   className="mb-0"),
+                        width="auto", className="d-flex align-items-center ms-2"),
+            ], className="g-2 mt-2 mb-1 align-items-center"),
             dcc.Graph(id="tunnel-profile-chart", config={"displayModeBar": False},
                       style={"height": "380px"}),
         ], style={"padding": "8px"}),
