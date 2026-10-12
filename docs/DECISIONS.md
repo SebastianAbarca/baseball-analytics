@@ -78,11 +78,13 @@ his sweeper in 2021, 2023 and 2024 and loses the 10%-whiff curveballs;
 2025's tagged pitches include Skubal's changeup (28%) and Yesavage's and
 Fernando Cruz's splitters (32%, 29%).
 
-**Open question — kind.** The tag stayed `behavior` ("what he chooses to
-throw", beside `sinker-baller` and `deep arsenal`). But the reasoning that kept
-`ride four-seam` a `tool` — it clears a threshold — now applies here too, and
-the threshold is a whiff rate, which is a result. Reclassifying it as `result`
-would move it beside `bat-misser` in every fingerprint.
+**Kind: still `behavior`, decided 2026-10-12.** The reasoning that made
+`ride four-seam` a `tool` — it clears a threshold — applies here too, and the
+threshold is a whiff rate, which reads like a result. Kept as `behavior`
+anyway: the tag names which pitch he chooses to finish hitters with, beside
+`sinker-baller` and `deep arsenal`, and the whiff bar decides only whether
+that choice is notable enough to say. `result` would have moved it beside
+`bat-misser` in every fingerprint.
 
 ---
 

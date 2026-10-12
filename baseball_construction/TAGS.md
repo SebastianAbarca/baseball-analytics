@@ -49,24 +49,24 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `soft tosser` | P | arsenal | 917 | all | — | elite velo, plus velo |
 | `station-to-station` | H | athleticism | 636 | speed | — | elite speed, fast |
 
-## behavior  ·  32 tags, 27,269 firings
+## behavior  ·  32 tags, 21,155 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
 | `aggressive` | H | approach | 1,174 | chase | 75 (FPS_pct) | — |
 | `air-ball bat` | H | batted-ball | 513 | all | 100 (BatGB_pct) | ground-ball bat |
-| `changeup out pitch` | P | arsenal | 1,813 | all | — | — |
+| `changeup out pitch` | P | arsenal | 502 | all | — | — |
 | `count-shifter` | P | sequencing | 721 | all | — | — |
-| `curveball out pitch` | P | arsenal | 991 | all | — | — |
+| `curveball out pitch` | P | arsenal | 320 | all | — | — |
 | `cutter-primary` | P | arsenal | 476 | all | — | — |
 | `deep arsenal` | P | arsenal | 1,356 | all | — | two-pitch |
 | `extra base taker` | H | running-game | 736 | xbt | — | — |
 | `first-pitch attacker` | P | sequencing | 824 | all | — | — |
-| `forkball out pitch` | P | arsenal | 13 | all | — | — |
+| `forkball out pitch` | P | arsenal | 7 | all | — | — |
 | `free swinger` | H | approach | 948 | chase | 50 (OSwing_pct) | patient |
 | `ground-ball bat` | H | batted-ball | 319 | all | 100 (BatGB_pct) | air-ball bat |
 | `high steal attempts` | H | running-game | 793 | steal_opps | — | low steal attempts |
-| `knuckle-curve out pitch` | P | arsenal | 342 | all | — | — |
+| `knuckle-curve out pitch` | P | arsenal | 100 | all | — | — |
 | `knuckleballer` | P | arsenal | 9 | all | — | — |
 | `low steal attempts` | H | running-game | 433 | steal_opps | — | high steal attempts |
 | `oppo bat` | H | batted-ball | 687 | all | 100 (BatGB_pct) | pull-heavy |
@@ -75,12 +75,12 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `pull-heavy` | H | batted-ball | 587 | all | 100 (BatGB_pct) | oppo bat |
 | `quick pitcher` | P | sequencing | 389 | tempo | — | slow pitcher |
 | `sinker-baller` | P | arsenal | 2,262 | all | — | — |
-| `slider out pitch` | P | arsenal | 3,640 | all | — | — |
+| `slider out pitch` | P | arsenal | 742 | all | — | — |
 | `slow pitcher` | P | sequencing | 421 | tempo | — | quick pitcher |
-| `slurve out pitch` | P | arsenal | 61 | all | — | — |
-| `splitter out pitch` | P | arsenal | 415 | all | — | — |
+| `slurve out pitch` | P | arsenal | 2 | all | — | — |
+| `splitter out pitch` | P | arsenal | 93 | all | — | — |
 | `steady mix` | P | sequencing | 713 | all | — | — |
-| `sweeper out pitch` | P | arsenal | 754 | all | — | — |
+| `sweeper out pitch` | P | arsenal | 149 | all | — | — |
 | `tunneler` | P | deception | 2,334 | all | 75 (tunnel_score) | — |
 | `two-pitch` | P | arsenal | 213 | starters | — | deep arsenal |
 | `unpredictable` | P | sequencing | 718 | all | — | — |
