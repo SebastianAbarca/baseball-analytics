@@ -227,10 +227,10 @@
      "tag": "changeup out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 1813,
+     "fires": 502,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Changeup put-away pitch \u2014 17% whiffs"
+     "earned": "Changeup put-away pitch \u2014 24% whiffs per pitch (top 20% for a changeup is 20%+)"
     },
     {
      "tag": "count-shifter",
@@ -245,10 +245,10 @@
      "tag": "curveball out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 991,
+     "fires": 320,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Curveball put-away pitch \u2014 11% whiffs"
+     "earned": "Curveball put-away pitch \u2014 23% whiffs per pitch (top 20% for a curveball is 16%+)"
     },
     {
      "tag": "cutter-primary",
@@ -290,10 +290,10 @@
      "tag": "forkball out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 13,
+     "fires": 7,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Forkball put-away pitch \u2014 22% whiffs"
+     "earned": "Forkball put-away pitch \u2014 22% whiffs per pitch (top 20% for a forkball is 20%+)"
     },
     {
      "tag": "free swinger",
@@ -326,10 +326,10 @@
      "tag": "knuckle-curve out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 342,
+     "fires": 100,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Knuckle-Curve put-away pitch \u2014 18% whiffs"
+     "earned": "Knuckle-Curve put-away pitch \u2014 18% whiffs per pitch (top 20% for a knuckle-curve is 18%+)"
     },
     {
      "tag": "knuckleballer",
@@ -407,10 +407,10 @@
      "tag": "slider out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 3640,
+     "fires": 742,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Slider put-away pitch \u2014 10% whiffs"
+     "earned": "Slider put-away pitch \u2014 25% whiffs per pitch (top 20% for a slider is 21%+)"
     },
     {
      "tag": "slow pitcher",
@@ -425,19 +425,19 @@
      "tag": "slurve out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 61,
+     "fires": 2,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Slurve put-away pitch \u2014 10% whiffs"
+     "earned": "Slurve put-away pitch \u2014 21% whiffs per pitch (top 20% for a slurve is 20%+)"
     },
     {
      "tag": "splitter out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 415,
+     "fires": 93,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Splitter put-away pitch \u2014 18% whiffs"
+     "earned": "Splitter put-away pitch \u2014 26% whiffs per pitch (top 20% for a splitter is 23%+)"
     },
     {
      "tag": "steady mix",
@@ -452,10 +452,10 @@
      "tag": "sweeper out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 754,
+     "fires": 149,
      "population": "all",
      "floor": "\u2014",
-     "earned": "Sweeper put-away pitch \u2014 20% whiffs"
+     "earned": "Sweeper put-away pitch \u2014 20% whiffs per pitch (top 20% for a sweeper is 19%+)"
     },
     {
      "tag": "tunneler",
