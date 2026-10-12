@@ -705,7 +705,7 @@ def league_tab() -> dbc.Tab:
                         dbc.Select(
                             id="league-board-season",
                             options=[{"label": _SEASON_LABELS[s], "value": s} for s in SEASONS],
-                            value=2023,
+                            value=SEASONS[-1],   # the latest season
                         ),
                     ], md=2),
                 ], className="mb-2"),
