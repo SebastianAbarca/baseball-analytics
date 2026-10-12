@@ -381,6 +381,22 @@ def data_notes() -> html.Div:
             "2026, against the rule's 0.829. A gap of 1.4 inches closing to "
             "0.17.",
         ], className="text-secondary", style=para),
+        html.Div([
+            html.Span("Catcher framing has less room with it. ",
+                      style={"fontWeight": "600", "color": "#d1d5db"}),
+            "The framing tags rank catchers within each season on taken pitches "
+            "within three inches of the zone edge: called-strike rate above the "
+            "league's. As the called zone closed on the rule's, the differences "
+            "between catchers shrank — a spread of 3.06 points in 2022 and 2.22 "
+            f"in {ABS_FIRST_SEASON}, with ABS challenges in place (an overturned "
+            "call is recorded as the machine's). The top 15% that earns elite "
+            "framer started at +3.4 points in 2022 and +2.3 in "
+            f"{ABS_FIRST_SEASON}, and how well a catcher's odd-numbered games "
+            "predict his even-numbered ones fell from 0.77 to 0.60. A framing "
+            "tag still marks the "
+            "season's outliers, but outliers by less: compare them within a "
+            "season, not across the change.",
+        ], className="text-secondary", style=para),
     ], className="mt-2", style={"marginBottom": "18px"})
 
 
