@@ -155,6 +155,9 @@ TAG_EVIDENCE: dict[str, str] = {
     "tunneler":          "tunnel_score",
 }
 
+# The `<pitch> out pitch` tags, matched by suffix in tag_supported.
+OUT_PITCH_EVIDENCE = "SwStr_pct"
+
 # A player under this share of a full workload carries the `limited_sample`
 # marker. One marker, player-level, not per metric — a reader needs to know
 # "don't lean on this profile", not to audit thirteen denominators.
@@ -186,6 +189,10 @@ def tag_supported(tag: str, n: Optional[float],
     purpose-built floors, or rest on attributes where sample is irrelevant.
     """
     metric = TAG_EVIDENCE.get(tag)
+    if metric is None and tag.endswith(" out pitch"):
+        # Named per pitch ("slider out pitch"), so it cannot be a TAG_EVIDENCE
+        # key; its claim is a whiff rate, which rests on swinging strikes.
+        metric = OUT_PITCH_EVIDENCE
     if metric is None:
         return True
     return reliability(metric, n) >= floor

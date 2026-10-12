@@ -405,6 +405,24 @@ ELITE_VELO_PCT  = 90.0
 PLUS_VELO_PCT   = 75.0
 SOFT_TOSSER_PCT = 10.0
 
+# Out-pitch gate. The out pitch is argmax(whiff x usage) over the non-fastballs,
+# so every pitcher with a secondary pitch HAS one — ungated, the tag fired on
+# 83% of pitcher-seasons (8,038 of 9,738) and said "his least-bad secondary"
+# rather than anything notable; Chris Bassitt's fired at 10% whiffs. Now the
+# pitch has to miss bats like a top-20% pitch OF ITS TYPE: whiffs per pitch at
+# or above the 80th percentile — the bat-misser bar — among every pitcher-season
+# with 100+ of that pitch, 2015-2026 (pitch_mix pools). Per type because the
+# types differ more than the gate does: a median splitter outwhiffs a good
+# curveball. One table across seasons because the bars barely move: the slider
+# 80th percentile stays within 19.8-22.2% from 2015 to 2026.
+OUT_PITCH_WHIFF_FLOOR: dict[str, float] = {
+    "FS": 0.228, "SL": 0.207, "CH": 0.197,
+    "ST": 0.186, "KC": 0.183, "CU": 0.162,
+}
+# Types with under 300 qualifying pitcher-seasons (SV, KN, FO, CS) use the
+# 80th percentile pooled over every non-fastball.
+OUT_PITCH_WHIFF_FLOOR_OTHER = 0.196
+
 
 def arsenal_traits(
     arsenal_profile: Optional[dict],
@@ -440,17 +458,19 @@ def arsenal_traits(
                              f"cutter-led fastball family ({fb_usage:.0%} usage)"))
 
     out = ap.get("out_pitch") or {}
-    if out.get("pitch_type"):
+    whiff = out.get("whiff_pct")
+    floor = OUT_PITCH_WHIFF_FLOOR.get(out.get("pitch_type"), OUT_PITCH_WHIFF_FLOOR_OTHER)
+    if out.get("pitch_type") and whiff is not None and float(whiff) >= floor:
         try:
             from pitch_mix import PITCH_LABEL
             label = PITCH_LABEL.get(out["pitch_type"], out["pitch_type"])
         except Exception:
             label = out["pitch_type"]
-        whiff = out.get("whiff_pct")
         traits.append(_trait(f"{label.lower()} out pitch", "arsenal",
                              (out.get("usage_pct") or 0) * 100, None,
-                             f"{label} put-away pitch"
-                             + (f" — {whiff:.0%} whiffs" if whiff is not None else "")))
+                             f"{label} put-away pitch — {whiff:.0%} whiffs per "
+                             f"pitch (top 20% for a {label.lower()} is "
+                             f"{floor:.0%}+)"))
 
     depth = ap.get("depth")
     n_meaningful = 2 + len(ap.get("supporting") or [])
