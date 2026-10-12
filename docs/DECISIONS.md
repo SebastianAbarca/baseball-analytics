@@ -184,6 +184,35 @@ the era.
 league average: the era note, and the 3D arsenal chart, which draws one
 pitcher's pitches against no particular batter.
 
+### Framing tags are kept through ABS, with a note
+
+Measured on qualified catchers (500+ taken pitches within 3 in of the edge),
+2022–2026:
+
+| | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|
+| spread between catchers (SD, points) | 3.06 | 3.18 | 2.94 | 2.87 | 2.22 |
+| elite framer bar (top 15%) | +3.4 | +3.4 | +2.7 | +2.6 | +2.3 |
+| odd vs even games, full-season | 0.77 | 0.80 | 0.74 | 0.69 | 0.60 |
+
+Year to year: 0.69, 0.44, 0.65, then 0.36 into 2026.
+
+The skill is compressing, and it started before ABS: umpires have been closing
+on the rule's zone for years (the 50% called-strike edge went 0.945 → 0.843 ft
+against ABS's 0.829), which leaves less to steal. 2026 also records an
+overturned challenge as the machine's call — at least 2,662 challenges, 47%
+overturned, counting only those visible on the pitch that ended the PA.
+
+Kept anyway, because the signal is still mostly real: 0.60 means most of the
+2026 spread repeats within the season, and the poor end is stable (Pérez,
+O'Hoppe, Garver, Langeliers, McCann were bottom-quarter or near it in 2025).
+The elite end is shakier — Ruiz and Will Smith went from 10th/12th percentile
+to elite. The tags rank within a season, so they fire at the same rate; what
+moved is how far an outlier stands out. A dashboard data note says so, and
+says not to compare framing across the 2026 line. Rejected: doubling the
+sample floor for ABS seasons (more trustworthy, far fewer catchers) and
+dropping the tags.
+
 ---
 
 ## Caching and staleness
