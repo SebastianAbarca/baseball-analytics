@@ -62,7 +62,7 @@ SEASON_DATES: dict[int, tuple[str, str]] = {
     2023: ("2023-03-30", "2023-10-01"),
     2024: ("2024-03-20", "2024-09-29"),
     2025: ("2025-03-27", "2025-09-28"),
-    2026: ("2026-03-26", "2026-10-04"),  # end date projected; Statcast pulls up to today
+    2026: ("2026-03-26", "2026-09-27"),  # last regular-season game, per Statcast game_type
 }
 
 # ---------------------------------------------------------------------------
@@ -142,6 +142,23 @@ def statcast_gap(season: int, df: Optional[pd.DataFrame] = None):
     return last.date(), target.date()
 
 
+def _regular_season(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """
+    Regular-season pitches only (game_type "R").
+
+    The pulls are bounded by SEASON_DATES, and that used to be the only thing
+    keeping postseason games out — which held only while the end date was
+    right. For an in-progress season it is a projection (2026's says Oct 4),
+    so a top-up after the season ends would have appended wild-card and
+    division-series pitches to the season the portraits describe. Filtering
+    on the field Statcast itself records makes the dates a bound on the
+    request, not the definition of the season.
+    """
+    if df is None or df.empty or "game_type" not in df.columns:
+        return df
+    return df[df["game_type"] == "R"]
+
+
 def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame:
     """
     Append any games played since this cache was written.
@@ -163,7 +180,7 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
              season, last, frm, to)
     try:
         pybaseball.cache.enable()
-        new = pybaseball.statcast(start_dt=frm, end_dt=to, verbose=True)
+        new = _regular_season(pybaseball.statcast(start_dt=frm, end_dt=to, verbose=True))
     except Exception as e:
         log.warning("statcast_%d top-up failed (%s) — serving cache as-is", season, e)
         return df
@@ -225,7 +242,7 @@ def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:
     start, end = SEASON_DATES[season]
     log.info("Pulling Statcast %d  (%s → %s) — this may take several minutes", season, start, end)
     pybaseball.cache.enable()
-    df = pybaseball.statcast(start_dt=start, end_dt=end, verbose=True)
+    df = _regular_season(pybaseball.statcast(start_dt=start, end_dt=end, verbose=True))
     df.to_parquet(cache, index=False)
     log.info("Saved %d rows to %s", len(df), cache)
     return df
@@ -1035,7 +1052,7 @@ def pull_il_data(season: int, force: bool = False) -> pd.DataFrame:
         2019: ("2019-03-28", "2019-09-29"), 2020: ("2020-07-23", "2020-09-27"),
         2021: ("2021-04-01", "2021-10-03"), 2022: ("2022-04-07", "2022-10-05"),
         2023: ("2023-03-30", "2023-10-01"), 2024: ("2024-03-20", "2024-09-29"),
-        2025: ("2025-03-27", "2025-09-28"), 2026: ("2026-03-26", "2026-10-04"),
+        2025: ("2025-03-27", "2025-09-28"), 2026: ("2026-03-26", "2026-09-27"),
     }
     start, end = season_dates.get(season, (f"{season}-04-01", f"{season}-10-01"))
 
@@ -1132,7 +1149,7 @@ def compute_il_summary(season: int) -> pd.DataFrame:
         {"2015":"2015-10-04","2016":"2016-10-02","2017":"2017-10-01",
          "2018":"2018-10-01","2019":"2019-09-29","2020":"2020-09-27",
          "2021":"2021-10-03","2022":"2022-10-05","2023":"2023-10-01",
-         "2024":"2024-09-29","2025":"2025-09-28","2026":"2026-10-04"}.get(
+         "2024":"2024-09-29","2025":"2025-09-28","2026":"2026-09-27"}.get(
              str(season), f"{season}-10-01"))
 
     rows = []
