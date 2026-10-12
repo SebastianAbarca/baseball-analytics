@@ -55,20 +55,34 @@ means a tag built on it would mostly restate `aggressive`. The tag fires on the
 *gap* between in-zone and out-of-zone swing rates — swinging at strikes more
 than balls — which is the skill the name implies.
 
-### Out-pitch tags are `behavior`, and they have no floor
+### Out-pitch tags need a top-20% whiff rate for their pitch type
 
 The out pitch is chosen by `argmax(whiff_pct × usage_pct)` over a pitcher's
-non-fastballs, and the tag stores `usage_pct`. Its siblings — `sinker-baller`,
-`cutter-primary`, `two-pitch`, `deep arsenal` — are all `behavior`, under "what
-he chooses to throw". `ride four-seam` is the counter-example that shows where
-the line is: it is a `tool` because it clears a threshold (IVB ≥ 1.4).
+non-fastballs, so every pitcher with a secondary pitch has one. Ungated, the
+tag fired on **82% of pitcher-seasons** (8,029 of 9,738) and answered "which of
+his pitches is least bad?" rather than "is he notable for this?" — Chris
+Bassitt's fired at 10% whiffs.
 
-**Open issue.** Out-pitch has no threshold at all, so it fires on **85% of
-pitcher-seasons** — every pitcher with any secondary gets one by definition.
-Chris Bassitt's fires at 10% whiffs. Every other tag answers "is this player
-notable for X?"; this one answers "which of his pitches is least bad?" It
-either needs a whiff floor or should be presented as an arsenal descriptor
-rather than a tag.
+Now the pitch must reach the 80th percentile of whiffs per pitch **for its
+type** — the bat-misser bar — among every pitcher-season with 100+ of that
+pitch, 2015–2026 (`OUT_PITCH_WHIFF_FLOOR` in pitcher_traits). Per type, because
+the types differ more than the gate does: the bars run from 16.2% (curveball)
+to 22.8% (splitter), and a median splitter outwhiffs a good curveball. One table
+for all seasons, because the bars barely move — the slider's stays within
+19.8–22.2% from 2015 to 2026. Rare types (screwball, forkball, knuckleball,
+slow curve) share the pooled non-fastball bar. The whiff rate also passes the
+reliability gate as a swinging-strike rate.
+
+Result: **20%** of pitcher-seasons (1,915), no other tag moved. Bassitt keeps
+his sweeper in 2021, 2023 and 2024 and loses the 10%-whiff curveballs;
+2025's tagged pitches include Skubal's changeup (28%) and Yesavage's and
+Fernando Cruz's splitters (32%, 29%).
+
+**Open question — kind.** The tag stayed `behavior` ("what he chooses to
+throw", beside `sinker-baller` and `deep arsenal`). But the reasoning that kept
+`ride four-seam` a `tool` — it clears a threshold — now applies here too, and
+the threshold is a whiff rate, which is a result. Reclassifying it as `result`
+would move it beside `bat-misser` in every fingerprint.
 
 ---
 
