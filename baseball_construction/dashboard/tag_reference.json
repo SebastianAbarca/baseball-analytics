@@ -131,7 +131,7 @@
      "tag": "elite velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 1017,
+     "fires": 955,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 100th pct"
@@ -158,10 +158,10 @@
      "tag": "plus velo",
      "side": "P",
      "family": "arsenal",
-     "fires": 1481,
+     "fires": 1426,
      "population": "all",
      "floor": "\u2014",
-     "earned": "average velocity 89th pct"
+     "earned": "average velocity 88th pct"
     },
     {
      "tag": "quick pop",
@@ -185,7 +185,7 @@
      "tag": "soft tosser",
      "side": "P",
      "family": "arsenal",
-     "fires": 917,
+     "fires": 970,
      "population": "all",
      "floor": "\u2014",
      "earned": "average velocity 10th pct"
@@ -512,7 +512,7 @@
      "tag": "bat-misser",
      "side": "P",
      "family": "outcome",
-     "fires": 1546,
+     "fires": 1559,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 100th pct"
@@ -521,7 +521,7 @@
      "tag": "contact suppressor",
      "side": "P",
      "family": "outcome",
-     "fires": 1117,
+     "fires": 1075,
      "population": "all",
      "floor": "100 (HardHit_allowed)",
      "earned": "hard-hit suppression 100th pct, barrel suppression 86th"
@@ -548,7 +548,7 @@
      "tag": "elite command",
      "side": "P",
      "family": "outcome",
-     "fires": 653,
+     "fires": 675,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 100th pct"
@@ -575,7 +575,7 @@
      "tag": "fly-ball prone",
      "side": "P",
      "family": "outcome",
-     "fires": 961,
+     "fires": 946,
      "population": "all",
      "floor": "\u2014",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -602,7 +602,7 @@
      "tag": "ground-baller",
      "side": "P",
      "family": "outcome",
-     "fires": 1590,
+     "fires": 1649,
      "population": "all",
      "floor": "100 (GB_pct_pitch)",
      "earned": "ground-ball rate 100th pct"
@@ -650,7 +650,7 @@
      "fires": 1205,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
-     "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
+     "earned": "strikeout rate 13th pct \u2014 outs come from the defense"
     },
     {
      "tag": "platoon liability",
@@ -674,7 +674,7 @@
      "tag": "plus command",
      "side": "P",
      "family": "outcome",
-     "fires": 1151,
+     "fires": 1170,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 88th pct"
@@ -746,10 +746,10 @@
      "tag": "walk prone",
      "side": "P",
      "family": "outcome",
-     "fires": 1615,
+     "fires": 1588,
      "population": "all",
      "floor": "\u2014",
-     "earned": "walk avoidance 13th pct"
+     "earned": "walk avoidance 14th pct"
     },
     {
      "tag": "weak contact",
