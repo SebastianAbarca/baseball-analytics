@@ -65,6 +65,39 @@ SEASON_DATES: dict[int, tuple[str, str]] = {
     2026: ("2026-03-26", "2026-09-27"),  # last regular-season game, per Statcast game_type
 }
 
+
+def season_state(today: Optional[_dt.date] = None) -> tuple[list[int], Optional[int]]:
+    """
+    (finished seasons, the season in progress or None), from SEASON_DATES.
+
+    Finished means its last regular-season game is behind us. Finished seasons
+    are frozen: their portraits share one era pool and never move until the
+    next season finishes and joins it. Only the season in progress changes from
+    night to night, which is what lets the nightly job rebuild 30 portraits
+    instead of 360. A season with no SEASON_DATES entry does not exist here —
+    add next year's dates before its Opening Day.
+    """
+    today = today or _dt.date.today()
+    finished, in_progress = [], None
+    for s, (start, end) in sorted(SEASON_DATES.items()):
+        if _dt.date.fromisoformat(end) < today:
+            finished.append(s)
+        elif _dt.date.fromisoformat(start) <= today:
+            in_progress = s
+    return finished, in_progress
+
+
+def era_pool_seasons(season: int, today: Optional[_dt.date] = None) -> list[int]:
+    """
+    The seasons a portrait's era percentiles are ranked against: every
+    finished season, plus its own. Replaces query_seeded_seasons(), which read
+    player_batting through the API's 1,000-row cap and so returned whichever
+    seasons happened to come back first — 2015-2025, missing 2026, when this
+    was written.
+    """
+    finished, _ = season_state(today)
+    return sorted(set(finished) | {int(season)})
+
 # ---------------------------------------------------------------------------
 # Chadwick crosswalk
 # ---------------------------------------------------------------------------
@@ -411,7 +444,8 @@ def _sanitize_sprint_speed(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
+def _bref_savant_batting_merge(season: int, min_pa: int = 100,
+                               strict: bool = False) -> pd.DataFrame:
     """
     Merge Baseball Reference batting (traditional stats) with Baseball Savant
     (Statcast advanced metrics) using MLBAM ID as the join key.
@@ -461,6 +495,11 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
         df = _apply_sc_replacements(df, _SAVANT_PERCENTILE_BATTING,
                                     _SC_REPLACEMENTS_BATTING, "batting")
     except Exception as exc:
+        # strict (the database seed): these aggregates also swap Savant's
+        # percentile columns for true rates, so carrying on without them
+        # writes percentiles where rates belong — the unit bug, re-introduced.
+        if strict:
+            raise
         log.warning("Pitch aggregates (batting) unavailable: %s", exc)
 
     df = _sanitize_sprint_speed(df)
@@ -469,7 +508,8 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100) -> pd.DataFrame:
     return df
 
 
-def _bref_savant_pitching_merge(season: int, min_pa: int = 30) -> pd.DataFrame:
+def _bref_savant_pitching_merge(season: int, min_pa: int = 30,
+                                strict: bool = False) -> pd.DataFrame:
     """
     Merge Baseball Reference pitching (traditional stats) with Baseball Savant
     (Statcast metrics) using MLBAM ID as the join key.
@@ -526,6 +566,8 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30) -> pd.DataFrame:
         df = _apply_sc_replacements(df, _SAVANT_PERCENTILE_PITCHING,
                                     _SC_REPLACEMENTS_PITCHING, "pitching")
     except Exception as exc:
+        if strict:          # see the batting merge
+            raise
         log.warning("Pitch aggregates (pitching) unavailable: %s", exc)
 
     log.info("BRef+Savant pitching %d — %d rows after merge", season, len(df))

@@ -126,7 +126,7 @@ PITCHING_COL_MAP = {
 
 def seed_batting(season: int) -> None:
     log.info("Pulling BRef + Savant batting for %d (full league)...", season)
-    df = _bref_savant_batting_merge(season, min_pa=1)
+    df = _bref_savant_batting_merge(season, min_pa=1, strict=True)
 
     # Drop BRef "TOT" rows (multi-team totals — keep individual stints)
     if "Tm" in df.columns:
@@ -160,7 +160,7 @@ def seed_batting(season: int) -> None:
 
 def seed_pitching(season: int) -> None:
     log.info("Pulling BRef + Savant pitching for %d (full league)...", season)
-    df = _bref_savant_pitching_merge(season, min_pa=1)
+    df = _bref_savant_pitching_merge(season, min_pa=1, strict=True)
 
     if "Tm" in df.columns:
         df = df[df["Tm"] != "TOT"].copy()

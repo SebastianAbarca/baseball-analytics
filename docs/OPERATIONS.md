@@ -72,16 +72,11 @@ real run does, so it cannot drift from what would actually happen.
 | you changed | rebuilds |
 |---|---|
 | a tag threshold, `TAG_KIND`, a zone constant | **all 360 portraits** — the gate digest moved |
-| the in-progress season's Statcast | all 360 — the pool digest is global (see below) |
+| the in-progress season's data | that season's 30 — finished seasons rank against a pool it is not in |
+| a finished season's data | all 360 — finished seasons are in every season's era pool |
 | a chart, a layout, a callback | nothing; restart the dashboard |
 | `TAGS.md` content | run `--stages tags`, about 3s |
 | anything published | `publish.py` (or `--stages publish`); the dashboard picks it up within 10 min |
-
-**The global-pool caveat.** Topping up 2026 changes
-`tunnel_league_2026.parquet`, which changes the fingerprint, which marks every
-season stale — including 2015, whose portrait never reads that file. Five days
-of new games therefore costs a full rebuild. This is a known limitation, not a
-bug in the data; see the fingerprint section in ARCHITECTURE.
 
 ---
 
@@ -189,11 +184,66 @@ one stamp means a rebuild did not finish or some builds failed.
 
 ---
 
-## Adding a season
+## The nightly job
 
-1. Add it to `SEASON_DATES` in `ingest.py` with real start and end dates.
-2. `refresh.py --seasons <year>` — it will pull Statcast in full the first time.
-3. Add it to `SEASONS` in `dashboard/layout.py` so it appears in the picker.
+`.github/workflows/nightly.yml` runs `scripts/nightly.py` at 10:30 UTC every
+day from March to October. With a season in progress it:
+
+- tops up that season's Statcast;
+- re-pulls its season totals and re-seeds them into the database (strict: it
+  refuses to write rows without the pitch aggregates);
+- force-rebuilds its 30 portraits and league identity;
+- publishes that season's portraits, league data and Scout rows.
+
+Finished seasons are never touched. With no season in progress it exits in
+seconds. It fails the run, and GitHub emails, unless all 30 portraits are
+current, publish refused none, and nothing else went stale.
+
+Its data lives in GitHub's cache between runs. GitHub drops a cache unread for
+7 days, so the first run each spring bootstraps: the Chadwick register, the
+frozen era from `data/era/`, last season's Statcast and this season's so far.
+Allow an hour or more for that run; later runs take minutes.
+
+```bash
+# Run it by hand (the default: whatever season is in progress)
+gh workflow run nightly.yml
+
+# Test against a finished season without writing anything
+gh workflow run nightly.yml -f season=2026 -f no_publish=true
+
+# The same, locally
+python baseball_construction/scripts/nightly.py --season 2026 --no-publish
+```
+
+`keepalive.yml` also re-enables `keepalive`, `nightly` and `seed` every run.
+GitHub disables scheduled workflows in a public repository after 60 days with
+no commits, and the off-season is longer than that.
+
+---
+
+## Every year
+
+**Before Opening Day:** add the season to `SEASON_DATES` in
+`modules/ingest.py` (first and last regular-season dates) and to `SEASONS` in
+`dashboard/layout.py`. From March the nightly job fails, deliberately, while a
+season is missing.
+
+**After the last regular-season game — finalize.** On the machine with all the
+data:
+
+1. `python baseball_construction/scripts/refresh.py --seasons <year> --stages statcast,sources,tunnel`
+   to take the season to its final game.
+2. `python baseball_construction/seed.py --season <year> --force` to write its
+   final totals.
+3. `python baseball_construction/scripts/refresh.py --stages portraits,tags,publish --jobs 3` (about 20
+   minutes). Every portrait re-ranks, because the season just joined the era
+   pool.
+4. `python baseball_construction/scripts/freeze_era.py`, then commit `data/era/`, `TAGS.md`,
+   `dashboard/tag_reference.json` and `dashboard/strike_zones.json`.
+
+Check SEASON_DATES' end date against Statcast's `game_type` (`R` regular, `F`
+wild card, `D` division series) first. The projected date ran a week into the
+postseason for 2026.
 
 ---
 
@@ -205,5 +255,7 @@ one stamp means a rebuild did not finish or some builds failed.
 | `tag_reference.py --check` | exits 1 if TAGS.md disagrees with the code; good in CI |
 | `repair_metric_units.py` | after discovering a unit bug; purges every derived layer |
 | `rederive_traits.py` | replay tags from stored `gate_inputs` — 0.8s/season vs a full rebuild |
+| `nightly.py` | the in-season night: one season, built and published — see the nightly job |
+| `freeze_era.py` | at finalize: copy finished seasons' roots into `data/era/` for the nightly job; `--check` to verify |
 | `publish.py` | write to the serving tables; `--dry-run`, `--only portraits\|league\|scout`, `--seasons`, `--force` to ignore content hashes. ~5 min for everything, seconds when little changed |
 | `battery_base.py` | diagnostic: pitcher/catcher separability |

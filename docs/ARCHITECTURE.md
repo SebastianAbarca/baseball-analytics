@@ -108,9 +108,9 @@ pre-repair units, and were served as valid cache hits.
 
 ```mermaid
 flowchart TD
-    P1["_pool_digest()<br/>sha256 of every pool file<br/>fg · history · prior · tunnel_league"]
+    P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots of its era pool · its tunnel_league"]
     P2["_gate_digest()<br/>every UPPERCASE constant in<br/>hitter_traits · pitcher_traits<br/>pitch_aggregates · reliability<br/>plus TAG_KIND · TAG_POPULATION"]
-    FP["<b>build_fingerprint()</b><br/>sha256(pools + gates) first 16"]
+    FP["<b>build_fingerprint(season)</b><br/>sha256(pools + gates) first 16"]
     Q{"portrait_is_current()"}
     SERVE["serve it"]
     BUILD["rebuild it"]
@@ -139,13 +139,28 @@ fingerprint. And `pitch_aggregates` was absent from the gate digest despite
 owning the strike-zone geometry behind zone%, chase%, CSW% and framing — so a
 zone constant could change tag output invisibly.
 
-**The known limitation.** The pool digest is global: it globs *every* season.
-Topping up 2026 changes `tunnel_league_2026.parquet`, which changes the
-fingerprint, which marks all 360 portraits stale — including 2015, whose
-portrait never reads that file. Five days of new games therefore costs a
-20-minute rebuild. A per-season pool digest would cut that to 30 portraits; the
-complication is that philosophy scores normalise against a genuinely
-cross-season pool, so that part legitimately spans all years.
+**Per season, so a night of games re-ranks one season.** The fingerprint used
+to hash every pool file of every season, so topping up 2026 marked all 360
+portraits stale — 2015 included. Now each season hashes only what its portraits
+read: the `fg_batting`/`fg_pitching` roots of the seasons in its era pool, and
+its own `tunnel_league` file.
+
+The era pool is the part that genuinely spans seasons — display percentiles
+and some pitcher gates rank against the whole Statcast era. It is defined as
+**every finished season plus the portrait's own** (`ingest.era_pool_seasons`).
+Finished seasons share one pool that does not move while the next season is
+played, so in season only the current season goes stale. When a season ends it
+joins every pool, and everything re-ranks once: the yearly finalize.
+
+It used to be whatever `query_seeded_seasons()` returned, which read
+`player_batting` through the API's 1,000-row cap — 2015–2025 without 2026 when
+it was replaced, so 2026 portraits had been ranked against a different era
+than every other season.
+
+The derived history and prior pools are not hashed. History is a pure function
+of the `fg` roots, prior comes from a finished season's database rows, and both
+are written lazily during a build — hashing them is what used to move the
+fingerprint under a running rebuild and force a second pass.
 
 ---
 

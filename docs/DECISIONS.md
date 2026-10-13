@@ -217,6 +217,43 @@ dropping the tags.
 
 ## Caching and staleness
 
+### Finished seasons are frozen, and only the season in progress moves
+
+The nightly job rebuilds one season, which needs the other 330 portraits not
+to depend on it. Two things made every portrait depend on every season:
+
+- the build fingerprint hashed every pool file of every season, so a night of
+  2027 games would have moved 2015's fingerprint;
+- the era pool behind display percentiles (and some pitcher gates) contained
+  the season in progress, so new games genuinely re-ranked old seasons.
+
+Now a season is either finished or in progress (`ingest.season_state`, read
+from SEASON_DATES), a portrait's era pool is every finished season plus its
+own, and its fingerprint hashes only the roots of that pool and its own tunnel
+file. Finished seasons are frozen until the next one finishes and joins them —
+a once-a-year re-rank, run by hand as the finalize.
+
+The cost is a fixed era during a season: May 2027's portraits rank against
+2015–2026 plus 2027-so-far, rather than updating 2015's percentiles as 2027
+goes. A 12-season era barely moves in one season's games, and a frozen past is
+what the "historical is fixed, current is live" model asked for anyway.
+
+The era pool had also been arbitrary. It came from `query_seeded_seasons()`,
+which read `player_batting` through the API's 1,000-row cap and returned
+whichever seasons came back first: 2015–2025, missing 2026, when replaced. So
+2026 portraits had ranked against a different era than every other season.
+
+### The finished seasons' roots are committed
+
+The nightly job runs on GitHub, which has none of this machine's data. The era
+pool is built from 24 `fg_*` CSVs, and rebuilding them from source would mean a
+full season of Statcast each for the pitch aggregates in them — about a
+gigabyte, hours, and still not guaranteed byte-identical. So the finished
+seasons' copies are committed in `data/era/` (7 MB), refreshed at finalize by
+`freeze_era.py`. The runner ranks against exactly the pool this machine does,
+and the fingerprints agree.
+
+
 ### Purge every layer or none
 
 Repairing the database is not enough. `team_portrait` ranks players against

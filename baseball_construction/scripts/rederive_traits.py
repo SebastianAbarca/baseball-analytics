@@ -28,7 +28,7 @@ WHAT IT REWRITES
 ----------------
     players[*].traits, .spectrum, .populations, .limited_sample
     team_identity          (trait densities are recomputed from the new tags)
-    build_fingerprint      (stamped to the current pools and gates)
+    build_fingerprint      (stamped to its season's current pools and gates)
     gate_fingerprint       (stamped to the current gates)
 
 Everything else in the portrait is left exactly as built.
@@ -185,7 +185,7 @@ def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.
     except Exception as exc:
         log.warning("  team_identity recompute failed: %s", exc)
 
-    portrait["build_fingerprint"] = tp.build_fingerprint()
+    portrait["build_fingerprint"] = tp.build_fingerprint(int(portrait["season"]))
     portrait["gate_fingerprint"] = tp.gate_fingerprint()
     return portrait, delta
 

@@ -14,10 +14,29 @@ on:
     - cron: '17 9 */2 * *'   # 09:17 UTC every other day
   workflow_dispatch:
 
+# GitHub switches off every scheduled workflow in a public repository after 60
+# days without repository activity — and October to March is longer than
+# that. Disabled, this ping stops, the database pauses a week later and the
+# site goes with it; the nightly build would not wake up for the season either.
+# Re-enabling them through the API resets that clock without a commit.
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      - name: Keep the scheduled workflows enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for wf in keepalive.yml nightly.yml seed.yml; do
+            gh workflow enable "$wf"
+            echo "$wf: $(gh workflow view "$wf" --json state -q .state)"
+          done
+
       - name: Read one published portrait key
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
