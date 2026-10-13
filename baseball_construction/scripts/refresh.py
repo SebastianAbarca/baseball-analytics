@@ -257,7 +257,8 @@ def _derived_globs(seasons: list[int]) -> list[Path]:
     out: list[Path] = []
     for s in seasons:
         out += [PROCESSED / f"team_turnover_{s}.csv",
-                PROCESSED / f"est_service_time_{s}.csv"]
+                PROCESSED / f"est_service_time_{s}.csv",
+                PROCESSED / f"cross_team_metrics_v2_{s}.csv"]
         out += sorted(PROCESSED.glob(f"*_prior_{s}.parquet"))
     for p in sorted(PROCESSED.glob("*_history_*_*.csv")):
         m = re.search(r"_history_(\d{4})_(\d{4})\.csv$", p.name)
@@ -450,6 +451,19 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool,
         return 0
 
     todo = sorted(stale_by_season)
+
+    # Cross-team rows for every season any rebuilt portrait ranks against,
+    # built HERE, before the workers fork. They were a side effect of each
+    # season's first portrait, so in a full rebuild a season ranked its team
+    # construction against whichever seasons happened to finish first.
+    from ingest import era_pool_seasons
+    from team_portrait import ensure_cross_team_rows
+    need = sorted({p for s in todo for p in era_pool_seasons(s)})
+    built = [s for s in need if (RAW_DIR / f"statcast_{s}.parquet").exists()
+             and ensure_cross_team_rows(s)]
+    if built:
+        log.info("  cross-team rows built for %s", ", ".join(map(str, built)))
+
     failed = 0
     if jobs > 1:
         with ProcessPoolExecutor(max_workers=jobs) as pool:

@@ -118,7 +118,8 @@ def _era(season: int) -> None:
     machine ranks against byte-identical files to the one that froze them."""
     copied = 0
     for s in era_pool_seasons(season):
-        for pat in ("fg_batting_{s}.csv", "fg_pitching_{s}.csv"):
+        for pat in ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
+                    "cross_team_metrics_v2_{s}.csv"):
             src, dst = ERA_DIR / pat.format(s=s), PROCESSED_DIR / pat.format(s=s)
             if not src.exists():
                 if s == season:

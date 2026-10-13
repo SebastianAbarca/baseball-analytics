@@ -901,26 +901,8 @@ _POS_NAMES = {2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS",
 MIN_DEFENSIVE_PITCHES = 300   # below → home position "DH"
 POS_MIN_PITCHES       = 150   # a position "counts" at ≥ this OR ≥5% share
 
-def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
-    """
-    Per player: defensive pitch counts by position (fielder_2..9 alignment
-    columns — verified 100% populated), home_position, and positions_played.
-
-    Returns: key_mlbam, home_position, positions_played, total_def_pitches,
-             pos_detail (dict pos → share)
-    """
-    if season in _POSITION_CACHE:
-        return _POSITION_CACHE[season]
-
-    counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
-    for n in range(2, 10):
-        col = f"fielder_{n}"
-        if col not in statcast.columns:
-            continue
-        vc = pd.to_numeric(statcast[col], errors="coerce").dropna().astype(int).value_counts()
-        for pid, c in vc.items():
-            counts[pid][_POS_NAMES[n]] += int(c)
-
+def _positions_from_counts(counts: dict) -> list[dict]:
+    """home_position / positions_played / pos_detail from {pid: Counter(pos)}."""
     rows = []
     for pid, ctr in counts.items():
         total = sum(ctr.values())
@@ -936,10 +918,114 @@ def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.Data
                      "total_def_pitches": total,
                      "pos_detail": {p: round(c / total, 3)
                                     for p, c in ctr.most_common()}})
+    return rows
+
+
+def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Per player AND TEAM: defensive pitch counts by position (fielder_2..9
+    alignment columns — verified 100% populated), home_position, and
+    positions_played, counted only on pitches that team was fielding.
+
+    Per team because `super-utility` is a deployment tag — what a club asked
+    of the player — and a traded player's other club does not count toward
+    it. A full-season count gave the receiving team the positions he played
+    for the trading one.
+
+    Returns: key_mlbam, team, home_position, positions_played,
+             total_def_pitches, pos_detail (dict pos → share)
+    """
+    if season in _POSITION_CACHE:
+        return _POSITION_CACHE[season]
+
+    fld_team = np.where(statcast["inning_topbot"] == "Top",
+                        statcast["home_team"], statcast["away_team"])
+    rows = []
+    for team in pd.unique(fld_team):
+        part = statcast[fld_team == team]
+        counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
+        for n in range(2, 10):
+            col = f"fielder_{n}"
+            if col not in part.columns:
+                continue
+            vc = pd.to_numeric(part[col], errors="coerce").dropna().astype(int).value_counts()
+            for pid, c in vc.items():
+                counts[pid][_POS_NAMES[n]] += int(c)
+        rows += [{**r, "team": team} for r in _positions_from_counts(counts)]
     out = pd.DataFrame(rows)
     _POSITION_CACHE[season] = out
-    log.info("Position appearances — %d players", len(out))
+    log.info("Position appearances — %d player-team rows", len(out))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Stints — what each club got from each player
+# ---------------------------------------------------------------------------
+# A player traded mid-season is one player-season and two contributions.
+# The season totals (BRef/DB) describe the player; the stint describes what
+# THIS team got: Soto 2022 is 437 PA for WSH and 228 for SD, not 664 for both.
+# Counted from regular-season Statcast, which knows the team of every pitch.
+#
+# `truncated_pa` (the inning ended on a runner mid-PA) is not a plate
+# appearance. A GS is a game in which he threw his team's first pitch.
+
+_STINT_CACHE: dict[int, tuple[pd.DataFrame, pd.DataFrame]] = {}
+_NON_PA_EVENTS = {"truncated_pa"}
+
+
+def compute_stints(statcast: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    (batting, pitching) stints, one row per player and team.
+
+    batting:  batter, team, pa, g
+    pitching: pitcher, team, bf, g, gs, same_hand_bf_share,
+              lev_n_pa, mean_abs_dwe  (leverage exposure WITH THIS TEAM —
+              the same |ΔWE|-per-PA proxy as compute_pitcher_leverage)
+    """
+    if season in _STINT_CACHE:
+        return _STINT_CACHE[season]
+
+    cols = ["game_pk", "at_bat_number", "pitch_number", "inning", "inning_topbot",
+            "home_team", "away_team", "batter", "pitcher", "events", "stand",
+            "p_throws", "delta_home_win_exp"]
+    sc = statcast[[c for c in cols if c in statcast.columns]].copy()
+    top = sc["inning_topbot"] == "Top"
+    sc["bat_team"] = np.where(top, sc["away_team"], sc["home_team"])
+    sc["fld_team"] = np.where(top, sc["home_team"], sc["away_team"])
+    ends = sc[sc["events"].notna() & ~sc["events"].isin(_NON_PA_EVENTS)]
+
+    bat = (ends.groupby(["batter", "bat_team"])
+               .agg(pa=("game_pk", "size"), g=("game_pk", "nunique"))
+               .reset_index().rename(columns={"bat_team": "team"}))
+
+    pit = (ends.assign(_same=(ends["stand"] == ends["p_throws"]).astype(float))
+               .groupby(["pitcher", "fld_team"])
+               .agg(bf=("game_pk", "size"), same_hand_bf_share=("_same", "mean"))
+               .reset_index())
+    pit["same_hand_bf_share"] = pit["same_hand_bf_share"].round(3)
+    g = (sc.groupby(["pitcher", "fld_team"])["game_pk"].nunique()
+           .rename("g").reset_index())
+    first = (sc.sort_values(["game_pk", "inning", "at_bat_number", "pitch_number"])
+               .drop_duplicates(["game_pk", "fld_team"]))
+    gs = (first.groupby(["pitcher", "fld_team"]).size()
+               .rename("gs").reset_index())
+    pit = (pit.merge(g, on=["pitcher", "fld_team"], how="outer")
+              .merge(gs, on=["pitcher", "fld_team"], how="left"))
+    pit[["bf", "gs"]] = pit[["bf", "gs"]].fillna(0).astype(int)
+
+    if "delta_home_win_exp" in sc.columns:
+        sc["_dwe"] = pd.to_numeric(sc["delta_home_win_exp"], errors="coerce").abs()
+        per_pa = (sc.groupby(["pitcher", "fld_team", "game_pk", "at_bat_number"])["_dwe"]
+                    .sum().reset_index())
+        lev = (per_pa.groupby(["pitcher", "fld_team"])
+                     .agg(lev_n_pa=("_dwe", "count"), mean_abs_dwe=("_dwe", "mean"))
+                     .reset_index())
+        pit = pit.merge(lev, on=["pitcher", "fld_team"], how="left")
+    pit = pit.rename(columns={"fld_team": "team"})
+
+    _STINT_CACHE[season] = (bat, pit)
+    log.info("Stints — %d batting, %d pitching (player × team)", len(bat), len(pit))
+    return bat, pit
 
 
 # ---------------------------------------------------------------------------

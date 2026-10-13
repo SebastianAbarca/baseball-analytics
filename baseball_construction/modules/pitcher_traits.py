@@ -756,10 +756,16 @@ def build_pitcher_traits(
     splits:            Optional[dict] = None,
     tempo:             Optional[dict] = None,
     runner_control:    Optional[dict] = None,
+    bf_total:          Optional[float] = None,
 ) -> list[dict]:
     """
     Full trait set for one pitcher-season:
     mechanics + sequencing + deception + arsenal + outcome + role + platoon.
+
+    bf, g, gs, leverage and splits' same_hand_bf_share describe how THIS team
+    used the pitcher — the deployment tags are earned with a team. bf_total is
+    the season, all teams: the sample the season-wide rates rest on, so the
+    reliability gate's n. Defaults to bf for a one-team season.
     """
     traits: list[dict] = []
 
@@ -821,6 +827,6 @@ def build_pitcher_traits(
     # Mirrors the hitter side: batters faced is the sample every rate-based
     # pitcher tag rests on. Arsenal, mechanics and role tags carry their own
     # pitch-count or appearance floors and are absent from TAG_EVIDENCE.
-    traits = filter_traits(traits, bf)
+    traits = filter_traits(traits, bf_total if bf_total is not None else bf)
 
     return traits

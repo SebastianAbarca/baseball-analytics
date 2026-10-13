@@ -269,6 +269,41 @@ the BRef pulls are bounded by `SEASON_DATES`, and V17 compares each season's
 totals with the PA/BF regular-season Statcast counts — a leak shows up as
 totals running ahead, without naming any player.
 
+### The roster is everyone who appeared, and a team gets its stint
+
+A team portrait used to select whole-season player rows by membership, so a
+player traded mid-season was credited in full to every club: Soto 2022 had
+716 PA and 5.47 WAR on both SD and WSH, Scherzer 2021 was a `workhorse` on
+both LAD and WSH, and NYY 2025's hitters summed to 7,560 PA against the
+team's 6,235.
+
+Decided 2026-10-13:
+
+- **The roster is everyone who appeared for the team**, sorted by work with
+  the team. Under 30 PA / 20 BF with the team a player is listed under
+  `players.also_appeared` — on the roster, no tags, no weight.
+- **Workload, WAR and team weights are the team's stint**, counted from
+  regular-season Statcast (PA/BF/G/GS) and BRef's per-team WAR. The season
+  total sits beside it (`pa_total`, `bf_total`, `war_total`): the card reads
+  "436 PA / 664 total".
+- **Deployment tags are earned with the team** — `workhorse`,
+  `everyday player`, `heavy usage`, leverage, `platoon specialist`,
+  `super-utility` rank the stint against every player-team stint in the
+  league.
+- **Every other tag stays season-wide**, because it describes the player, and
+  a traded player's card says so ("full season: WSH + SD"). Rejected:
+  recomputing every rate per stint. 16–43% of a traded regular's stints are
+  under 100 PA/BF, so most would fall under the reliability floors and
+  traded players would systematically lose tags their season supports; and
+  half the rates come from BRef season totals that have no per-team line.
+
+Team weighting now reconciles: NYY 2025 is 6,210 qualified + 25 also-appeared
+= 6,235 PA, exactly the team's plate appearances, and its pitchers' BF sum to
+the team's 6,080. The cross-team rows (team HR, WAR concentration, tenure)
+had the same double count — 2022's summed to 5,719 home runs against the
+league's 5,215 — and are now built per season before any portrait, ranked
+against the era pool, and frozen in `data/era/` with the fg roots.
+
 ### Purge every layer or none
 
 Repairing the database is not enough. `team_portrait` ranks players against

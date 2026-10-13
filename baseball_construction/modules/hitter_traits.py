@@ -172,9 +172,16 @@ def build_hitter_traits(
     pa:               Optional[int] = None,
     advancement:      Optional[dict] = None,
     positions:        Optional[dict] = None,
+    pa_team:          Optional[int] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """
     Full trait set + spectrum score for one hitter-season.
+
+    pa      — season PA, all teams: the sample the season-wide rates rest on,
+              so the reliability gate's n.
+    pa_team — PA for the team whose portrait this is. Deployment tags are
+              earned with a team (`everyday player`'s PAvol gate is already
+              ranked on it upstream); defaults to pa for a one-team season.
 
     season_metrics — within-season percentile overrides for TAG GATES
     (hybrid normalization: gates fire vs this year's peers so incidence
@@ -411,9 +418,10 @@ def build_hitter_traits(
     _pa_szn = (season_metrics or {}).get("PAvol")
     if (_pa_szn is not None and not (isinstance(_pa_szn, float) and np.isnan(_pa_szn))
             and float(_pa_szn) >= EVERYDAY_PA_PCT):
-        traits.append(_trait("everyday player", "role", pa, _pa_szn,
-                             f"{pa or 0:,} PA — {_pa_szn:.0f}th pct of the "
-                             "season (in the lineup daily)"))
+        _pa_t = pa_team if pa_team is not None else pa
+        traits.append(_trait("everyday player", "role", _pa_t, _pa_szn,
+                             f"{_pa_t or 0:,} PA with the team — {_pa_szn:.0f}th "
+                             "pct of the season (in the lineup daily)"))
 
     # ── luck (distribution tails, season percentile ONLY) ──────────────────
     # Era fallback deliberately not used here: the era luck map had a

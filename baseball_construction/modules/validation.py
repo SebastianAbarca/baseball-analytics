@@ -22,6 +22,7 @@ Tests:
   V15 Tag evidence coverage — every tag gated or exempt; the gate refuses thin samples
   V16 Season completeness — missing games vs the schedule, the finished rule, opener dates
   V17 Regular season only — raw caches and BRef totals hold no other games
+  V18 Team stints — team PA/BF reconcile; a traded player splits by team
 """
 
 from __future__ import annotations
@@ -1256,7 +1257,9 @@ def v17_regular_season_only() -> Result:
         other = sc["game_type"][sc["game_type"] != "R"].value_counts().to_dict()
         if other:
             errors.append(f"{season} raw cache holds non-regular-season pitches {other}")
-        ends = sc[(sc["game_type"] == "R") & sc["events"].notna()]
+        from pitch_aggregates import _NON_PA_EVENTS
+        ends = sc[(sc["game_type"] == "R") & sc["events"].notna()
+                  & ~sc["events"].isin(_NON_PA_EVENTS)]
         counts = {"batter": ends.groupby("batter").size(),
                   "pitcher": ends.groupby("pitcher").size()}
         for fname, col, who in ((f"fg_batting_{season}.csv", "PA", "batter"),
@@ -1284,6 +1287,73 @@ def v17_regular_season_only() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V18 — Team stints
+# ---------------------------------------------------------------------------
+
+def v18_team_stints() -> Result:
+    """
+    A team gets what it got, not the player's season:
+      1. on cached pitches (June 2023 week), every team's batting stints sum
+         to the team's plate appearances and its pitching stints to its
+         batters faced, every team-game has exactly one starter, and each
+         player's stints sum to the player's total
+      2. a synthetic player traded between two teams: each team's row carries
+         its own PA and WAR, the season total sits in pa_total / war_total,
+         both list the two teams, and a stint under MIN_HITTER_PA goes to
+         also-appeared rather than the tagged roster
+    """
+    import pandas as pd
+    import team_portrait as tp
+    from ingest import pull_statcast_range
+    from pitch_aggregates import _NON_PA_EVENTS, compute_stints
+
+    errors = []
+    sc = pull_statcast_range("2023-06-01", "2023-06-07", label="test")
+    sc = sc[sc["game_type"] == "R"] if "game_type" in sc.columns else sc
+    bat, pit = compute_stints(sc, -2023)       # negative key: never collides with a season
+    ends = sc[sc["events"].notna() & ~sc["events"].isin(_NON_PA_EVENTS)]
+    top = ends["inning_topbot"] == "Top"
+    team_pa = pd.Series(np.where(top, ends["away_team"], ends["home_team"])).value_counts()
+    team_bf = pd.Series(np.where(top, ends["home_team"], ends["away_team"])).value_counts()
+    # Compared as plain dicts: Statcast's nullable Int64 vs value_counts'
+    # int64 makes Series.equals False on identical numbers.
+    def same(a: pd.Series, b: pd.Series) -> bool:
+        return {k: int(v) for k, v in a.items()} == {k: int(v) for k, v in b.items()}
+
+    if not same(bat.groupby("team")["pa"].sum(), team_pa):
+        errors.append("batting stints do not sum to team PA")
+    if not same(pit.groupby("team")["bf"].sum(), team_bf):
+        errors.append("pitching stints do not sum to team BF")
+    games = sc.groupby(["game_pk"]).size().shape[0]
+    if int(pit["gs"].sum()) != 2 * games:
+        errors.append(f"{int(pit['gs'].sum())} starts for {games} games (want 2 per game)")
+    if not same(bat.groupby("batter")["pa"].sum(), ends.groupby("batter").size()):
+        errors.append("a player's stints do not sum to the player's PA")
+
+    stints = pd.DataFrame({"batter": [1, 1, 2], "team": ["AAA", "BBB", "AAA"],
+                           "pa": [400, 25, 300], "g": [100, 8, 80]})
+    war = pd.DataFrame({"key_mlbam": [1, 1, 2], "team": ["AAA", "BBB", "AAA"],
+                        "war": [3.0, 0.2, 1.0]})
+    rows = pd.DataFrame({"key_mlbam": [1, 2], "pa": [425, 300], "war": [3.2, 1.0]})
+    a_keep, a_cameo = tp._team_stints_batting(rows, stints, war, "AAA")
+    b_keep, b_cameo = tp._team_stints_batting(rows[rows.key_mlbam == 1], stints, war, "BBB")
+    r = a_keep.set_index("key_mlbam").loc[1]
+    if (r["pa"], r["pa_total"], r["war"], r["war_total"]) != (400, 425, 3.0, 3.2):
+        errors.append(f"AAA row: pa {r['pa']}/{r['pa_total']} war {r['war']}/{r['war_total']}")
+    if r["season_teams"] != ["AAA", "BBB"]:
+        errors.append(f"season_teams {r['season_teams']}")
+    if not b_keep.empty or list(b_cameo["key_mlbam"]) != [1] or int(b_cameo["pa"].iloc[0]) != 25:
+        errors.append("a 25-PA stint should be also-appeared, not tagged")
+    if a_keep.set_index("key_mlbam").loc[2, "season_teams"] is not None:
+        errors.append("a one-team player should carry no season_teams")
+
+    passed = not errors
+    detail = (f"{len(team_pa)} teams reconcile PA/BF/starts on cached pitches; "
+              "synthetic trade splits PA and WAR by team" if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1305,6 +1375,7 @@ TESTS = [
     ("V15", "Tag evidence coverage",           v15_tag_evidence),
     ("V16", "Season completeness",             v16_season_completeness),
     ("V17", "Regular season only",             v17_regular_season_only),
+    ("V18", "Team stints",                     v18_team_stints),
 ]
 
 

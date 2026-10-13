@@ -951,52 +951,50 @@ def pull_fielding_oaa(season: int) -> pd.DataFrame:
 
 def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Return (bat_war, pitch_war) DataFrames for the given season.
+    Return (bat_war, pitch_war) DataFrames for the given season, ONE ROW PER
+    TEAM STINT: key_mlbam (int), team (Statcast code), war (float).
 
-    Both have columns: key_mlbam (int), war (float).
-    Data comes from Baseball Reference via pybaseball.bwar_bat / bwar_pitch.
-    Cached at data/processed/bwar_bat_{season}.csv and bwar_pitch_{season}.csv.
+    BRef's WAR file is already split by stint (Soto 2022: 3.73 WSH, 1.74 SD).
+    It used to be summed per player, and each team's portrait then credited
+    the player's whole-season WAR to itself — 5.47 on both. Sum over `team`
+    for a season total.
+
+    Cached at data/processed/bwar_bat_{season}.csv and bwar_pitch_{season}.csv;
+    a cache from before the split (no `team` column) is re-pulled.
     """
     bat_cache   = PROCESSED_DIR / f"bwar_bat_{season}.csv"
     pitch_cache = PROCESSED_DIR / f"bwar_pitch_{season}.csv"
 
     if bat_cache.exists() and pitch_cache.exists():
-        log.info("Loading bWAR %d from cache", season)
-        bat_war   = pd.read_csv(bat_cache)
-        pitch_war = pd.read_csv(pitch_cache)
-        return bat_war, pitch_war
+        bat_war, pitch_war = pd.read_csv(bat_cache), pd.read_csv(pitch_cache)
+        if "team" in bat_war.columns and "team" in pitch_war.columns:
+            log.info("Loading bWAR %d from cache", season)
+            return bat_war, pitch_war
+        log.info("bWAR %d cache predates team stints — re-pulling", season)
+
+    def _stints(raw: pd.DataFrame) -> pd.DataFrame:
+        out = (raw[raw["year_ID"] == season][["mlb_ID", "team_ID", "WAR"]]
+               .rename(columns={"mlb_ID": "key_mlbam", "team_ID": "team", "WAR": "war"})
+               .dropna(subset=["key_mlbam", "war"]))
+        out["key_mlbam"] = out["key_mlbam"].astype(int)
+        out["team"] = out["team"].map(lambda t: _BREF_TEAM_MAP.get(t, t))
+        return out.groupby(["key_mlbam", "team"], as_index=False)["war"].sum()
 
     try:
-        raw_bat = pybaseball.bwar_bat(return_all=False)
-        bat = (
-            raw_bat[raw_bat["year_ID"] == season]
-            [["mlb_ID", "WAR"]]
-            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
-            .dropna(subset=["key_mlbam", "war"])
-        )
-        bat["key_mlbam"] = bat["key_mlbam"].astype(int)
-        bat = bat.groupby("key_mlbam", as_index=False)["war"].sum()
+        bat = _stints(pybaseball.bwar_bat(return_all=False))
         bat.to_csv(bat_cache, index=False)
-        log.info("bWAR batting %d — %d players", season, len(bat))
+        log.info("bWAR batting %d — %d player-team stints", season, len(bat))
     except Exception as exc:
         log.warning("bwar_bat failed for season %d: %s", season, exc)
-        bat = pd.DataFrame(columns=["key_mlbam", "war"])
+        bat = pd.DataFrame(columns=["key_mlbam", "team", "war"])
 
     try:
-        raw_pitch = pybaseball.bwar_pitch(return_all=False)
-        pitch = (
-            raw_pitch[raw_pitch["year_ID"] == season]
-            [["mlb_ID", "WAR"]]
-            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
-            .dropna(subset=["key_mlbam", "war"])
-        )
-        pitch["key_mlbam"] = pitch["key_mlbam"].astype(int)
-        pitch = pitch.groupby("key_mlbam", as_index=False)["war"].sum()
+        pitch = _stints(pybaseball.bwar_pitch(return_all=False))
         pitch.to_csv(pitch_cache, index=False)
-        log.info("bWAR pitching %d — %d pitchers", season, len(pitch))
+        log.info("bWAR pitching %d — %d player-team stints", season, len(pitch))
     except Exception as exc:
         log.warning("bwar_pitch failed for season %d: %s", season, exc)
-        pitch = pd.DataFrame(columns=["key_mlbam", "war"])
+        pitch = pd.DataFrame(columns=["key_mlbam", "team", "war"])
 
     return bat, pitch
 
@@ -1006,9 +1004,11 @@ def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 # BRef team abbreviations → our internal abbreviations (Statcast style)
+# SDP, not SDN, is BRef's code for San Diego: with only "SDN" here the Padres
+# never matched, and had no defensive-runs percentile in any season.
 _BREF_TEAM_MAP: dict[str, str] = {
     "WSN": "WSH", "ARI": "AZ",  "TBR": "TB",  "CHW": "CWS",
-    "SFG": "SF",  "KCR": "KC",  "SDN": "SD",  "OAK": "ATH",
+    "SFG": "SF",  "KCR": "KC",  "SDP": "SD",  "SDN": "SD",  "OAK": "ATH",
     # Most others match directly; pass through unchanged
 }
 
