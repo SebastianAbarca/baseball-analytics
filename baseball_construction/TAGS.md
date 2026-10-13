@@ -34,19 +34,19 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `switch hitter` | H | handedness | 820 | splits | — | left-handed hitter, right-handed hitter |
 | `wide release` | P | mechanics | 527 | mechanics | — | — |
 
-## tool  ·  10 tags, 9,595 firings
+## tool  ·  10 tags, 9,531 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
 | `cannon arm` | H | fielding | 264 | fielders_arm | — | — |
 | `elite speed` | H | athleticism | 559 | speed | — | fast, station-to-station |
-| `elite velo` | P | arsenal | 1,017 | all | — | plus velo, soft tosser |
+| `elite velo` | P | arsenal | 955 | all | — | plus velo, soft tosser |
 | `fast` | H | athleticism | 1,317 | speed | — | elite speed, station-to-station |
 | `high spin efficiency` | P | deception | 1,040 | all | 100 (spin_efficiency) | — |
-| `plus velo` | P | arsenal | 1,481 | all | — | elite velo, soft tosser |
+| `plus velo` | P | arsenal | 1,426 | all | — | elite velo, soft tosser |
 | `quick pop` | H | catcher | 124 | catchers | — | — |
 | `ride four-seam` | P | arsenal | 2,240 | all | — | — |
-| `soft tosser` | P | arsenal | 917 | all | — | elite velo, plus velo |
+| `soft tosser` | P | arsenal | 970 | all | — | elite velo, plus velo |
 | `station-to-station` | H | athleticism | 636 | speed | — | elite speed, fast |
 
 ## behavior  ·  32 tags, 21,155 firings
@@ -86,22 +86,22 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `unpredictable` | P | sequencing | 718 | all | — | — |
 | `zone hunter` | H | approach | 930 | all | 50 (OSwing_pct) | — |
 
-## result  ·  29 tags, 23,040 firings
+## result  ·  29 tags, 23,069 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
 | `bad blocker` | H | catcher | 89 | catchers | — | good blocker |
-| `bat-misser` | P | outcome | 1,546 | all | 75 (K_pct_pitch) | pitch-to-contact |
-| `contact suppressor` | P | outcome | 1,117 | all | 100 (HardHit_allowed) | — |
+| `bat-misser` | P | outcome | 1,559 | all | 75 (K_pct_pitch) | pitch-to-contact |
+| `contact suppressor` | P | outcome | 1,075 | all | 100 (HardHit_allowed) | — |
 | `controls runners` | P | running-game | 394 | runner_control | — | — |
 | `defensive liability` | H | fielding | 280 | fielders_oaa | — | elite defender, plus defender |
-| `elite command` | P | outcome | 653 | all | 75 (BB_pct_pitch) | plus command, walk prone |
+| `elite command` | P | outcome | 675 | all | 75 (BB_pct_pitch) | plus command, walk prone |
 | `elite defender` | H | fielding | 136 | fielders_oaa | — | defensive liability, plus defender |
 | `elite framer` | H | catcher | 122 | catchers | — | poor framer |
-| `fly-ball prone` | P | outcome | 961 | all | — | — |
+| `fly-ball prone` | P | outcome | 946 | all | — | — |
 | `gap hitter` | H | bat | 552 | spray | 150 (ISO) | — |
 | `good blocker` | H | catcher | 101 | catchers | — | bad blocker |
-| `ground-baller` | P | outcome | 1,590 | all | 100 (GB_pct_pitch) | — |
+| `ground-baller` | P | outcome | 1,649 | all | 100 (GB_pct_pitch) | — |
 | `high steal rate` | H | running-game | 655 | steal_attempts | — | low steal rate |
 | `high-K` | H | bat-to-ball | 716 | all | 30 (K_pct) | rarely strikes out |
 | `invisible ball` | P | deception | 797 | all | — | — |
@@ -109,7 +109,7 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `pitch-to-contact` | P | outcome | 1,205 | all | 75 (K_pct_pitch) | bat-misser |
 | `platoon liability` | H | platoon | 1,074 | splits_qual | — | — |
 | `platoon-vulnerable` | P | platoon | 1,716 | splits_qual | — | — |
-| `plus command` | P | outcome | 1,151 | all | 75 (BB_pct_pitch) | elite command, walk prone |
+| `plus command` | P | outcome | 1,170 | all | 75 (BB_pct_pitch) | elite command, walk prone |
 | `plus defender` | H | fielding | 238 | fielders_oaa | — | defensive liability, elite defender |
 | `plus power` | H | bat | 1,469 | all | 150 (ISO) | power bat, weak contact |
 | `poor framer` | H | catcher | 114 | catchers | — | elite framer |
@@ -117,7 +117,7 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `rarely strikes out` | H | bat-to-ball | 297 | pa200 | — | high-K |
 | `reverse split` | HP | platoon | 1,482 | splits_qual | — | — |
 | `walk machine` | H | approach | 1,344 | all | 60 (BB_pct) | — |
-| `walk prone` | P | outcome | 1,615 | all | — | elite command, plus command |
+| `walk prone` | P | outcome | 1,588 | all | — | elite command, plus command |
 | `weak contact` | H | bat | 507 | all | 150 (Barrel_pct) | plus power, power bat |
 
 ## deployment  ·  10 tags, 7,972 firings
