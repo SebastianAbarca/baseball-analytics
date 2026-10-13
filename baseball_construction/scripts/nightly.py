@@ -15,7 +15,9 @@ Run every morning, March to October, by .github/workflows/nightly.yml.
     sources               re-pull its season totals (BRef/Savant, OAA, bWAR, ...)
     seed                  write them to player_batting/player_pitching (strict:
                           refuses to write rows without the pitch aggregates)
-    tunnel                rebuild its tunnel pool
+    league                rebuild its league caches (tunnel, pitch mix, spin,
+                          plate discipline, mechanics, sequencing) and drop its
+                          cross-team rows so the portraits rebuild them
     portraits             FORCE-rebuild its 30 portraits + league identity —
                           the database totals changed and are not fingerprinted
     publish               that season's portraits, league data and Scout rows
@@ -213,7 +215,7 @@ def main() -> int:
             from seed import seed_season
             seed_season(season, force=True)
         step("seed", seed)
-    step("tunnel", lambda: R.stage_tunnel([season], moved, force=False, dry=False))
+    step("league", lambda: R.stage_league([season], moved, force=False, dry=False))
     problems = step("portraits", lambda: R.stage_portraits([season], jobs=1, dry=False,
                                                           force=True))
     elsewhere = _stale_elsewhere(season)

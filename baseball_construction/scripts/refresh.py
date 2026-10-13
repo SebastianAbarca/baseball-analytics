@@ -17,7 +17,10 @@ Stages run in dependency order, each feeding the next:
     sources    re-pull the external feeds — FanGraphs/BRef/Savant aggregates,
                fielding OAA, bWAR, defensive runs, IL — and clear the pools
                built from them                          (opt-in)
-    tunnel     regenerate tunnel_league_*.parquet where Statcast moved
+    seed       write the re-pulled season totals to the database the
+               portraits read them from                 (opt-in; writes production)
+    league     rebuild every league cache (tunnel, pitch mix, spin, plate
+               discipline, mechanics, sequencing) where Statcast moved
     portraits  rebuild whatever the build fingerprint now marks stale,
                and rewrite league_identity_*.json
     tags       regenerate TAGS.md and dashboard/tag_reference.json
@@ -28,7 +31,7 @@ Routine refresh (data you own, no external feeds):
     python scripts/refresh.py
 
 EVERYTHING, including re-pulling every external source:
-    python scripts/refresh.py --stages statcast,sources,tunnel,portraits,tags,publish
+    python scripts/refresh.py --stages statcast,sources,seed,league,portraits,tags,publish
 
 See what would change, touch nothing:
     python scripts/refresh.py --dry-run
@@ -38,7 +41,7 @@ Skip the slow part:    --skip portraits
 Parallel seasons:      --jobs 4
 After a CODE change
 rather than a data
-change:                --force-tunnel
+change:                --force-league
 
 Every cache here is gated on `if cache.exists()` with no way to ask for a
 fresh copy, so refreshing one means removing it and calling its puller again.
@@ -58,7 +61,7 @@ Deleting our CSV and re-pulling only reaches the second layer: pybaseball
 answers from its own store and writes back the same numbers. `sources`
 therefore disables that cache for its duration — see stage_sources.
 
-Statcast and tunnel run in the parent before any fork, so the workers only
+Statcast and league run in the parent before any fork, so the workers only
 ever read those files. --jobs then rebuilds seasons in parallel; portraits
 and league_identity files are per-season, so nothing is shared.
 """
@@ -74,19 +77,22 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE.parent))                 # seed.py
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
 RAW_DIR       = _HERE.parent / "data" / "raw"
-TUNNEL_DIR    = _HERE.parent / "modules" / "processed"
+LEAGUE_DIR    = _HERE.parent / "modules" / "processed"
 PORTRAIT_DIR  = _HERE.parent / "data" / "processed" / "portraits"
 
 FIRST_SEASON, LAST_SEASON = 2015, 2026
 
-STAGES = ("statcast", "sources", "tunnel", "portraits", "tags", "publish")
+STAGES = ("statcast", "sources", "seed", "league", "portraits", "tags", "publish")
 # `sources` is opt-in: it re-pulls every external feed (slow, network-bound,
-# and the least reliable step). `publish` is on: a build nobody can read is
+# and the least reliable step). `seed` is opt-in because it writes the
+# production player tables; run it with `sources`, since the portraits read
+# season totals from those tables, not from the CSVs `sources` refreshes. `publish` is on: a build nobody can read is
 # not finished.
-DEFAULT_STAGES = ("statcast", "tunnel", "portraits", "tags", "publish")
+DEFAULT_STAGES = ("statcast", "league", "portraits", "tags", "publish")
 
 log = logging.getLogger("refresh")
 
@@ -351,39 +357,94 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
         log.info("  %d refreshed, %d failed", ok, failed)
 
 
-def stage_tunnel(seasons: list[int], changed: list[int], force: bool, dry: bool) -> int:
-    """
-    Regenerate tunnel caches whose Statcast is newer than they are.
-
-    These live in modules/processed and feed the portrait build fingerprint,
-    so a tunnel cache built from stale Statcast silently poisons every
-    portrait that follows it.
-    """
-    import pandas as pd
+# Every per-season cache derived from raw Statcast, with its builder. Each is
+# read by the portraits and NONE checked its input: the loaders return the
+# parquet whenever it exists. Only the tunnel pool was rebuilt when Statcast
+# moved, so by the end of 2026 the other five were 92.8 days older than the
+# raw file — pitch_mix held 191,141 pitches of a season with 713,868. They are
+# all in the build fingerprint (team_portrait._FINGERPRINT_EXTRA_POOLS), so a
+# rebuilt cache marks that season's portraits stale.
+def _league_caches():
+    from pitch_mix import build_pitch_mix, load_league_plate_discipline
+    from pitcher_traits import load_league_mechanics, load_league_sequencing
+    from spin_efficiency import load_league_spin
     from tunneling import load_league_tunnel
+    return [
+        ("tunnel_league_{s}.parquet",           load_league_tunnel),
+        ("pitch_mix_{s}.parquet",               build_pitch_mix),
+        ("spin_league_{s}.parquet",             load_league_spin),
+        ("plate_discipline_league_{s}.parquet", load_league_plate_discipline),
+        ("mechanics_league_{s}.parquet",        load_league_mechanics),
+        ("sequencing_league_{s}.parquet",       load_league_sequencing),
+    ]
 
-    COLS = ["pitcher", "game_pk", "at_bat_number", "pitch_number", "pitch_type",
-            "plate_x", "plate_z", "vx0", "vy0", "vz0", "ax", "ay", "az"]
+
+_TUNNEL_COLS = ["pitcher", "game_pk", "at_bat_number", "pitch_number", "pitch_type",
+                "plate_x", "plate_z", "vx0", "vy0", "vz0", "ax", "ay", "az"]
+
+
+def stage_seed(seasons: list[int], dry: bool) -> None:
+    """
+    Re-seed player_batting / player_pitching from the sources just pulled.
+    The portraits read season totals from these tables whenever a season is
+    seeded, so refreshing the CSVs alone changed nothing a portrait reads.
+    Strict: refuses to write rows without the Statcast pitch aggregates.
+    """
+    if dry:
+        log.info("  would re-seed player_batting / player_pitching for %s",
+                 ", ".join(map(str, seasons)))
+        return
+    from seed import seed_season
+    for s in seasons:
+        seed_season(s, force=True)
+        log.info("  %d: seeded", s)
+
+
+def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool) -> int:
+    """
+    Rebuild every league cache whose raw Statcast is newer than it (or that
+    is missing, or whose season the statcast stage just moved), and drop the
+    season's cross-team rows so the portraits stage rebuilds them from the
+    same data. Returns the number of caches rebuilt.
+    """
+    from ingest import pull_statcast_season
+    from team_portrait import cross_team_path
+
     done = 0
     for s in seasons:
         sc = RAW_DIR / f"statcast_{s}.parquet"
-        tn = TUNNEL_DIR / f"tunnel_league_{s}.parquet"
         if not sc.exists():
             continue
-        stale = (force or s in changed or not tn.exists()
-                 or sc.stat().st_mtime > tn.stat().st_mtime)
+        stale = []
+        for pat, build in _league_caches():
+            cache = LEAGUE_DIR / pat.format(s=s)
+            if (force or s in changed or not cache.exists()
+                    or sc.stat().st_mtime > cache.stat().st_mtime):
+                stale.append((cache, build))
         if not stale:
             continue
+        names = ", ".join(c.name.replace(f"_{s}.parquet", "") for c, _ in stale)
         if dry:
-            log.info("  %d: tunnel cache would be rebuilt", s)
-            done += 1
+            log.info("  %d: would rebuild %s", s, names)
+            done += len(stale)
             continue
-        df = pd.read_parquet(sc, columns=COLS).dropna(
-            subset=["plate_x", "plate_z", "vy0", "ay"])
-        agg = load_league_tunnel(s, statcast=df, force=True)
-        log.info("  %d: tunnel rebuilt — %d pitchers from %d pitches",
-                 s, len(agg), len(df))
-        done += 1
+        statcast = pull_statcast_season(s, top_up=False)
+        for cache, build in stale:
+            data = statcast
+            if cache.name.startswith("tunnel_league_"):
+                # The input the tunnel stage always gave it — located pitches
+                # with kinematics. Dropping rows changes which pitches pair,
+                # so this keeps tunnel scores identical to before; pairing
+                # across a dropped pitch is review item 10, separately.
+                data = statcast[_TUNNEL_COLS].dropna(
+                    subset=["plate_x", "plate_z", "vy0", "ay"])
+            build(s, statcast=data, force=True)
+        ct = cross_team_path(s)
+        if ct.exists():
+            ct.unlink()
+        log.info("  %d: rebuilt %s (%d pitches)", s, names, len(statcast))
+        done += len(stale)
+        del statcast
     return done
 
 
@@ -409,6 +470,21 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool,
     import json
     from team_portrait import (portrait_is_current, build_fingerprint,
                                clear_fingerprint_cache)
+
+    # Cross-team rows for every season these portraits rank against, built
+    # FIRST: before the workers fork, and before the fingerprints are read,
+    # since the rows are pool files. They were a side effect of each season's
+    # first portrait, so a full rebuild ranked team construction against
+    # whichever seasons happened to finish first.
+    if not dry:
+        from ingest import era_pool_seasons
+        from team_portrait import ensure_cross_team_rows
+        need = sorted({p for s in seasons for p in era_pool_seasons(s)})
+        built = [s for s in need if (RAW_DIR / f"statcast_{s}.parquet").exists()
+                 and ensure_cross_team_rows(s)]
+        if built:
+            log.info("  cross-team rows built for %s", ", ".join(map(str, built)))
+            clear_fingerprint_cache()
 
     # Per season: each season's portraits hash only the pools they read.
     fp = {s: build_fingerprint(s) for s in seasons}
@@ -451,18 +527,6 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool,
         return 0
 
     todo = sorted(stale_by_season)
-
-    # Cross-team rows for every season any rebuilt portrait ranks against,
-    # built HERE, before the workers fork. They were a side effect of each
-    # season's first portrait, so in a full rebuild a season ranked its team
-    # construction against whichever seasons happened to finish first.
-    from ingest import era_pool_seasons
-    from team_portrait import ensure_cross_team_rows
-    need = sorted({p for s in todo for p in era_pool_seasons(s)})
-    built = [s for s in need if (RAW_DIR / f"statcast_{s}.parquet").exists()
-             and ensure_cross_team_rows(s)]
-    if built:
-        log.info("  cross-team rows built for %s", ", ".join(map(str, built)))
 
     failed = 0
     if jobs > 1:
@@ -575,9 +639,11 @@ def main() -> int:
     ap.add_argument("--skip", default="", help="stages to drop from --stages")
     ap.add_argument("--jobs", type=int, default=1,
                     help="rebuild this many seasons in parallel")
-    ap.add_argument("--force-tunnel", action="store_true",
-                    help="rebuild tunnel caches even when Statcast has not moved "
-                         "(use after changing tunnelling code)")
+    ap.add_argument("--force-league", "--force-tunnel", dest="force_league",
+                    action="store_true",
+                    help="rebuild the league caches even when Statcast has not "
+                         "moved (use after changing tunnel/pitch-mix/spin/"
+                         "discipline/mechanics/sequencing code)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what each stage would do, change nothing")
     args = ap.parse_args()
@@ -596,8 +662,11 @@ def main() -> int:
     else:
         seasons = [int(x) for x in args.seasons.split(",")]
 
-    skip = {s.strip() for s in args.skip.split(",") if s.strip()}
-    stages = [s.strip() for s in args.stages.split(",") if s.strip() and s.strip() not in skip]
+    # `tunnel` was this stage's name when it rebuilt only the tunnel pool.
+    alias = {"tunnel": "league"}
+    skip = {alias.get(s.strip(), s.strip()) for s in args.skip.split(",") if s.strip()}
+    stages = [alias.get(s.strip(), s.strip()) for s in args.stages.split(",")
+              if s.strip() and alias.get(s.strip(), s.strip()) not in skip]
     bad = set(stages) - set(STAGES)
     if bad:
         print(f"unknown stage(s): {', '.join(sorted(bad))}", file=sys.stderr)
@@ -619,10 +688,16 @@ def main() -> int:
                 log.info("  all seasons already current")
         elif name == "sources":
             stage_sources(seasons, args.dry_run)
-        elif name == "tunnel":
-            n = stage_tunnel(seasons, changed, args.force_tunnel, args.dry_run)
+            if "seed" not in stages:
+                log.warning("  sources refreshed without `seed`: the portraits read "
+                            "season totals from the database, so they will not see "
+                            "these until it is re-seeded (add seed to --stages)")
+        elif name == "seed":
+            stage_seed(seasons, args.dry_run)
+        elif name == "league":
+            n = stage_league(seasons, changed, args.force_league, args.dry_run)
             if not n:
-                log.info("  all tunnel caches current")
+                log.info("  all league caches current")
         elif name == "portraits":
             stage_portraits(seasons, max(1, args.jobs), args.dry_run)
         elif name == "tags":

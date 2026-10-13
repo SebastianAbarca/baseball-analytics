@@ -29,7 +29,7 @@ flowchart TD
     C["season roots<br/>fg_batting · fg_pitching<br/>bwar · fielding_oaa · def_runs · il"]
     D["pooled history<br/>*_history_*.csv<br/><i>cross-season</i>"]
     E["prior slices<br/>*_prior_*.parquet"]
-    F["league layer<br/>tunnel_league · pitch_mix<br/>spin · plate_discipline"]
+    F["league layer<br/>tunnel · pitch_mix · spin<br/>plate_discipline · mechanics<br/>sequencing · cross_team"]
     G["portraits<br/>portraits/TEAM_SEASON.json<br/>360 files · 88 MB"]
     H["reference data<br/>tag_reference · TAGS.md<br/>strike_zones"]
     I["serving tables · Supabase<br/>portraits · league_seasons<br/>scout_players · scout_tags"]
@@ -108,7 +108,7 @@ pre-repair units, and were served as valid cache hits.
 
 ```mermaid
 flowchart TD
-    P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots of its era pool · its tunnel_league"]
+    P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots + cross-team rows of its era pool<br/>its six league caches"]
     P2["_gate_digest()<br/>every UPPERCASE constant in<br/>hitter_traits · pitcher_traits<br/>pitch_aggregates · reliability<br/>plus TAG_KIND · TAG_POPULATION"]
     FP["<b>build_fingerprint(season)</b><br/>sha256(pools + gates) first 16"]
     Q{"portrait_is_current()"}
@@ -143,7 +143,11 @@ zone constant could change tag output invisibly.
 to hash every pool file of every season, so topping up 2026 marked all 360
 portraits stale — 2015 included. Now each season hashes only what its portraits
 read: the `fg_batting`/`fg_pitching` roots of the seasons in its era pool, and
-its own `tunnel_league` file.
+its own six league caches — tunnel, pitch mix, spin, plate discipline,
+mechanics, sequencing. Only the tunnel pool used to be hashed, or rebuilt when
+Statcast moved; the other five sat 92.8 days behind the 2026 raw file while
+every portrait read as current. The cross-team rows behind the team
+construction percentiles are hashed per era-pool season, like the fg roots.
 
 The era pool is the part that genuinely spans seasons — display percentiles
 and some pitcher gates rank against the whole Statcast era. It is defined as
@@ -173,14 +177,17 @@ network-bound.
 flowchart LR
     S1["<b>statcast</b><br/>top up in-progress season<br/>backfill games MLB lists<br/>that a cache lacks"]
     S2["<b>sources</b><br/>re-pull external feeds<br/><i>opt-in</i>"]
-    S3["<b>tunnel</b><br/>rebuild where Statcast moved"]
+    S3["<b>league</b><br/>rebuild all six league caches<br/>where Statcast moved"]
     S4["<b>portraits</b><br/>rebuild what the<br/>fingerprint marks stale"]
     S5["<b>tags</b><br/>TAGS.md · tag_reference"]
     S6["<b>publish</b><br/>portraits · league seasons<br/>Scout → serving tables"]
 
-    S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    S2b["<b>seed</b><br/>season totals →<br/>player tables<br/><i>opt-in</i>"]
+
+    S1 --> S2 --> S2b --> S3 --> S4 --> S5 --> S6
 
     style S2 stroke-dasharray: 5 5
+    style S2b stroke-dasharray: 5 5
 ```
 
 Order is not optional — every stale-cache bug in this project came from running

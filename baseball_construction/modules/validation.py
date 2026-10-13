@@ -23,6 +23,7 @@ Tests:
   V16 Season completeness — missing games vs the schedule, the finished rule, opener dates
   V17 Regular season only — raw caches and BRef totals hold no other games
   V18 Team stints — team PA/BF reconcile; a traded player splits by team
+  V19 League caches current — rebuilt and fingerprinted alike, none older than raw
 """
 
 from __future__ import annotations
@@ -1354,6 +1355,53 @@ def v18_team_stints() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V19 — League caches current
+# ---------------------------------------------------------------------------
+
+def v19_league_caches_current() -> Result:
+    """
+      1. refresh.stage_league rebuilds exactly the caches the build fingerprint
+         hashes — one list cannot gain a cache the other lacks
+      2. on this machine's data, no league cache is older than its season's
+         raw Statcast (2026's five were 92.8 days older when this was added)
+    """
+    import importlib
+    import team_portrait as tp
+    from ingest import RAW_DIR, SEASON_DATES
+
+    sys.path.insert(0, str(_HERE.parent / "scripts"))
+    refresh = importlib.import_module("refresh")
+    errors = []
+    rebuilt = {pat for pat, _ in refresh._league_caches()}
+    hashed = {pat for _, pat in tp._FINGERPRINT_EXTRA_POOLS}
+    if rebuilt != hashed:
+        errors.append(f"refresh rebuilds {sorted(rebuilt - hashed)} not fingerprinted; "
+                      f"fingerprinted {sorted(hashed - rebuilt)} not rebuilt")
+
+    stale, checked = [], 0
+    for season in sorted(SEASON_DATES):
+        raw = RAW_DIR / f"statcast_{season}.parquet"
+        if not raw.exists():
+            continue
+        for directory, pat in tp._FINGERPRINT_EXTRA_POOLS:
+            cache = directory / pat.format(s=season)
+            if not cache.exists():
+                continue
+            checked += 1
+            days = (raw.stat().st_mtime - cache.stat().st_mtime) / 86400
+            if days > 0:
+                stale.append(f"{cache.name} ({days:.1f} d)")
+    if stale:
+        errors.append("older than raw Statcast: " + ", ".join(stale[:8])
+                      + (f" … +{len(stale) - 8}" if len(stale) > 8 else ""))
+
+    passed = not errors
+    detail = (f"{len(hashed)} caches rebuilt and fingerprinted alike; "
+              f"{checked} on disk, none older than raw" if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1376,6 +1424,7 @@ TESTS = [
     ("V16", "Season completeness",             v16_season_completeness),
     ("V17", "Regular season only",             v17_regular_season_only),
     ("V18", "Team stints",                     v18_team_stints),
+    ("V19", "League caches current",           v19_league_caches_current),
 ]
 
 

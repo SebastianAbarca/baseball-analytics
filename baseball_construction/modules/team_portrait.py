@@ -2406,15 +2406,29 @@ _GATE_FINGERPRINT_CACHE: Optional[str] = None
 # is a pure function of these roots, and both are created lazily mid-build,
 # which is what used to move the fingerprint under a running rebuild and force
 # a second pass.
-_FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv")
+# The cross-team rows of every era-pool season are what the team-construction
+# percentiles rank against, so they are pool files exactly like the fg roots.
+_FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
+                           "cross_team_metrics_v2_{s}.csv")
 
 # Pools that live outside PROCESSED_DIR, hashed for the portrait's own season.
 # tunneling.py writes tunnel_league_{s}.parquet into modules/processed; left
 # out, a change to how tunnel_score is computed could not move the fingerprint
 # and every portrait kept a `tunneler` tag cut by the old maths.
-_FINGERPRINT_EXTRA_POOLS = (
-    (Path(__file__).resolve().parent / "processed", "tunnel_league_{s}.parquet"),
-)
+#
+# The other five league caches were missing for the same reason, and they
+# were the stale ones: refreshing Statcast rebuilt only the tunnel pool, and a
+# portrait cut from a 93-day-old pitch mix still matched the fingerprint.
+# refresh.stage_league rebuilds all six when Statcast moves.
+_LEAGUE_DIR = Path(__file__).resolve().parent / "processed"
+_FINGERPRINT_EXTRA_POOLS = tuple((_LEAGUE_DIR, pat) for pat in (
+    "tunnel_league_{s}.parquet",
+    "pitch_mix_{s}.parquet",
+    "spin_league_{s}.parquet",
+    "plate_discipline_league_{s}.parquet",
+    "mechanics_league_{s}.parquet",
+    "sequencing_league_{s}.parquet",
+))
 
 
 def _jsonable(obj):

@@ -113,7 +113,8 @@ def _load_statcast(season: int) -> pd.DataFrame:
 # Core aggregation
 # ---------------------------------------------------------------------------
 
-def build_pitch_mix(season: int, force: bool = False) -> pd.DataFrame:
+def build_pitch_mix(season: int, force: bool = False,
+                    statcast: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Aggregate Statcast pitch-by-pitch into per-pitcher × pitch_type rows.
 
@@ -133,7 +134,7 @@ def build_pitch_mix(season: int, force: bool = False) -> pd.DataFrame:
         return pd.read_parquet(cache)
 
     log.info("pitch_mix %d: building from Statcast…", season)
-    sc = _load_statcast(season)
+    sc = statcast if statcast is not None else _load_statcast(season)
 
     # Drop irrelevant pitch types (pitchouts, eephus)
     sc = sc[~sc["pitch_type"].isin({"PO", "EP", "SC"})].copy()

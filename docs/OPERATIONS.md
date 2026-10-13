@@ -36,7 +36,8 @@ Stages run in dependency order. One is opt-in.
 |---|---|---|
 | `statcast` | tops up the in-progress season; fetches any game MLB's schedule lists that a cache lacks | on |
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
-| `tunnel` | rebuilds tunnel caches where Statcast moved | on |
+| `seed` | writes the re-pulled season totals to `player_batting`/`player_pitching`, where the portraits read them — **writes production** | **off** |
+| `league` | rebuilds every league cache (tunnel, pitch mix, spin, plate discipline, mechanics, sequencing) where Statcast moved | on |
 | `portraits` | rebuilds whatever the fingerprint marks stale | on |
 | `tags` | regenerates TAGS.md and tag_reference | on |
 | `publish` | writes portraits, league seasons and Scout to the serving tables | on |
@@ -47,9 +48,10 @@ Stages run in dependency order. One is opt-in.
 # See what would change. Touches nothing.
 python baseball_construction/scripts/refresh.py --dry-run
 
-# Everything, including re-pulling every external feed
+# Everything, including re-pulling every external feed and re-seeding the
+# database from it (sources without seed changes nothing a portrait reads)
 python baseball_construction/scripts/refresh.py \
-    --stages statcast,sources,tunnel,portraits,tags
+    --stages statcast,sources,seed,league,portraits,tags,publish
 
 # One season
 python baseball_construction/scripts/refresh.py --seasons 2026
@@ -57,8 +59,9 @@ python baseball_construction/scripts/refresh.py --seasons 2026
 # Rebuild seasons in parallel (see the memory note below)
 python baseball_construction/scripts/refresh.py --jobs 3
 
-# After changing tunnelling CODE rather than data
-python baseball_construction/scripts/refresh.py --force-tunnel
+# After changing league-cache CODE rather than data (tunnel, pitch mix,
+# spin, discipline, mechanics, sequencing); --force-tunnel still works
+python baseball_construction/scripts/refresh.py --force-league
 ```
 
 `--dry-run` is worth running first on anything unfamiliar. It reports staleness
@@ -74,6 +77,7 @@ real run does, so it cannot drift from what would actually happen.
 | a tag threshold, `TAG_KIND`, a zone constant | **all 360 portraits** — the gate digest moved |
 | the in-progress season's data | that season's 30 — finished seasons rank against a pool it is not in |
 | a finished season's data | all 360 — finished seasons are in every season's era pool |
+| raw Statcast for a season (top-up, backfill) | its six league caches and cross-team rows, then its portraits — the `league` stage does the first two |
 | a chart, a layout, a callback | nothing; restart the dashboard |
 | `TAGS.md` content | run `--stages tags`, about 3s |
 | anything published | `publish.py` (or `--stages publish`); the dashboard picks it up within 10 min |
@@ -175,7 +179,7 @@ for f in glob.glob('baseball_construction/data/processed/portraits/*.json'):
     if not tp.portrait_is_current(p):
         stale += 1
 print('portraits:', sum(c.values()), '| distinct stamps:', len(c), '| stale:', stale)
-print('current fingerprint:', tp.build_fingerprint())
+print('current fingerprint:', {s: tp.build_fingerprint(s) for s in range(2015, 2027)})
 PY
 ```
 
@@ -237,10 +241,11 @@ totals.
 **After the last regular-season game — finalize.** On the machine with all the
 data:
 
-1. `python baseball_construction/scripts/refresh.py --seasons <year> --stages statcast,sources,tunnel`
-   to take the season to its final game.
-2. `python baseball_construction/seed.py --season <year> --force` to write its
-   final totals.
+1. `python baseball_construction/scripts/refresh.py --seasons <year> --stages statcast,sources,seed,league`
+   to take the season to its final game and write its final totals.
+2. `python baseball_construction/modules/validation.py` — V16, V17 and V19
+   confirm the season is complete, regular-season only, and its caches
+   current. Do not continue on a failure.
 3. `python baseball_construction/scripts/refresh.py --stages portraits,tags,publish --jobs 3` (about 20
    minutes). Every portrait re-ranks, because the season just joined the era
    pool.
