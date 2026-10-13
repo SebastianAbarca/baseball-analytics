@@ -34,7 +34,7 @@ Stages run in dependency order. One is opt-in.
 
 | stage | what it does | default |
 |---|---|---|
-| `statcast` | tops up the in-progress season | on |
+| `statcast` | tops up the in-progress season; fetches any game MLB's schedule lists that a cache lacks | on |
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
 | `tunnel` | rebuilds tunnel caches where Statcast moved | on |
 | `portraits` | rebuilds whatever the fingerprint marks stale | on |
@@ -226,7 +226,13 @@ no commits, and the off-season is longer than that.
 **Before Opening Day:** add the season to `SEASON_DATES` in
 `modules/ingest.py` (first and last regular-season dates) and to `SEASONS` in
 `dashboard/layout.py`. From March the nightly job fails, deliberately, while a
-season is missing.
+season is missing. The first date is the first regular-season game
+**anywhere** — Tokyo, Seoul and other international openers count, and three
+seasons once started late because they were missed. Check it against MLB's
+schedule (`statsapi.mlb.com/api/v1/schedule?sportId=1&gameType=R&season=<year>`).
+A wrong date no longer loses games silently — the `statcast` stage fetches any
+completed game the cache lacks — but the dates still bound the BRef season
+totals.
 
 **After the last regular-season game — finalize.** On the machine with all the
 data:
@@ -241,9 +247,16 @@ data:
 4. `python baseball_construction/scripts/freeze_era.py`, then commit `data/era/`, `TAGS.md`,
    `dashboard/tag_reference.json` and `dashboard/strike_zones.json`.
 
-Check SEASON_DATES' end date against Statcast's `game_type` (`R` regular, `F`
-wild card, `D` division series) first. The projected date ran a week into the
-postseason for 2026.
+Check SEASON_DATES' end date against MLB's schedule or Statcast's
+`game_type` (`R` regular, `F` wild card, `D` division series) first. The
+projected date ran a week into the postseason for 2026; 2024's ran a day
+short and lost a doubleheader. Step 1's `statcast` stage logs
+`INCOMPLETE vs MLB's schedule` if any completed game is still missing — do
+not continue until it is clean.
+
+A season counts as finished from the **second** day after its last game
+(`ingest.season_state`): the morning after it, the nightly job still runs and
+collects that night's games.
 
 ---
 

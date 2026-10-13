@@ -171,7 +171,7 @@ network-bound.
 
 ```mermaid
 flowchart LR
-    S1["<b>statcast</b><br/>top up in-progress season<br/><i>finished seasons immutable</i>"]
+    S1["<b>statcast</b><br/>top up in-progress season<br/>backfill games MLB lists<br/>that a cache lacks"]
     S2["<b>sources</b><br/>re-pull external feeds<br/><i>opt-in</i>"]
     S3["<b>tunnel</b><br/>rebuild where Statcast moved"]
     S4["<b>portraits</b><br/>rebuild what the<br/>fingerprint marks stale"]

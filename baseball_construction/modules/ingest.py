@@ -50,19 +50,27 @@ LEAGUE_MEAN_DEFAULT: float = 0.50
 # Season date helpers
 # ---------------------------------------------------------------------------
 
+# First and last day a regular-season game was played, each checked against
+# MLB's own schedule (statsapi gameType=R, completed games). The start is the
+# first game anywhere, not the domestic Opening Day: international openers are
+# regular-season games, and four entries had them wrong — 2019 and 2025
+# (Tokyo, Mar 20-21 / Mar 18-19) and 2026's Mar 25 opener were missing, and
+# 2024 ended a day early, losing the Sep 30 Mets-Braves doubleheader. Seven
+# games in all. regular_season_games() is the completeness check; these
+# dates only bound the requests.
 SEASON_DATES: dict[int, tuple[str, str]] = {
     2015: ("2015-04-05", "2015-10-04"),
     2016: ("2016-04-03", "2016-10-02"),
     2017: ("2017-04-02", "2017-10-01"),
-    2018: ("2018-03-29", "2018-10-01"),
-    2019: ("2019-03-28", "2019-09-29"),
+    2018: ("2018-03-29", "2018-10-01"),   # incl. two tiebreaker games (Oct 1)
+    2019: ("2019-03-20", "2019-09-29"),   # Tokyo: SEA-OAK Mar 20-21
     2020: ("2020-07-23", "2020-09-27"),
     2021: ("2021-04-01", "2021-10-03"),
     2022: ("2022-04-07", "2022-10-05"),
     2023: ("2023-03-30", "2023-10-01"),
-    2024: ("2024-03-20", "2024-09-29"),
-    2025: ("2025-03-27", "2025-09-28"),
-    2026: ("2026-03-26", "2026-09-27"),  # last regular-season game, per Statcast game_type
+    2024: ("2024-03-20", "2024-09-30"),   # Seoul Mar 20-21; NYM-ATL DH Sep 30
+    2025: ("2025-03-18", "2025-09-28"),   # Tokyo: LAD-CHC Mar 18-19
+    2026: ("2026-03-25", "2026-09-27"),
 }
 
 
@@ -70,7 +78,8 @@ def season_state(today: Optional[_dt.date] = None) -> tuple[list[int], Optional[
     """
     (finished seasons, the season in progress or None), from SEASON_DATES.
 
-    Finished means its last regular-season game is behind us. Finished seasons
+    Finished means its last regular-season game is behind us and the morning
+    after it, when that game's data is collected, has passed. Finished seasons
     are frozen: their portraits share one era pool and never move until the
     next season finishes and joins it. Only the season in progress changes from
     night to night, which is what lets the nightly job rebuild 30 portraits
@@ -80,7 +89,11 @@ def season_state(today: Optional[_dt.date] = None) -> tuple[list[int], Optional[
     today = today or _dt.date.today()
     finished, in_progress = [], None
     for s, (start, end) in sorted(SEASON_DATES.items()):
-        if _dt.date.fromisoformat(end) < today:
+        # Finished from the SECOND day after the last game. On the morning
+        # after it, that night's games are still to be collected — the top-up
+        # targets yesterday — and if the season already counted as finished
+        # the nightly job would stand down and never fetch them.
+        if _dt.date.fromisoformat(end) + _dt.timedelta(days=1) < today:
             finished.append(s)
         elif _dt.date.fromisoformat(start) <= today:
             in_progress = s
@@ -221,6 +234,8 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
         log.info("statcast_%d: nothing new between %s and %s", season, frm, to)
         return df
 
+    if not df.empty:
+        new = new.reindex(columns=df.columns)   # see backfill_statcast_games
     merged = pd.concat([df, new], ignore_index=True)
     key = [c for c in _STATCAST_KEY if c in merged.columns]
     if key:
@@ -230,6 +245,117 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
              season, len(merged) - len(df), len(df), len(merged),
              pd.to_datetime(merged["game_date"]).max().date())
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Completeness against MLB's schedule
+# ---------------------------------------------------------------------------
+# A maximum cached date says nothing about the days before it. Topping up
+# only after the last cached game could never recover an opening series the
+# season's start date skipped (both Tokyo openers), nor a game played after
+# the end date (2024's Sep 30 doubleheader). MLB's schedule lists every
+# completed regular-season game by game_pk, which Statcast shares, so the
+# question "is this season's cache complete?" has an exact answer.
+
+_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+# statsapi codedGameState: F final, O game over. Postponed (D), cancelled (C)
+# and suspended (T/U) games are not played games; a suspended game appears
+# again as F on the day it was completed.
+_COMPLETED_STATES = {"F", "O"}
+
+
+def regular_season_games(season: int) -> pd.DataFrame:
+    """
+    Completed regular-season games per MLB: game_pk, date (the day it was
+    completed) and official_date (the day it was scheduled — differs for a
+    suspended game). Cached to data/processed/schedule_{season}.csv once the
+    season is finished; a season in progress is fetched fresh (one request).
+    """
+    cache = PROCESSED_DIR / f"schedule_{season}.csv"
+    finished, _ = season_state()
+    if season in finished and cache.exists():
+        return pd.read_csv(cache)
+
+    import requests
+    r = requests.get(_SCHEDULE_URL, timeout=60,
+                     params={"sportId": 1, "season": season, "gameType": "R"})
+    r.raise_for_status()
+    rows = [
+        {"game_pk": g["gamePk"], "date": d["date"],
+         "official_date": g.get("officialDate", d["date"])}
+        for d in r.json().get("dates", [])
+        for g in d.get("games", [])
+        if g.get("status", {}).get("codedGameState") in _COMPLETED_STATES
+    ]
+    games = pd.DataFrame(rows, columns=["game_pk", "date", "official_date"])
+    games = games.drop_duplicates("game_pk", keep="last")
+    if season in finished:
+        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        games.to_csv(cache, index=False)
+    return games
+
+
+def statcast_missing_games(season: int, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Completed regular-season games absent from the season's Statcast cache,
+    up to yesterday (today's are still being played). Empty = complete.
+    """
+    if df is None:
+        cache = RAW_DIR / f"statcast_{season}.parquet"
+        df = (pd.read_parquet(cache, columns=["game_pk"]) if cache.exists()
+              else pd.DataFrame(columns=["game_pk"]))
+    games = regular_season_games(season)
+    yesterday = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+    games = games[games["date"] <= yesterday]
+    have = set(pd.to_numeric(df["game_pk"], errors="coerce").dropna().astype(int))
+    return games[~games["game_pk"].astype(int).isin(have)].reset_index(drop=True)
+
+
+def backfill_statcast_games(season: int) -> int:
+    """
+    Fetch the specific games statcast_missing_games finds — by their dates,
+    keeping only those game_pks so no cached game is rewritten — and append
+    them to the cache. Returns the number of games added; games MLB lists
+    that Statcast still does not have are logged and left for the next run.
+    """
+    cache = RAW_DIR / f"statcast_{season}.parquet"
+    if not cache.exists():
+        return 0
+    df = pd.read_parquet(cache)
+    missing = statcast_missing_games(season, df)
+    if missing.empty:
+        return 0
+    want = set(missing["game_pk"].astype(int))
+    dates = sorted(set(missing["date"]) | set(missing["official_date"]))
+    log.info("statcast_%d: %d game(s) missing from the cache — fetching %s",
+             season, len(want), ", ".join(dates))
+    pybaseball.cache.enable()
+    frames = []
+    for d in dates:
+        try:
+            got = _regular_season(pybaseball.statcast(start_dt=d, end_dt=d, verbose=False))
+        except Exception as e:
+            log.warning("statcast_%d: fetching %s failed (%s)", season, d, e)
+            continue
+        if got is not None and not got.empty:
+            # The cache's own columns: Savant adds fields over time
+            # (miss_distance, 2026), and 2 games should not widen a season's
+            # schema with a column that is null on the other 2,428.
+            got = got[got["game_pk"].astype(int).isin(want)]
+            frames.append(got.reindex(columns=df.columns))
+    new = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    added = set(new["game_pk"].astype(int)) if not new.empty else set()
+    if added:
+        merged = pd.concat([df, new], ignore_index=True)
+        merged = merged.drop_duplicates(subset=_STATCAST_KEY, keep="first")
+        merged.to_parquet(cache, index=False)
+        log.info("statcast_%d: +%d game(s), +%d pitches", season, len(added),
+                 len(merged) - len(df))
+    still = sorted(want - added)
+    if still:
+        log.warning("statcast_%d: %d game(s) MLB lists as completed are not in "
+                    "Statcast yet: %s", season, len(still), still)
+    return len(added)
 
 
 def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:

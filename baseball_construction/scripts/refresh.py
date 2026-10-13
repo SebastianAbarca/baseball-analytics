@@ -12,7 +12,8 @@ stale. The order is not optional, so it should not be retyped each time.
 
 Stages run in dependency order, each feeding the next:
 
-    statcast   top up any in-progress season (finished seasons are immutable)
+    statcast   top up any in-progress season, then fetch any game MLB lists as
+               completed that the cache lacks (every season)
     sources    re-pull the external feeds — FanGraphs/BRef/Savant aggregates,
                fielding OAA, bWAR, defensive runs, IL — and clear the pools
                built from them                          (opt-in)
@@ -99,8 +100,19 @@ log = logging.getLogger("refresh")
 # ---------------------------------------------------------------------------
 
 def stage_statcast(seasons: list[int], dry: bool) -> list[int]:
-    """Top up in-progress seasons. Returns seasons whose data actually moved."""
-    from ingest import pull_statcast_season, statcast_gap
+    """
+    Top up in-progress seasons, then make every season complete against
+    MLB's schedule. Returns seasons whose data actually moved.
+
+    The top-up only appends after the last cached date, which cannot recover
+    a game missed before it — an opening series outside SEASON_DATES, a day
+    a pull dropped. backfill_statcast_games fetches exactly the game_pks
+    MLB lists as completed and the cache lacks; a complete season costs one
+    schedule lookup (cached once the season is finished) and no Statcast
+    request.
+    """
+    from ingest import (backfill_statcast_games, pull_statcast_season,
+                        statcast_gap, statcast_missing_games)
 
     moved = []
     for s in seasons:
@@ -129,9 +141,37 @@ def stage_statcast(seasons: list[int], dry: bool) -> list[int]:
         if cache.stat().st_mtime > before:
             log.info("  %d: topped up", s)
             moved.append(s)
+
+    # Completeness — after the top-up, so only genuinely missing games remain.
+    incomplete = []
+    for s in seasons:
+        if not (RAW_DIR / f"statcast_{s}.parquet").exists():
+            continue
+        try:
+            missing = statcast_missing_games(s)
+        except Exception as e:
+            log.warning("  %d: could not read MLB's schedule (%s) — completeness "
+                        "not checked", s, e)
+            continue
+        if missing.empty:
+            continue
+        if dry:
+            log.info("  %d: %d game(s) missing, would fetch (%s)", s, len(missing),
+                     ", ".join(sorted(set(missing["date"]))))
+            moved.append(s)
+            continue
+        added = backfill_statcast_games(s)
+        if added:
+            log.info("  %d: %d missing game(s) fetched", s, added)
+            moved.append(s)
+        if added < len(missing):
+            incomplete.append(f"{s} ({len(missing) - added})")
+    if incomplete:
+        log.warning("  INCOMPLETE vs MLB's schedule: %s — Statcast has not "
+                    "published them yet; the next run retries", ", ".join(incomplete))
     if not dry:
         _write_strike_zone_table(seasons)
-    return moved
+    return sorted(set(moved))
 
 
 STRIKE_ZONE_TABLE = _HERE.parent / "dashboard" / "strike_zones.json"

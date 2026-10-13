@@ -10,7 +10,8 @@ Run every morning, March to October, by .github/workflows/nightly.yml.
     bootstrap             what a fresh machine lacks: the Chadwick register,
                           the frozen era (data/era -> data/processed), the
                           prior season's Statcast (roster turnover)
-    statcast              top up the season to yesterday
+    statcast              top up the season to yesterday, and fetch any game
+                          MLB lists as completed that the cache lacks
     sources               re-pull its season totals (BRef/Savant, OAA, bWAR, ...)
     seed                  write them to player_batting/player_pitching (strict:
                           refuses to write rows without the pitch aggregates)

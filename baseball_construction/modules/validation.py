@@ -20,6 +20,7 @@ Tests:
   V13 Metric rank directions — every metric declares one; outcome gates monotonic
   V14 Batted-ball direction — pull/oppo relative to the batter, boundaries
   V15 Tag evidence coverage — every tag gated or exempt; the gate refuses thin samples
+  V16 Season completeness — missing games vs the schedule, the finished rule, opener dates
 """
 
 from __future__ import annotations
@@ -1163,6 +1164,65 @@ def v15_tag_evidence() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V16 — Season completeness
+# ---------------------------------------------------------------------------
+
+def v16_season_completeness() -> Result:
+    """
+    Offline (MLB's schedule is stubbed):
+      1. statcast_missing_games finds a game missing from the START of a
+         season and one from the END — the two the date table used to lose —
+         ignores today's, and reports nothing for a complete cache
+      2. a season is still in progress the morning after its last game (so
+         the nightly job collects it) and finished the day after that
+      3. SEASON_DATES starts no later than the international openers it had
+         missed (2019, 2025 Tokyo; 2026 Mar 25) and 2024 ends Sep 30
+    """
+    import datetime as dt
+    import pandas as pd
+    import ingest
+
+    errors = []
+    today = dt.date.today()
+    sched = pd.DataFrame({
+        "game_pk": [1, 2, 3, 4],
+        "date": ["2025-03-18", "2025-06-01", "2025-09-28", today.isoformat()],
+    })
+    sched["official_date"] = sched["date"]
+    real = ingest.regular_season_games
+    ingest.regular_season_games = lambda season: sched
+    try:
+        cache = pd.DataFrame({"game_pk": [2]})
+        missing = sorted(ingest.statcast_missing_games(2025, cache)["game_pk"])
+        if missing != [1, 3]:
+            errors.append(f"missing games {missing}, want [1, 3] (today's excluded)")
+        full = pd.DataFrame({"game_pk": [1, 2, 3]})
+        if not ingest.statcast_missing_games(2025, full).empty:
+            errors.append("a complete cache reported missing games")
+    finally:
+        ingest.regular_season_games = real
+
+    end = dt.date.fromisoformat(ingest.SEASON_DATES[2026][1])
+    _, ip_next = ingest.season_state(end + dt.timedelta(days=1))
+    fin_after, _ = ingest.season_state(end + dt.timedelta(days=2))
+    if ip_next != 2026:
+        errors.append("the morning after the last game no longer counts as in progress")
+    if 2026 not in fin_after:
+        errors.append("two days after the last game the season is not finished")
+
+    for season, first in [(2019, "2019-03-20"), (2025, "2025-03-18"), (2026, "2026-03-25")]:
+        if ingest.SEASON_DATES[season][0] > first:
+            errors.append(f"{season} starts {ingest.SEASON_DATES[season][0]}, after {first}")
+    if ingest.SEASON_DATES[2024][1] < "2024-09-30":
+        errors.append("2024 ends before the Sep 30 doubleheader")
+
+    passed = not errors
+    detail = ("missing-game detection, finished rule and opener dates correct"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1182,6 +1242,7 @@ TESTS = [
     ("V13", "Metric rank directions",          v13_metric_directions),
     ("V14", "Batted-ball direction",           v14_spray_direction),
     ("V15", "Tag evidence coverage",           v15_tag_evidence),
+    ("V16", "Season completeness",             v16_season_completeness),
 ]
 
 
