@@ -117,7 +117,6 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Pitch Design and Analytics Driven",
         "dimension": "pitching",
         "weights": {
-            "SpinEfficiency_pct":      0.20,
             "ArsenalDiversity_pct":    0.15,
             "PlatoonOptimization_pct": 0.20,
             "OpenerUsage_pct":         0.15,   # binary scaled 0/100

@@ -2372,7 +2372,6 @@ METRIC_LABELS: dict[str, str] = {
     "GB_pct_pct":            "Ground Ball Rate",
     "TeamDefense_pct":       "Team Defense (OAA + Def Runs)",
     # B3
-    "SpinEfficiency_pct":    "Spin Efficiency",
     "ArsenalDiversity_pct":  "Arsenal Diversity",
     "PlatoonOptimization_pct": "Platoon Optimization",
     "OpenerUsage_pct":       "Opener Usage",

@@ -244,7 +244,6 @@ def classify_p1(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p2(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "SpinEfficiency_pct":   0.25,
         "TunnelScore_pct":      0.25,
         "SwStr_per_velo_pct":   0.20,  # whiff rate adjusted for velocity
         "K_pct_pct":            0.15,

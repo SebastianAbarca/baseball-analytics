@@ -1359,9 +1359,9 @@ def _classify_pitchers(
                 if val is not None and not (isinstance(val, float) and np.isnan(val)):
                     metrics[col] = float(val)   # keep full _pct name for archetypes
 
-        # Attach spin efficiency / tunneling per pitcher.
+        # Attach tunneling / plate discipline per pitcher.
         # League pools rank against ALL pitchers in the season — required for
-        # the classifier keys (SpinEfficiency_pct / TunnelScore_pct), which
+        # the classifier keys (TunnelScore_pct, SwStr_per_velo_pct, …), which
         # live in league-percentile space. The per-team frames only rank
         # within this team's ~30 arms and are kept as display-level fallback.
         def _attach_pct(df, src_col: str, dest_key: str):
@@ -1374,7 +1374,6 @@ def _classify_pitchers(
             if val is not None and not np.isnan(float(val or np.nan)):
                 metrics[dest_key] = float(val)
 
-        _attach_pct(league_spin,   "spin_efficiency_pct", "SpinEfficiency_pct")
         _attach_pct(league_tunnel, "tunnel_score_pct",    "TunnelScore_pct")
         _attach_pct(league_discipline, "swstr_per_velo_pct",     "SwStr_per_velo_pct")
         _attach_pct(league_discipline, "first_pitch_strike_pct", "FirstPitchStrike_pct")
@@ -1670,10 +1669,6 @@ def _build_philosophy_metrics(
     # ── Park factor ───────────────────────────────────────────────────────
     if park and "pitcher_friendly" in park:
         metrics["ParkPitcherFriendly_pct"] = park["pitcher_friendly"]
-
-    # ── Spin efficiency (B3) ──────────────────────────────────────────────
-    if spin_team and "weighted_spin_efficiency_pct" in spin_team:
-        metrics["SpinEfficiency_pct"] = spin_team["weighted_spin_efficiency_pct"]
 
     # ── Tunneling quality (B3) ────────────────────────────────────────────
     if tunneling_team and "tunnel_score_team_pct" in tunneling_team:
@@ -2453,7 +2448,7 @@ _LEAGUE_DIR = Path(__file__).resolve().parent / "processed"
 _FINGERPRINT_EXTRA_POOLS = tuple((_LEAGUE_DIR, pat) for pat in (
     "tunnel_league_{s}.parquet",
     "pitch_mix_{s}.parquet",
-    "spin_league_{s}.parquet",   # `high spin efficiency`, SpinEfficiency_pct
+    "spin_league_{s}.parquet",   # `high spin efficiency`, team spin percentile
     "plate_discipline_league_{s}.parquet",
     "mechanics_league_{s}.parquet",
     "sequencing_league_{s}.parquet",

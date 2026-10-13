@@ -253,7 +253,7 @@ def load_league_plate_discipline(
 
     Percentiles are ranked against all qualifying pitchers in the season, so
     they live in the same league-percentile space as the other archetype
-    metrics (TunnelScore_pct, SpinEfficiency_pct, …).
+    metrics (TunnelScore_pct, …).
     """
     cache = PROCESSED_DIR / f"plate_discipline_league_{season}.parquet"
     if cache.exists() and not force:
