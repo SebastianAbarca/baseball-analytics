@@ -2501,8 +2501,9 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         horizontal_spacing=0.08,
     )
 
-    # ── Field geometry (Statcast coords: HP≈(126,203), CF≈(126,15)) ──────────
-    HP_X, HP_Y = 126.0, 203.0
+    # ── Field geometry (Statcast coords; same home plate as the zone shares,
+    # pitch_aggregates.SPRAY_HOME_X/Y) ─────────────────────────────────────
+    HP_X, HP_Y = 125.42, 198.27
 
     # Outfield arc (approx fence at 300–350 Statcast units from HP)
     arc_angles = [a for a in range(-45, 46)]
@@ -2608,14 +2609,15 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         hoverinfo="skip", showlegend=False,
     ), row=1, col=1)
 
-    # ── Directional split bars (5 field-location zones) ──────────────────────
-    # Pull/Oppo are handedness-aware; LC Gap, Center, RC Gap are absolute field locations.
+    # ── Directional split bars (5 zones, all relative to the batter) ─────────
+    # pitch_aggregates.spray_zone: pull line, pull gap, center, oppo gap, oppo
+    # line — split at 15° and 30° toward each side of the batter.
     DIRS = [
-        ("Pull",    "pull"),
-        ("RC Gap",  "rc_gap"),
-        ("Center",  "center"),
-        ("LC Gap",  "lc_gap"),
-        ("Oppo",    "oppo"),
+        ("Pull line", "pull_line"),
+        ("Pull gap",  "pull_gap"),
+        ("Center",    "center"),
+        ("Oppo gap",  "oppo_gap"),
+        ("Oppo line", "oppo_line"),
     ]
     dirs      = [label for label, _ in DIRS]
     team_vals = [spray.get(f"{key}_pct", 0) * 100 for _, key in DIRS]

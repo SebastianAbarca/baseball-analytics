@@ -18,6 +18,7 @@ Tests:
   V11 Spin efficiency pipeline — compute and aggregate on synthetic pitches
   V12 Park factors — build_park_profile returns normalized pitcher_friendly
   V13 Metric rank directions — every metric declares one; outcome gates monotonic
+  V14 Batted-ball direction — pull/oppo relative to the batter, boundaries
 """
 
 from __future__ import annotations
@@ -1059,6 +1060,71 @@ def v13_metric_directions() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V14 — Batted-ball direction
+# ---------------------------------------------------------------------------
+
+def v14_spray_direction() -> Result:
+    """
+    Pull and oppo are relative to the batter, and point the right way:
+      1. synthetic balls to left field are pull for a right-handed batter and
+         oppo for a left-handed one; right field the reverse
+      2. boundaries: 15° is center, 15.1° pull gap, 30.1° pull line, and the
+         per-player shares agree with the chart zones on the same balls
+      3. on real pitches (cached June 2023 week) both hands pull their ground
+         balls more than they hit them the other way — the most reliable
+         directional fact in batted-ball data
+    """
+    import pandas as pd
+    from pitch_aggregates import (SPRAY_HOME_X, SPRAY_HOME_Y, compute_batter_spray_stats,
+                                  pull_angle, spray_angle, spray_zone)
+
+    errors = []
+
+    def ball(angle_deg: float, r: float = 150.0) -> tuple[float, float]:
+        t = np.radians(angle_deg)       # + is right field
+        return SPRAY_HOME_X + r * np.sin(t), SPRAY_HOME_Y - r * np.cos(t)
+
+    rows = []
+    for batter, stand, angle in [(1, "R", -35), (2, "L", -35), (3, "R", 35), (4, "L", 35)]:
+        x, y = ball(angle)
+        rows += [dict(batter=batter, stand=stand, hc_x=x, hc_y=y, bb_type="line_drive",
+                      events="single")] * 20
+    stats = compute_batter_spray_stats(pd.DataFrame(rows), min_bip=1).set_index("key_mlbam")
+    want = {1: (1.0, 0.0), 2: (0.0, 1.0), 3: (0.0, 1.0), 4: (1.0, 0.0)}
+    for b, (pull, oppo) in want.items():
+        got = (stats.loc[b, "pull_pct"], stats.loc[b, "oppo_pct"])
+        if got != (pull, oppo):
+            errors.append(f"batter {b}: pull/oppo {got}, want {(pull, oppo)}")
+
+    angles = pd.Series([15.0, 15.1, 30.0, 30.1, -15.0, -15.1, -30.1])
+    zones = spray_zone(pull_angle(angles, pd.Series(["L"] * len(angles)))).tolist()
+    expect = ["center", "pull_gap", "pull_gap", "pull_line", "center", "oppo_gap", "oppo_line"]
+    if zones != expect:
+        errors.append(f"boundary zones {zones}, want {expect}")
+
+    try:
+        from ingest import pull_statcast_range
+        sc = pull_statcast_range("2023-06-01", "2023-06-07", label="test")
+        gb = sc[(sc["bb_type"] == "ground_ball") & sc["hc_x"].notna()]
+        pa = pull_angle(spray_angle(gb["hc_x"], gb["hc_y"]), gb["stand"])
+        for hand in ("R", "L"):
+            p = pa[gb["stand"] == hand]
+            pull, oppo = (p > 15).mean(), (p < -15).mean()
+            if not pull > oppo:
+                errors.append(f"{hand}HB ground balls pulled {pull:.0%} vs oppo {oppo:.0%}")
+        real = (f"; June 2023 grounders pulled R {(pa[gb['stand'] == 'R'] > 15).mean():.0%}"
+                f" / L {(pa[gb['stand'] == 'L'] > 15).mean():.0%}")
+    except Exception as exc:
+        errors.append(f"real-data check failed: {exc}")
+        real = ""
+
+    passed = not errors
+    detail = (f"synthetic L/R pull/oppo and boundaries correct{real}"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1076,6 +1142,7 @@ TESTS = [
     ("V11", "Spin efficiency pipeline",        v11_spin_efficiency),
     ("V12", "Park factors",                    v12_park_factors),
     ("V13", "Metric rank directions",          v13_metric_directions),
+    ("V14", "Batted-ball direction",           v14_spray_direction),
 ]
 
 

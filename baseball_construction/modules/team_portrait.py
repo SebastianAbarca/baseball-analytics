@@ -58,7 +58,9 @@ sys.path.insert(0, str(_HERE))
 # 21 adds the per-player `gate_inputs` block — everything build_*_traits was
 # called with, so tags can be recomputed by scripts/rederive_traits.py without
 # a rebuild. This is the last rebuild a pure gate change should ever require.
-PORTRAIT_SCHEMA_VERSION = 21
+# 22: spray_data zones are all batter-relative (pull_line … oppo_line); the
+# old pull/rc_gap/center/lc_gap/oppo keys had pull and oppo reversed.
+PORTRAIT_SCHEMA_VERSION = 22
 
 from ingest import (
     pull_statcast_range,
@@ -221,7 +223,7 @@ BATTING_COL_MAP: dict[str, str] = {
     "est_woba_minus_woba_diff": "LuckDelta",
     # Spray chart metrics (computed from Statcast hc_x/hc_y)
     "xb_pct":    "XB_pct",       # (2B + 3B) / BIP — gap contact rate
-    "gap_pct":   "GapTend_pct",  # fraction of BIP in ±20–50° gap zones
+    "gap_pct":   "GapTend_pct",  # fraction of BIP 15–30° from centre (the alleys)
     "pull_pct":  "Pull_pct",     # fraction of BIP to pull side
     "oppo_pct":  "Oppo_pct",     # fraction of BIP to opposite field
     "hr_fb":     "HR_FB_pct",    # HR / fly balls — per-player power purity
@@ -558,12 +560,10 @@ def _compute_cross_team_metrics(
         # Gap-zone BIP from Statcast hc_x/hc_y
         team_sc_bip = team_sc[team_sc["hc_x"].notna() & team_sc["hc_y"].notna()].copy()
         if not team_sc_bip.empty:
-            HP_X, HP_Y = 126.0, 203.0
-            angles = np.degrees(np.arctan2(
-                team_sc_bip["hc_x"].astype(float) - HP_X,
-                HP_Y - team_sc_bip["hc_y"].astype(float),
-            ))
-            team_gap_pct = float((angles.abs().between(20, 50)).sum() / len(angles))
+            from pitch_aggregates import LINE_ANGLE_DEG, PULL_ANGLE_DEG, spray_angle
+            angles = spray_angle(team_sc_bip["hc_x"], team_sc_bip["hc_y"])
+            team_gap_pct = float(angles.abs().between(
+                PULL_ANGLE_DEG, LINE_ANGLE_DEG, inclusive="right").sum() / len(angles))
         else:
             team_gap_pct = np.nan
 
@@ -3535,9 +3535,13 @@ def build_team_portrait(
     # ── 15. Spray chart data ──────────────────────────────────────────────
     spray_data: dict = {}
     try:
-        HP_X, HP_Y = 126.0, 203.0
+        from pitch_aggregates import pull_angle, spray_angle, spray_zone
+        # This team's balls in play only: selecting by batter alone gave a
+        # traded hitter's balls for another club to both teams' charts.
+        bat_team = np.where(statcast["inning_topbot"] == "Top",
+                            statcast["away_team"], statcast["home_team"])
         team_bip = statcast[
-            statcast["batter"].isin(hitter_ids) &
+            (bat_team == team) & statcast["batter"].isin(hitter_ids) &
             statcast["hc_x"].notna() & statcast["hc_y"].notna()
         ].copy()
 
@@ -3549,45 +3553,23 @@ def build_team_portrait(
             return "out"
 
         team_bip["_bucket"] = team_bip["events"].fillna("out").apply(_event_bucket)
-        team_bip["_angle"]  = np.degrees(np.arctan2(
-            team_bip["hc_x"].astype(float) - HP_X,
-            HP_Y - team_bip["hc_y"].astype(float),
-        ))
         n_bip = len(team_bip)
-        rh = (team_bip.get("stand", pd.Series("R", index=team_bip.index)) == "R")
-        lh = ~rh
-        a  = team_bip["_angle"]
 
-        # 5 field-location zones — Pull/Oppo flip by handedness,
-        # LC Gap / Center / RC Gap are absolute field locations.
-        # Boundary: 45° separates extreme pull/oppo from the gap zones.
-        pull_mask   = (rh & (a >  45)) | (lh & (a < -45))   # pull side (RF for RHH, LF for LHH)
-        rc_gap_mask = a.between(20, 45)                        # right-center gap (absolute)
-        center_mask = a.abs() < 20                             # up the middle
-        lc_gap_mask = a.between(-45, -20)                      # left-center gap (absolute)
-        oppo_mask   = (rh & (a < -45)) | (lh & (a >  45))   # oppo side (LF for RHH, RF for LHH)
+        # Five zones, all handedness-aware (pitch_aggregates.spray_zone):
+        # pull line, pull gap, center, oppo gap, oppo line. The chart used to
+        # mix pull/oppo with ABSOLUTE left/right gaps, which cannot be summed
+        # across a lineup of both hands, and had pull and oppo reversed.
+        SPRAY_ZONES = ("pull_line", "pull_gap", "center", "oppo_gap", "oppo_line")
 
-        def _zone_pct(mask):
-            return float(mask.sum() / n_bip) if n_bip else 0.0
+        def _zone_shares(frame: pd.DataFrame) -> dict[str, float]:
+            z = spray_zone(pull_angle(spray_angle(frame["hc_x"], frame["hc_y"]),
+                                      frame["stand"]))
+            n = int(z.notna().sum())
+            return {k: (float((z == k).sum() / n) if n else 0.0) for k in SPRAY_ZONES}
 
+        team_zones = _zone_shares(team_bip)
         # League-wide directional averages (all batters this season)
-        lg_bip = statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()].copy()
-        lg_n   = len(lg_bip)
-        if lg_n > 0:
-            lg_bip["_angle"] = np.degrees(np.arctan2(
-                lg_bip["hc_x"].astype(float) - HP_X,
-                HP_Y - lg_bip["hc_y"].astype(float),
-            ))
-            lg_rh = (lg_bip.get("stand", pd.Series("R", index=lg_bip.index)) == "R")
-            lg_lh = ~lg_rh
-            la    = lg_bip["_angle"]
-            lg_pull   = float(((lg_rh & (la >  45)) | (lg_lh & (la < -45))).sum() / lg_n)
-            lg_rc_gap = float(la.between(20, 45).sum() / lg_n)
-            lg_center = float((la.abs() < 20).sum() / lg_n)
-            lg_lc_gap = float(la.between(-45, -20).sum() / lg_n)
-            lg_oppo   = float(((lg_rh & (la < -45)) | (lg_lh & (la >  45))).sum() / lg_n)
-        else:
-            lg_pull = lg_rc_gap = lg_center = lg_lc_gap = lg_oppo = 0.20
+        lg_zones = _zone_shares(statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()])
 
         hr_n     = int((team_bip["_bucket"] == "hr").sum())
         double_n = int((team_bip["_bucket"] == "double").sum())
@@ -3617,16 +3599,8 @@ def build_team_portrait(
             log.warning("Spray sidecar write failed: %s", _sp_exc)
 
         spray_data = {
-            "pull_pct":    _zone_pct(pull_mask),
-            "rc_gap_pct":  _zone_pct(rc_gap_mask),
-            "center_pct":  _zone_pct(center_mask),
-            "lc_gap_pct":  _zone_pct(lc_gap_mask),
-            "oppo_pct":    _zone_pct(oppo_mask),
-            "lg_pull_pct":    lg_pull,
-            "lg_rc_gap_pct":  lg_rc_gap,
-            "lg_center_pct":  lg_center,
-            "lg_lc_gap_pct":  lg_lc_gap,
-            "lg_oppo_pct":    lg_oppo,
+            **{f"{k}_pct": v for k, v in team_zones.items()},
+            **{f"lg_{k}_pct": v for k, v in lg_zones.items()},
             "hr_count":     hr_n,
             "xbh_count":    xbh_n,
             "double_count": double_n,

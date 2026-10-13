@@ -413,6 +413,61 @@ def compute_platoon_optimization(statcast: pd.DataFrame) -> pd.Series:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Batted-ball direction
+# ---------------------------------------------------------------------------
+# Statcast hit coordinates put home plate at (125.42, 198.27); hc_x grows
+# toward RIGHT field and hc_y grows toward home. So a positive field angle is
+# right field — measured on 2025: balls the right fielder (hit_location 9)
+# fielded average +29°, the third baseman's (5) -33°. A right-handed batter
+# pulls to LEFT field. Both hands used to be the other way round, so
+# `pull-heavy` was tagging opposite-field hitters.
+#
+# The angle is used unscaled: 99% of home runs land within ±47°, so the foul
+# poles sit at ±45° as they should. (The 0.75 factor some write-ups apply
+# would put them at ±35°.)
+SPRAY_HOME_X, SPRAY_HOME_Y = 125.42, 198.27
+
+# Pull / center / oppo are the field in thirds, Savant's definition: beyond
+# 15° to a side. The chart splits each outer third again at 30° into the gap
+# (alley) and the line. The old boundary was 50°, which is the foul line —
+# 2-3% of balls in play.
+PULL_ANGLE_DEG = 15.0
+LINE_ANGLE_DEG = 30.0
+
+
+def spray_angle(hc_x, hc_y) -> pd.Series:
+    """Field angle in degrees from the centre line: + right field, - left field."""
+    return pd.Series(np.degrees(np.arctan2(
+        pd.to_numeric(hc_x, errors="coerce").astype(float) - SPRAY_HOME_X,
+        SPRAY_HOME_Y - pd.to_numeric(hc_y, errors="coerce").astype(float),
+    )), index=getattr(hc_x, "index", None))
+
+
+def pull_angle(angle: pd.Series, stand: pd.Series) -> pd.Series:
+    """
+    The field angle turned toward the batter's pull side: + pull, - oppo.
+    Left-handed batters pull to right field (+), right-handed to left (-), so
+    only the right-handed angle flips. A switch hitter's `stand` is the side
+    batted from on that pitch, which is the side that decides it.
+    """
+    return angle.where(stand.astype(str) == "L", -angle)
+
+
+def spray_zone(pull_ang: pd.Series) -> pd.Series:
+    """
+    Five handedness-aware zones: pull line, pull gap, center, oppo gap, oppo
+    line. Centre is closed (|a| <= 15° is center), the same boundaries as
+    compute_batter_spray_stats, so the chart and the tags agree on every ball.
+    """
+    a = pull_ang
+    return pd.Series(np.select(
+        [a > LINE_ANGLE_DEG, a > PULL_ANGLE_DEG, a >= -PULL_ANGLE_DEG,
+         a >= -LINE_ANGLE_DEG],
+        ["pull_line", "pull_gap", "center", "oppo_gap"],
+        default="oppo_line"), index=a.index).where(a.notna())
+
+
 def compute_batter_spray_stats(
     statcast: pd.DataFrame,
     min_bip: int = 20,
@@ -420,22 +475,22 @@ def compute_batter_spray_stats(
     """
     Per-batter spray chart statistics from Statcast hit coordinates.
 
-    Uses hc_x / hc_y to compute spray angle, then classifies each batted
-    ball as pull, gap, center, or oppo.  Gaps (LC and RC) are the ±20–50°
-    band from the field center line.
+    Classifies each ball in play by its angle toward the batter's pull side
+    (pull_angle): pull beyond +15°, oppo beyond -15°, the gaps 15-30° either
+    side of centre. See SPRAY_HOME_X for the coordinate system.
 
     Args:
         statcast: full-season Statcast DataFrame (must have hc_x, hc_y,
-                  bb_type, events, batter columns)
+                  bb_type, events, batter, stand columns)
         min_bip:  minimum balls-in-play required to include a batter
 
     Returns DataFrame with columns:
         key_mlbam  — MLBAM batter ID
         bip        — total balls in play
         xb_pct     — (2B + 3B) / bip   (extra-base contact rate)
-        gap_pct    — BIP with |spray_angle| in [20, 50]° / bip
-        pull_pct   — BIP with |spray_angle| > 50° to pull side / bip
-        oppo_pct   — BIP with |spray_angle| > 50° to oppo side / bip
+        gap_pct    — BIP 15–30° from centre, either side (the alleys) / bip
+        pull_pct   — BIP more than 15° to the pull side / bip
+        oppo_pct   — BIP more than 15° to the opposite field / bip
         hr_per_bip — HR / bip
         hr_fb      — HR / fly balls (pure power purity signal; None if no fly balls)
     """
@@ -452,31 +507,10 @@ def compute_batter_spray_stats(
             "pull_pct", "oppo_pct", "hr_per_bip", "hr_fb",
         ])
 
-    # ── Spray angle ──────────────────────────────────────────────────────────
-    # Home plate anchor in Statcast SVG coordinate space.
-    # Positive angle → right-field side; negative → left-field side.
-    HP_X, HP_Y = 126.0, 203.0
-    sc["_angle"] = np.degrees(np.arctan2(
-        sc["hc_x"].astype(float) - HP_X,
-        HP_Y - sc["hc_y"].astype(float),   # y-axis flipped
-    ))
-
-    # Pull side for RHH is RF (positive angle); for LHH it's LF (negative).
-    # Gap zones are field-location-based (±20–50°) regardless of handedness —
-    # both LC and RC gaps sit in this band.
-    sc["_abs_angle"]  = sc["_angle"].abs()
-    sc["_in_gap"]     = sc["_abs_angle"].between(20, 50)
-    sc["_is_pull"]    = sc["_abs_angle"] > 50   # extreme pull or oppo
-
-    # Label pull vs oppo by handedness for the pull_pct / oppo_pct split
-    rh_mask = (sc.get("stand", "R") == "R") | (sc.get("p_throws", "R") == "R")
-    # For RHH: positive angle = pull (RF); for LHH: negative angle = pull (LF)
-    sc["_is_pull_side"] = np.where(
-        sc.get("stand", pd.Series("R", index=sc.index)) == "R",
-        sc["_angle"] > 50,    # RHH pull = RF (positive)
-        sc["_angle"] < -50,   # LHH pull = LF (negative)
-    )
-    sc["_is_oppo_side"] = sc["_is_pull"] & ~sc["_is_pull_side"]
+    pa = pull_angle(spray_angle(sc["hc_x"], sc["hc_y"]), sc["stand"])
+    sc["_in_gap"]       = pa.abs().between(PULL_ANGLE_DEG, LINE_ANGLE_DEG, inclusive="right")
+    sc["_is_pull_side"] = pa > PULL_ANGLE_DEG
+    sc["_is_oppo_side"] = pa < -PULL_ANGLE_DEG
 
     # Event flags
     sc["_is_double"] = sc["events"] == "double"
