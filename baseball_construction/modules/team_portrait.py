@@ -263,6 +263,46 @@ PITCHING_COL_MAP: dict[str, str] = {
     "arsenal_diversity":"ArsenalDiversity",
 }
 
+# Rank direction of every metric the two maps above produce: True means the
+# percentile is inverted (100 - rank), so a LOW raw value earns a HIGH pct.
+# Declared for every target, not defaulted, because a default is how hard-hit
+# and barrel rate allowed came to be ranked backwards: they were left out on
+# the belief that Savant had already inverted them, then ingest replaced the
+# Savant percentiles with raw rates allowed, and `contact suppressor` went to
+# the pitchers allowing the MOST hard contact (Graceffo 2025: 53.6% hard-hit,
+# ranked 98.6). validation.validate_metric_directions fails on any target
+# missing here.
+#
+# Hitters rank raw except K%: OSwing_pct_pct is "chases more", the gates read
+# it that way. Pitchers rank so that a high pct is good for the pitcher on
+# every outcome (K, BB, contact quality, FIP); shape and usage metrics (GB%,
+# zone%, velocity, spin) rank raw.
+BATTING_RANK_INVERT: dict[str, bool] = {
+    "K_pct": True,          # higher pct = fewer strikeouts
+    "BB_pct": False, "HardHit_pct": False, "sprint_speed": False,
+    "SwStr_pct": False, "OSwing_pct": False, "xwOBA": False,
+    "Barrel_pct": False, "xBA": False, "xSLG": False, "ISO": False,
+    "OBP": False, "AVG": False, "PA": False, "EV_avg": False, "SB": False,
+    "CS": False, "SLG": False, "BatGB_pct": False, "FPS_pct": False,
+    "PitchesPerPA": False, "WAR_bat": False, "ZSwing_pct": False,
+    "Contact_pct": False, "LuckDelta": False, "XB_pct": False,
+    "GapTend_pct": False, "Pull_pct": False, "Oppo_pct": False,
+    "HR_FB_pct": False, "OBP_SLG_gap": False,
+}
+
+PITCHING_RANK_INVERT: dict[str, bool] = {
+    "K_pct_pitch": False,
+    "BB_pct_pitch": True,      # higher pct = fewer walks
+    "HardHit_allowed": True,   # higher pct = less hard contact allowed
+    "Barrel_allowed": True,    # higher pct = fewer barrels allowed
+    "xwOBA_allowed": True,
+    "FIP": True,
+    "BF": False, "SwStr_pct_pitch": False, "avg_velo": False, "GS": False,
+    "GB_pct_pitch": False, "Zone_pct": False, "CSW_pct": False,
+    "PitchesPerBF": False, "WAR_pitch": False, "AvgSpinRate": False,
+    "ArsenalDiversity": False,
+}
+
 # Curated percentile keys shown on pitcher cards (starters AND relievers —
 # the two carry an identical schema)
 _PITCHER_DISPLAY_KEYS = [
@@ -750,10 +790,6 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
             - pd.to_numeric(team["SLG"], errors="coerce")
         )
 
-    metric_invert: dict[str, bool] = {
-        "K_pct":  True,   # lower K = better contact → invert
-    }
-
     # Metrics to rank: all BATTING_COL_MAP targets + derived OBP_SLG_gap
     metrics_to_rank = list(dict.fromkeys(BATTING_COL_MAP.values()))
     if "OBP_SLG_gap" in full.columns:
@@ -764,9 +800,9 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
             continue
         if metric not in team.columns:
             continue
-        invert = metric_invert.get(metric, False)
         col_name = f"{metric}_pct"
-        team[col_name] = _pool_rank(full[metric], team[metric], invert=invert)
+        team[col_name] = _pool_rank(full[metric], team[metric],
+                                    invert=BATTING_RANK_INVERT[metric])
 
     # K_pct_raw_pct: non-inverted K% percentile for TTO classifier
     # (K_pct_pct is inverted; TTO classifier needs raw strikeout rank)
@@ -802,22 +838,12 @@ def _normalize_pitching(pitching_pool: pd.DataFrame, team_pit: pd.DataFrame) -> 
     full = pitching_pool.rename(columns=PITCHING_COL_MAP)
     team = team_pit.rename(columns=PITCHING_COL_MAP).copy()
 
-    metric_invert: dict[str, bool] = {
-        "BB_pct_pitch":  True,
-        "xwOBA_allowed": True,
-        "FIP":           True,   # lower FIP = better
-        # HardHit_allowed and Barrel_allowed are NOT inverted here.
-        # Statcast already expresses them as "higher = better pitcher"
-        # (they invert hard-hit/barrel rate before ranking), so pool_rank
-        # with invert=False naturally gives higher pct = better suppressor.
-    }
-
     for metric in dict.fromkeys(PITCHING_COL_MAP.values()):
         if metric not in full.columns or metric not in team.columns:
             continue
-        invert = metric_invert.get(metric, False)
         col_name = f"{metric}_pct"
-        team[col_name] = _pool_rank(full[metric], team[metric], invert=invert)
+        team[col_name] = _pool_rank(full[metric], team[metric],
+                                    invert=PITCHING_RANK_INVERT[metric])
 
     return team
 
@@ -2404,8 +2430,10 @@ def _gate_digest() -> str:
             val = getattr(mod, name)
             if isinstance(val, (int, float, str, bool, dict, list, tuple, set, frozenset)):
                 items.append(f"{mod.__name__}.{name}={_stable_repr(val)}")
-    # Vocabulary axes defined in this module.
-    for name in ("TAG_POPULATION", "TAG_KIND", "TAG_KINDS", "TAG_EXCLUSIVE_GROUPS"):
+    # Vocabulary axes and rank directions defined in this module. A direction
+    # flip changes every tag cut from that metric's percentile.
+    for name in ("TAG_POPULATION", "TAG_KIND", "TAG_KINDS", "TAG_EXCLUSIVE_GROUPS",
+                 "BATTING_RANK_INVERT", "PITCHING_RANK_INVERT"):
         items.append(f"team_portrait.{name}={_stable_repr(globals()[name])}")
     return "|".join(items)
 

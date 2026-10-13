@@ -1,5 +1,5 @@
 """
-validation.py — 12 validation tests against known outputs.
+validation.py — validation tests against known outputs.
 
 Each test is self-contained and returns (passed: bool, detail: str).
 run_all() executes every test and prints a summary.
@@ -17,6 +17,7 @@ Tests:
   V10 Service time estimation — CBA thresholds and IL deduction logic
   V11 Spin efficiency pipeline — compute and aggregate on synthetic pitches
   V12 Park factors — build_park_profile returns normalized pitcher_friendly
+  V13 Metric rank directions — every metric declares one; outcome gates monotonic
 """
 
 from __future__ import annotations
@@ -989,6 +990,75 @@ def v12_park_factors() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V13 — Metric rank direction
+# ---------------------------------------------------------------------------
+
+def v13_metric_directions() -> Result:
+    """
+    Every ranked metric declares its direction, and the outcome gates read
+    those directions the right way round:
+      1. every BATTING_COL_MAP / PITCHING_COL_MAP target is in its
+         *_RANK_INVERT table (no metric falls back to a default)
+      2. allowing less hard contact, fewer barrels or fewer walks never lowers
+         the pitcher's percentile (monotonic in the good direction)
+      3. `contact suppressor` goes to the low-hard-hit end of a pool and
+         `walk prone` to the high-walk end — never the reverse
+    """
+    import pandas as pd
+    import team_portrait as tp
+    from pitcher_traits import outcome_traits
+
+    errors = []
+    for cmap, table, label in ((tp.BATTING_COL_MAP, tp.BATTING_RANK_INVERT, "batting"),
+                               (tp.PITCHING_COL_MAP, tp.PITCHING_RANK_INVERT, "pitching")):
+        undeclared = sorted(set(cmap.values()) - set(table))
+        if undeclared:
+            errors.append(f"{label} metrics with no declared direction: {undeclared}")
+
+    # A pool of 101 pitchers whose rates allowed rise together, raw rates as
+    # ingest stores them (hard_hit_pct 0.20-0.60, not Savant percentiles).
+    n = 101
+    hh = np.linspace(0.20, 0.60, n)
+    pool = pd.DataFrame({
+        "key_mlbam":    np.arange(n),
+        "hard_hit_pct": hh,
+        "barrel_pct":   hh / 5,
+        "bb_rate":      np.linspace(0.03, 0.15, n),
+    })
+    ranked = tp._normalize_pitching(pool, pool.copy())
+    for col in ("HardHit_allowed_pct", "Barrel_allowed_pct", "BB_pct_pitch_pct"):
+        if col not in ranked.columns:
+            errors.append(f"{col} not produced")
+            continue
+        # raw rate allowed rises down the frame, so the pct must fall
+        if not ranked[col].is_monotonic_decreasing:
+            errors.append(f"{col} rises with the rate allowed")
+
+    def tags_of(i):
+        r = ranked.iloc[i]
+        m = {"HardHit_allowed_pct": r.get("HardHit_allowed_pct"),
+             "Barrel_allowed_pct": r.get("Barrel_allowed_pct"),
+             "BB_pct_pct": r.get("BB_pct_pitch_pct")}
+        return {t["tag"] for t in outcome_traits(m)}
+
+    best, worst = tags_of(0), tags_of(n - 1)
+    if "contact suppressor" not in best:
+        errors.append("lowest hard-hit rate allowed is not a contact suppressor")
+    if "contact suppressor" in worst:
+        errors.append("highest hard-hit rate allowed is a contact suppressor")
+    if "walk prone" not in worst or "walk prone" in best:
+        errors.append("walk prone is not on the high-walk end")
+
+    passed = not errors
+    detail = (f"{len(tp.BATTING_RANK_INVERT)} batting + {len(tp.PITCHING_RANK_INVERT)} "
+              f"pitching directions declared; hard-hit {hh[0]:.0%} → "
+              f"{ranked['HardHit_allowed_pct'].iloc[0]:.0f}th pct, "
+              f"{hh[-1]:.0%} → {ranked['HardHit_allowed_pct'].iloc[-1]:.0f}th"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1005,12 +1075,13 @@ TESTS = [
     ("V10", "Service time estimation",         v10_service_time),
     ("V11", "Spin efficiency pipeline",        v11_spin_efficiency),
     ("V12", "Park factors",                    v12_park_factors),
+    ("V13", "Metric rank directions",          v13_metric_directions),
 ]
 
 
 def run_all(verbose: bool = True) -> bool:
     """
-    Run all 12 validation tests and print a summary.
+    Run every validation test and print a summary.
     Returns True if every test passes.
     """
     results = []
