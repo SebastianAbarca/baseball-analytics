@@ -22,32 +22,32 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `deep extension` | P | mechanics | 498 | mechanics | — | — |
-| `left-handed hitter` | H | handedness | 2,999 | splits | — | right-handed hitter, switch hitter |
-| `left-handed pitcher` | P | handedness | 2,157 | splits_qual | — | right-handed pitcher |
-| `over-the-top` | P | mechanics | 296 | mechanics | — | — |
-| `right-handed hitter` | H | handedness | 5,500 | splits | — | left-handed hitter, switch hitter |
-| `right-handed pitcher` | P | handedness | 5,685 | splits_qual | — | left-handed pitcher |
-| `short extension` | P | mechanics | 508 | mechanics | — | — |
-| `sidearm` | P | mechanics | 512 | mechanics | — | — |
-| `submarine` | P | mechanics | 138 | mechanics | — | — |
-| `switch hitter` | H | handedness | 820 | splits | — | left-handed hitter, right-handed hitter |
-| `wide release` | P | mechanics | 527 | mechanics | — | — |
+| `deep extension` | P | mechanics | 498 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `left-handed hitter` | H | handedness | 2,999 | splits | — (an attribute of the player, not a rate) | right-handed hitter, switch hitter |
+| `left-handed pitcher` | P | handedness | 2,157 | splits_qual | — (an attribute of the player, not a rate) | right-handed pitcher |
+| `over-the-top` | P | mechanics | 296 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `right-handed hitter` | H | handedness | 5,500 | splits | — (an attribute of the player, not a rate) | left-handed hitter, switch hitter |
+| `right-handed pitcher` | P | handedness | 5,685 | splits_qual | — (an attribute of the player, not a rate) | left-handed pitcher |
+| `short extension` | P | mechanics | 508 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `sidearm` | P | mechanics | 512 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `submarine` | P | mechanics | 138 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `switch hitter` | H | handedness | 820 | splits | — (an attribute of the player, not a rate) | left-handed hitter, right-handed hitter |
+| `wide release` | P | mechanics | 527 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 
 ## tool  ·  10 tags, 9,531 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `cannon arm` | H | fielding | 264 | fielders_arm | — | — |
-| `elite speed` | H | athleticism | 559 | speed | — | fast, station-to-station |
-| `elite velo` | P | arsenal | 955 | all | — | plus velo, soft tosser |
-| `fast` | H | athleticism | 1,317 | speed | — | elite speed, station-to-station |
+| `cannon arm` | H | fielding | 264 | fielders_arm | — (a Savant leaderboard that publishes qualified players only) | — |
+| `elite speed` | H | athleticism | 559 | speed | — (a Savant leaderboard that publishes qualified players only) | fast, station-to-station |
+| `elite velo` | P | arsenal | 955 | all | — (a physical measurement, stable within the 20-BF roster minimum) | plus velo, soft tosser |
+| `fast` | H | athleticism | 1,317 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, station-to-station |
 | `high spin efficiency` | P | deception | 1,040 | all | 100 (spin_efficiency) | — |
-| `plus velo` | P | arsenal | 1,426 | all | — | elite velo, soft tosser |
-| `quick pop` | H | catcher | 124 | catchers | — | — |
-| `ride four-seam` | P | arsenal | 2,240 | all | — | — |
-| `soft tosser` | P | arsenal | 970 | all | — | elite velo, plus velo |
-| `station-to-station` | H | athleticism | 636 | speed | — | elite speed, fast |
+| `plus velo` | P | arsenal | 1,426 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, soft tosser |
+| `quick pop` | H | catcher | 124 | catchers | — (a Savant leaderboard that publishes qualified players only) | — |
+| `ride four-seam` | P | arsenal | 2,240 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
+| `soft tosser` | P | arsenal | 970 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, plus velo |
+| `station-to-station` | H | athleticism | 636 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, fast |
 
 ## behavior  ·  32 tags, 21,155 firings
 
@@ -56,84 +56,84 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `aggressive` | H | approach | 1,174 | chase | 75 (FPS_pct) | — |
 | `air-ball bat` | H | batted-ball | 513 | all | 100 (BatGB_pct) | ground-ball bat |
 | `changeup out pitch` | P | arsenal | 502 | all | — | — |
-| `count-shifter` | P | sequencing | 721 | all | — | — |
+| `count-shifter` | P | sequencing | 721 | all | — (the sequencing pool requires 300 pitches) | — |
 | `curveball out pitch` | P | arsenal | 320 | all | — | — |
-| `cutter-primary` | P | arsenal | 476 | all | — | — |
-| `deep arsenal` | P | arsenal | 1,356 | all | — | two-pitch |
-| `extra base taker` | H | running-game | 736 | xbt | — | — |
-| `first-pitch attacker` | P | sequencing | 824 | all | — | — |
+| `cutter-primary` | P | arsenal | 476 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
+| `deep arsenal` | P | arsenal | 1,356 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | two-pitch |
+| `extra base taker` | H | running-game | 736 | xbt | — (its gate carries a purpose-built floor: 10 advancement chances) | — |
+| `first-pitch attacker` | P | sequencing | 824 | all | 75 (FPS_pct) | — |
 | `forkball out pitch` | P | arsenal | 7 | all | — | — |
 | `free swinger` | H | approach | 948 | chase | 50 (OSwing_pct) | patient |
 | `ground-ball bat` | H | batted-ball | 319 | all | 100 (BatGB_pct) | air-ball bat |
-| `high steal attempts` | H | running-game | 793 | steal_opps | — | low steal attempts |
+| `high steal attempts` | H | running-game | 793 | steal_opps | — (its gate carries a purpose-built floor: ranked among runners with 2+ attempts) | low steal attempts |
 | `knuckle-curve out pitch` | P | arsenal | 100 | all | — | — |
-| `knuckleballer` | P | arsenal | 9 | all | — | — |
-| `low steal attempts` | H | running-game | 433 | steal_opps | — | high steal attempts |
+| `knuckleballer` | P | arsenal | 9 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
+| `low steal attempts` | H | running-game | 433 | steal_opps | — (its gate carries a purpose-built floor: ranked among runners with 2+ attempts) | high steal attempts |
 | `oppo bat` | H | batted-ball | 687 | all | 100 (BatGB_pct) | pull-heavy |
 | `patient` | H | approach | 945 | chase | 50 (OSwing_pct) | free swinger |
-| `patterned` | P | sequencing | 739 | all | — | — |
+| `patterned` | P | sequencing | 739 | all | — (the sequencing pool requires 300 pitches) | — |
 | `pull-heavy` | H | batted-ball | 587 | all | 100 (BatGB_pct) | oppo bat |
-| `quick pitcher` | P | sequencing | 389 | tempo | — | slow pitcher |
-| `sinker-baller` | P | arsenal | 2,262 | all | — | — |
+| `quick pitcher` | P | sequencing | 389 | tempo | — (the tempo pool requires 300 bases-empty pitches) | slow pitcher |
+| `sinker-baller` | P | arsenal | 2,262 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `slider out pitch` | P | arsenal | 742 | all | — | — |
-| `slow pitcher` | P | sequencing | 421 | tempo | — | quick pitcher |
+| `slow pitcher` | P | sequencing | 421 | tempo | — (the tempo pool requires 300 bases-empty pitches) | quick pitcher |
 | `slurve out pitch` | P | arsenal | 2 | all | — | — |
 | `splitter out pitch` | P | arsenal | 93 | all | — | — |
-| `steady mix` | P | sequencing | 713 | all | — | — |
+| `steady mix` | P | sequencing | 713 | all | — (the sequencing pool requires 300 pitches) | — |
 | `sweeper out pitch` | P | arsenal | 149 | all | — | — |
 | `tunneler` | P | deception | 2,334 | all | 75 (tunnel_score) | — |
-| `two-pitch` | P | arsenal | 213 | starters | — | deep arsenal |
-| `unpredictable` | P | sequencing | 718 | all | — | — |
+| `two-pitch` | P | arsenal | 213 | starters | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | deep arsenal |
+| `unpredictable` | P | sequencing | 718 | all | — (the sequencing pool requires 300 pitches) | — |
 | `zone hunter` | H | approach | 930 | all | 50 (OSwing_pct) | — |
 
 ## result  ·  29 tags, 23,069 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `bad blocker` | H | catcher | 89 | catchers | — | good blocker |
+| `bad blocker` | H | catcher | 89 | catchers | — (a Savant leaderboard that publishes qualified players only) | good blocker |
 | `bat-misser` | P | outcome | 1,559 | all | 75 (K_pct_pitch) | pitch-to-contact |
 | `contact suppressor` | P | outcome | 1,075 | all | 100 (HardHit_allowed) | — |
-| `controls runners` | P | running-game | 394 | runner_control | — | — |
-| `defensive liability` | H | fielding | 280 | fielders_oaa | — | elite defender, plus defender |
+| `controls runners` | P | running-game | 394 | runner_control | — (its gate carries a purpose-built floor: 100 runner opportunities) | — |
+| `defensive liability` | H | fielding | 280 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | elite defender, plus defender |
 | `elite command` | P | outcome | 675 | all | 75 (BB_pct_pitch) | plus command, walk prone |
-| `elite defender` | H | fielding | 136 | fielders_oaa | — | defensive liability, plus defender |
-| `elite framer` | H | catcher | 122 | catchers | — | poor framer |
-| `fly-ball prone` | P | outcome | 946 | all | — | — |
+| `elite defender` | H | fielding | 136 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, plus defender |
+| `elite framer` | H | catcher | 122 | catchers | — (framing requires 500 taken pitches near the edge) | poor framer |
+| `fly-ball prone` | P | outcome | 946 | all | 100 (GB_pct_pitch) | — |
 | `gap hitter` | H | bat | 552 | spray | 150 (ISO) | — |
-| `good blocker` | H | catcher | 101 | catchers | — | bad blocker |
+| `good blocker` | H | catcher | 101 | catchers | — (a Savant leaderboard that publishes qualified players only) | bad blocker |
 | `ground-baller` | P | outcome | 1,649 | all | 100 (GB_pct_pitch) | — |
-| `high steal rate` | H | running-game | 655 | steal_attempts | — | low steal rate |
+| `high steal rate` | H | running-game | 655 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | low steal rate |
 | `high-K` | H | bat-to-ball | 716 | all | 30 (K_pct) | rarely strikes out |
-| `invisible ball` | P | deception | 797 | all | — | — |
-| `low steal rate` | H | running-game | 173 | steal_attempts | — | high steal rate |
+| `invisible ball` | P | deception | 797 | all | 75 (SwStr_pct) | — |
+| `low steal rate` | H | running-game | 173 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | high steal rate |
 | `pitch-to-contact` | P | outcome | 1,205 | all | 75 (K_pct_pitch) | bat-misser |
-| `platoon liability` | H | platoon | 1,074 | splits_qual | — | — |
-| `platoon-vulnerable` | P | platoon | 1,716 | splits_qual | — | — |
+| `platoon liability` | H | platoon | 1,074 | splits_qual | — (its gate carries a purpose-built floor: 50 PA on each side) | — |
+| `platoon-vulnerable` | P | platoon | 1,716 | splits_qual | — (its gate carries a purpose-built floor: 50 BF on each side) | — |
 | `plus command` | P | outcome | 1,170 | all | 75 (BB_pct_pitch) | elite command, walk prone |
-| `plus defender` | H | fielding | 238 | fielders_oaa | — | defensive liability, elite defender |
+| `plus defender` | H | fielding | 238 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, elite defender |
 | `plus power` | H | bat | 1,469 | all | 150 (ISO) | power bat, weak contact |
-| `poor framer` | H | catcher | 114 | catchers | — | elite framer |
+| `poor framer` | H | catcher | 114 | catchers | — (framing requires 500 taken pitches near the edge) | elite framer |
 | `power bat` | H | bat | 946 | all | 150 (ISO) | plus power, weak contact |
-| `rarely strikes out` | H | bat-to-ball | 297 | pa200 | — | high-K |
-| `reverse split` | HP | platoon | 1,482 | splits_qual | — | — |
+| `rarely strikes out` | H | bat-to-ball | 297 | pa200 | — (its gate carries a purpose-built floor: 200 PA) | high-K |
+| `reverse split` | HP | platoon | 1,482 | splits_qual | — (its gate carries a purpose-built floor: 50 PA/BF on each side) | — |
 | `walk machine` | H | approach | 1,344 | all | 60 (BB_pct) | — |
-| `walk prone` | P | outcome | 1,588 | all | — | elite command, plus command |
+| `walk prone` | P | outcome | 1,588 | all | 75 (BB_pct_pitch) | elite command, plus command |
 | `weak contact` | H | bat | 507 | all | 150 (Barrel_pct) | plus power, power bat |
 
 ## deployment  ·  10 tags, 7,972 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `everyday player` | H | role | 1,362 | all | — | — |
-| `heavy usage` | P | role | 1,280 | relievers | — | — |
-| `high-leverage arm` | P | role | 686 | relievers | — | — |
-| `mop-up duty` | P | role | 740 | relievers | — | — |
-| `multi-inning reliever` | P | role | 294 | relievers | — | — |
-| `platoon specialist` | P | platoon | 1,191 | splits_qual | — | — |
-| `short-outing starter` | P | role | 333 | starters | — | — |
-| `super-utility` | H | fielding | 605 | positions | — | — |
-| `swingman` | P | role | 1,008 | all | — | — |
-| `workhorse` | P | role | 473 | starters | — | — |
+| `everyday player` | H | role | 1,362 | all | — (how the club used the player; a count or a usage share) | — |
+| `heavy usage` | P | role | 1,280 | relievers | — (how the club used the player; a count or a usage share) | — |
+| `high-leverage arm` | P | role | 686 | relievers | — (how the club used the player; a count or a usage share) | — |
+| `mop-up duty` | P | role | 740 | relievers | — (how the club used the player; a count or a usage share) | — |
+| `multi-inning reliever` | P | role | 294 | relievers | — (how the club used the player; a count or a usage share) | — |
+| `platoon specialist` | P | platoon | 1,191 | splits_qual | — (how the club used the player; a count or a usage share) | — |
+| `short-outing starter` | P | role | 333 | starters | — (how the club used the player; a count or a usage share) | — |
+| `super-utility` | H | fielding | 605 | positions | — (how the club used the player; a count or a usage share) | — |
+| `swingman` | P | role | 1,008 | all | — (how the club used the player; a count or a usage share) | — |
+| `workhorse` | P | role | 473 | starters | — (how the club used the player; a count or a usage share) | — |
 
 ## noise  ·  2 tags, 1,047 firings
 
@@ -146,5 +146,15 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 
 - **fires** — occurrences across every stored portrait. A tag firing 0 times, or on nearly everyone, is usually a broken gate rather than a fact about baseball.
 - **population** — the eligible denominator. Team density divides by this, not by the whole unit, so a catcher tag is not diluted by the eight players who never crouch.
-- **reliability floor** — plate appearances or batters faced needed before the tag may fire, from the metric's stabilization point × 0.5. `—` means the tag is gated some other way (an attribute, a count, or its own purpose-built floor).
+- **reliability floor** — plate appearances or batters faced needed before the tag may fire, from the metric's stabilization point × 0.5. `—` means the tag is not gated on PA/BF, and the note says what covers it instead (`reliability.UNGATED_TAGS`).
 - **exclusive with** — tags carving up the same axis. Only one member can appear in a fingerprint row, and a presence beats an absence.
+
+## Prospective tags
+
+Not in the vocabulary: nothing emits these, and no portrait carries them. Candidates to review, kept in `PROSPECTIVE_TAGS` in `scripts/tag_reference.py`. Shipping one means adding it to `TAG_KIND`, its gate to `reliability.TAG_EVIDENCE`, and deleting it here.
+
+| tag | side | claim | evidence | notes |
+|---|---|---|---|---|
+| `wild` | P | walks far more batters than peers | BB% allowed (BB_pct_pitch, 75 BF floor) | Same claim as the live `walk prone` (walk avoidance ≤ 15th pct). Only worth keeping as a stronger tier, e.g. ≤ 5th pct. |
+| `zone-filler` | P | throws in the strike zone far more than peers | zone% (Zone_pct, 75 BF floor); Zone_pct_pct is already in every pitcher's metrics | A behavior, not a result. Zone% vs BB% ρ = −0.44 across 1,838 pitcher-seasons with 200+ BF (2021–25), so it would not just restate the command tags; check it against `first-pitch attacker` first. |
+| `nibbler` | P | works the edges — lives out of the zone more than peers | zone% (Zone_pct), low end | The low end of the same axis as `zone-filler`; ship both or neither and make them an exclusive group. |

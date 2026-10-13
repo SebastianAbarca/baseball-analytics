@@ -50,19 +50,27 @@ LEAGUE_MEAN_DEFAULT: float = 0.50
 # Season date helpers
 # ---------------------------------------------------------------------------
 
+# First and last day a regular-season game was played, each checked against
+# MLB's own schedule (statsapi gameType=R, completed games). The start is the
+# first game anywhere, not the domestic Opening Day: international openers are
+# regular-season games, and four entries had them wrong — 2019 and 2025
+# (Tokyo, Mar 20-21 / Mar 18-19) and 2026's Mar 25 opener were missing, and
+# 2024 ended a day early, losing the Sep 30 Mets-Braves doubleheader. Seven
+# games in all. regular_season_games() is the completeness check; these
+# dates only bound the requests.
 SEASON_DATES: dict[int, tuple[str, str]] = {
     2015: ("2015-04-05", "2015-10-04"),
     2016: ("2016-04-03", "2016-10-02"),
     2017: ("2017-04-02", "2017-10-01"),
-    2018: ("2018-03-29", "2018-10-01"),
-    2019: ("2019-03-28", "2019-09-29"),
+    2018: ("2018-03-29", "2018-10-01"),   # incl. two tiebreaker games (Oct 1)
+    2019: ("2019-03-20", "2019-09-29"),   # Tokyo: SEA-OAK Mar 20-21
     2020: ("2020-07-23", "2020-09-27"),
     2021: ("2021-04-01", "2021-10-03"),
     2022: ("2022-04-07", "2022-10-05"),
     2023: ("2023-03-30", "2023-10-01"),
-    2024: ("2024-03-20", "2024-09-29"),
-    2025: ("2025-03-27", "2025-09-28"),
-    2026: ("2026-03-26", "2026-09-27"),  # last regular-season game, per Statcast game_type
+    2024: ("2024-03-20", "2024-09-30"),   # Seoul Mar 20-21; NYM-ATL DH Sep 30
+    2025: ("2025-03-18", "2025-09-28"),   # Tokyo: LAD-CHC Mar 18-19
+    2026: ("2026-03-25", "2026-09-27"),
 }
 
 
@@ -70,7 +78,8 @@ def season_state(today: Optional[_dt.date] = None) -> tuple[list[int], Optional[
     """
     (finished seasons, the season in progress or None), from SEASON_DATES.
 
-    Finished means its last regular-season game is behind us. Finished seasons
+    Finished means its last regular-season game is behind us and the morning
+    after it, when that game's data is collected, has passed. Finished seasons
     are frozen: their portraits share one era pool and never move until the
     next season finishes and joins it. Only the season in progress changes from
     night to night, which is what lets the nightly job rebuild 30 portraits
@@ -80,7 +89,11 @@ def season_state(today: Optional[_dt.date] = None) -> tuple[list[int], Optional[
     today = today or _dt.date.today()
     finished, in_progress = [], None
     for s, (start, end) in sorted(SEASON_DATES.items()):
-        if _dt.date.fromisoformat(end) < today:
+        # Finished from the SECOND day after the last game. On the morning
+        # after it, that night's games are still to be collected — the top-up
+        # targets yesterday — and if the season already counted as finished
+        # the nightly job would stand down and never fetch them.
+        if _dt.date.fromisoformat(end) + _dt.timedelta(days=1) < today:
             finished.append(s)
         elif _dt.date.fromisoformat(start) <= today:
             in_progress = s
@@ -221,6 +234,8 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
         log.info("statcast_%d: nothing new between %s and %s", season, frm, to)
         return df
 
+    if not df.empty:
+        new = new.reindex(columns=df.columns)   # see backfill_statcast_games
     merged = pd.concat([df, new], ignore_index=True)
     key = [c for c in _STATCAST_KEY if c in merged.columns]
     if key:
@@ -230,6 +245,117 @@ def _top_up_statcast(df: pd.DataFrame, season: int, cache: Path) -> pd.DataFrame
              season, len(merged) - len(df), len(df), len(merged),
              pd.to_datetime(merged["game_date"]).max().date())
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Completeness against MLB's schedule
+# ---------------------------------------------------------------------------
+# A maximum cached date says nothing about the days before it. Topping up
+# only after the last cached game could never recover an opening series the
+# season's start date skipped (both Tokyo openers), nor a game played after
+# the end date (2024's Sep 30 doubleheader). MLB's schedule lists every
+# completed regular-season game by game_pk, which Statcast shares, so the
+# question "is this season's cache complete?" has an exact answer.
+
+_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+# statsapi codedGameState: F final, O game over. Postponed (D), cancelled (C)
+# and suspended (T/U) games are not played games; a suspended game appears
+# again as F on the day it was completed.
+_COMPLETED_STATES = {"F", "O"}
+
+
+def regular_season_games(season: int) -> pd.DataFrame:
+    """
+    Completed regular-season games per MLB: game_pk, date (the day it was
+    completed) and official_date (the day it was scheduled — differs for a
+    suspended game). Cached to data/processed/schedule_{season}.csv once the
+    season is finished; a season in progress is fetched fresh (one request).
+    """
+    cache = PROCESSED_DIR / f"schedule_{season}.csv"
+    finished, _ = season_state()
+    if season in finished and cache.exists():
+        return pd.read_csv(cache)
+
+    import requests
+    r = requests.get(_SCHEDULE_URL, timeout=60,
+                     params={"sportId": 1, "season": season, "gameType": "R"})
+    r.raise_for_status()
+    rows = [
+        {"game_pk": g["gamePk"], "date": d["date"],
+         "official_date": g.get("officialDate", d["date"])}
+        for d in r.json().get("dates", [])
+        for g in d.get("games", [])
+        if g.get("status", {}).get("codedGameState") in _COMPLETED_STATES
+    ]
+    games = pd.DataFrame(rows, columns=["game_pk", "date", "official_date"])
+    games = games.drop_duplicates("game_pk", keep="last")
+    if season in finished:
+        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        games.to_csv(cache, index=False)
+    return games
+
+
+def statcast_missing_games(season: int, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Completed regular-season games absent from the season's Statcast cache,
+    up to yesterday (today's are still being played). Empty = complete.
+    """
+    if df is None:
+        cache = RAW_DIR / f"statcast_{season}.parquet"
+        df = (pd.read_parquet(cache, columns=["game_pk"]) if cache.exists()
+              else pd.DataFrame(columns=["game_pk"]))
+    games = regular_season_games(season)
+    yesterday = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+    games = games[games["date"] <= yesterday]
+    have = set(pd.to_numeric(df["game_pk"], errors="coerce").dropna().astype(int))
+    return games[~games["game_pk"].astype(int).isin(have)].reset_index(drop=True)
+
+
+def backfill_statcast_games(season: int) -> int:
+    """
+    Fetch the specific games statcast_missing_games finds — by their dates,
+    keeping only those game_pks so no cached game is rewritten — and append
+    them to the cache. Returns the number of games added; games MLB lists
+    that Statcast still does not have are logged and left for the next run.
+    """
+    cache = RAW_DIR / f"statcast_{season}.parquet"
+    if not cache.exists():
+        return 0
+    df = pd.read_parquet(cache)
+    missing = statcast_missing_games(season, df)
+    if missing.empty:
+        return 0
+    want = set(missing["game_pk"].astype(int))
+    dates = sorted(set(missing["date"]) | set(missing["official_date"]))
+    log.info("statcast_%d: %d game(s) missing from the cache — fetching %s",
+             season, len(want), ", ".join(dates))
+    pybaseball.cache.enable()
+    frames = []
+    for d in dates:
+        try:
+            got = _regular_season(pybaseball.statcast(start_dt=d, end_dt=d, verbose=False))
+        except Exception as e:
+            log.warning("statcast_%d: fetching %s failed (%s)", season, d, e)
+            continue
+        if got is not None and not got.empty:
+            # The cache's own columns: Savant adds fields over time
+            # (miss_distance, 2026), and 2 games should not widen a season's
+            # schema with a column that is null on the other 2,428.
+            got = got[got["game_pk"].astype(int).isin(want)]
+            frames.append(got.reindex(columns=df.columns))
+    new = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    added = set(new["game_pk"].astype(int)) if not new.empty else set()
+    if added:
+        merged = pd.concat([df, new], ignore_index=True)
+        merged = merged.drop_duplicates(subset=_STATCAST_KEY, keep="first")
+        merged.to_parquet(cache, index=False)
+        log.info("statcast_%d: +%d game(s), +%d pitches", season, len(added),
+                 len(merged) - len(df))
+    still = sorted(want - added)
+    if still:
+        log.warning("statcast_%d: %d game(s) MLB lists as completed are not in "
+                    "Statcast yet: %s", season, len(still), still)
+    return len(added)
 
 
 def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:
@@ -256,18 +382,33 @@ def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:
                 seasons only). Set False for reproducible offline runs.
     """
     cache = RAW_DIR / f"statcast_{season}.parquet"
+    df = None
     if cache.exists():
         try:
             log.info("Loading statcast_%d from cache: %s", season, cache)
             df = pd.read_parquet(cache)
-            if top_up:
-                df = _top_up_statcast(df, season, cache)
-            return df
         except Exception as e:
             log.warning(
                 "Cache file %s is corrupt (%s) — deleting and re-pulling", cache, e
             )
             cache.unlink()
+    if df is not None:
+        # Regular season on EVERY load, not just on new pulls. The filter used
+        # to run only when pulling, so whatever a cache already held was
+        # served as-is: 2024's file carried 20,583 spring-training pitches
+        # (88 games) and 2016's 252. A cache holding anything else is
+        # rewritten once, so every direct reader of the file is clean too.
+        # Outside the try above on purpose: that handler deletes the cache.
+        rs = _regular_season(df)
+        if len(rs) < len(df):
+            dropped = df.loc[~df.index.isin(rs.index), "game_type"].value_counts().to_dict()
+            log.warning("statcast_%d: removing %d non-regular-season pitches %s "
+                        "from the cache", season, len(df) - len(rs), dropped)
+            df = rs.reset_index(drop=True)
+            df.to_parquet(cache, index=False)
+        if top_up:
+            df = _top_up_statcast(df, season, cache)
+        return df
 
     if season not in SEASON_DATES:
         raise ValueError(f"Season {season} not in SEASON_DATES — add dates manually.")
@@ -444,6 +585,23 @@ def _sanitize_sprint_speed(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _bref_season_range(season: int) -> tuple[str, str]:
+    """
+    The regular season's dates for BRef's date-range leaderboards.
+
+    pybaseball's batting_stats_bref / pitching_stats_bref request March 1 to
+    November 30, which is the postseason too: Soto 2022 came back with 716 PA
+    and 165 G (MLB: 664, 153), Scherzer 2021 with 761 BF (693). Those totals
+    are joined to regular-season Statcast metrics, so a postseason team's
+    players carried inflated workloads and denominators. Bounded by
+    SEASON_DATES instead — which is why its first date has to be the first
+    game anywhere, international openers included.
+    """
+    if season not in SEASON_DATES:
+        raise ValueError(f"Season {season} not in SEASON_DATES — add dates manually.")
+    return SEASON_DATES[season]
+
+
 def _bref_savant_batting_merge(season: int, min_pa: int = 100,
                                strict: bool = False) -> pd.DataFrame:
     """
@@ -455,7 +613,7 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100,
     k_percent/bb_percent are dropped from Savant because BRef's raw rates are better.
     """
     log.info("Pulling Baseball Reference batting %d", season)
-    bref = pybaseball.batting_stats_bref(season)
+    bref = pybaseball.batting_stats_range(*_bref_season_range(season))
     bref = bref.rename(columns={"mlbID": "key_mlbam", "BA": "AVG"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["PA"] >= min_pa)].copy()
@@ -518,7 +676,7 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30,
     Savant provides fb_velocity, whiff%, hard_hit%, xwOBA_allowed, Barrel_allowed.
     """
     log.info("Pulling Baseball Reference pitching %d", season)
-    bref = pybaseball.pitching_stats_bref(season)
+    bref = pybaseball.pitching_stats_range(*_bref_season_range(season))
     bref = bref.rename(columns={"mlbID": "key_mlbam"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["BF"] >= min_pa)].copy()
@@ -793,52 +951,50 @@ def pull_fielding_oaa(season: int) -> pd.DataFrame:
 
 def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Return (bat_war, pitch_war) DataFrames for the given season.
+    Return (bat_war, pitch_war) DataFrames for the given season, ONE ROW PER
+    TEAM STINT: key_mlbam (int), team (Statcast code), war (float).
 
-    Both have columns: key_mlbam (int), war (float).
-    Data comes from Baseball Reference via pybaseball.bwar_bat / bwar_pitch.
-    Cached at data/processed/bwar_bat_{season}.csv and bwar_pitch_{season}.csv.
+    BRef's WAR file is already split by stint (Soto 2022: 3.73 WSH, 1.74 SD).
+    It used to be summed per player, and each team's portrait then credited
+    the player's whole-season WAR to itself — 5.47 on both. Sum over `team`
+    for a season total.
+
+    Cached at data/processed/bwar_bat_{season}.csv and bwar_pitch_{season}.csv;
+    a cache from before the split (no `team` column) is re-pulled.
     """
     bat_cache   = PROCESSED_DIR / f"bwar_bat_{season}.csv"
     pitch_cache = PROCESSED_DIR / f"bwar_pitch_{season}.csv"
 
     if bat_cache.exists() and pitch_cache.exists():
-        log.info("Loading bWAR %d from cache", season)
-        bat_war   = pd.read_csv(bat_cache)
-        pitch_war = pd.read_csv(pitch_cache)
-        return bat_war, pitch_war
+        bat_war, pitch_war = pd.read_csv(bat_cache), pd.read_csv(pitch_cache)
+        if "team" in bat_war.columns and "team" in pitch_war.columns:
+            log.info("Loading bWAR %d from cache", season)
+            return bat_war, pitch_war
+        log.info("bWAR %d cache predates team stints — re-pulling", season)
+
+    def _stints(raw: pd.DataFrame) -> pd.DataFrame:
+        out = (raw[raw["year_ID"] == season][["mlb_ID", "team_ID", "WAR"]]
+               .rename(columns={"mlb_ID": "key_mlbam", "team_ID": "team", "WAR": "war"})
+               .dropna(subset=["key_mlbam", "war"]))
+        out["key_mlbam"] = out["key_mlbam"].astype(int)
+        out["team"] = out["team"].map(lambda t: _BREF_TEAM_MAP.get(t, t))
+        return out.groupby(["key_mlbam", "team"], as_index=False)["war"].sum()
 
     try:
-        raw_bat = pybaseball.bwar_bat(return_all=False)
-        bat = (
-            raw_bat[raw_bat["year_ID"] == season]
-            [["mlb_ID", "WAR"]]
-            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
-            .dropna(subset=["key_mlbam", "war"])
-        )
-        bat["key_mlbam"] = bat["key_mlbam"].astype(int)
-        bat = bat.groupby("key_mlbam", as_index=False)["war"].sum()
+        bat = _stints(pybaseball.bwar_bat(return_all=False))
         bat.to_csv(bat_cache, index=False)
-        log.info("bWAR batting %d — %d players", season, len(bat))
+        log.info("bWAR batting %d — %d player-team stints", season, len(bat))
     except Exception as exc:
         log.warning("bwar_bat failed for season %d: %s", season, exc)
-        bat = pd.DataFrame(columns=["key_mlbam", "war"])
+        bat = pd.DataFrame(columns=["key_mlbam", "team", "war"])
 
     try:
-        raw_pitch = pybaseball.bwar_pitch(return_all=False)
-        pitch = (
-            raw_pitch[raw_pitch["year_ID"] == season]
-            [["mlb_ID", "WAR"]]
-            .rename(columns={"mlb_ID": "key_mlbam", "WAR": "war"})
-            .dropna(subset=["key_mlbam", "war"])
-        )
-        pitch["key_mlbam"] = pitch["key_mlbam"].astype(int)
-        pitch = pitch.groupby("key_mlbam", as_index=False)["war"].sum()
+        pitch = _stints(pybaseball.bwar_pitch(return_all=False))
         pitch.to_csv(pitch_cache, index=False)
-        log.info("bWAR pitching %d — %d pitchers", season, len(pitch))
+        log.info("bWAR pitching %d — %d player-team stints", season, len(pitch))
     except Exception as exc:
         log.warning("bwar_pitch failed for season %d: %s", season, exc)
-        pitch = pd.DataFrame(columns=["key_mlbam", "war"])
+        pitch = pd.DataFrame(columns=["key_mlbam", "team", "war"])
 
     return bat, pitch
 
@@ -848,9 +1004,11 @@ def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 # BRef team abbreviations → our internal abbreviations (Statcast style)
+# SDP, not SDN, is BRef's code for San Diego: with only "SDN" here the Padres
+# never matched, and had no defensive-runs percentile in any season.
 _BREF_TEAM_MAP: dict[str, str] = {
     "WSN": "WSH", "ARI": "AZ",  "TBR": "TB",  "CHW": "CWS",
-    "SFG": "SF",  "KCR": "KC",  "SDN": "SD",  "OAK": "ATH",
+    "SFG": "SF",  "KCR": "KC",  "SDP": "SD",  "SDN": "SD",  "OAK": "ATH",
     # Most others match directly; pass through unchanged
 }
 

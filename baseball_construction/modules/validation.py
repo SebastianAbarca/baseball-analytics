@@ -1,5 +1,5 @@
 """
-validation.py — 13 validation tests against known outputs.
+validation.py — validation tests against known outputs.
 
 Each test is self-contained and returns (passed: bool, detail: str).
 run_all() executes every test and prints a summary.
@@ -18,6 +18,13 @@ Tests:
   V11 Spin efficiency pipeline — physics, Savant precedence, within-type ranks
   V12 Park factors — build_park_profile returns normalized pitcher_friendly
   V13 Spin efficiency vs Savant — physics estimate ranks and scales like measured
+  V14 Metric rank directions — every metric declares one; outcome gates monotonic
+  V15 Batted-ball direction — pull/oppo relative to the batter, boundaries
+  V16 Tag evidence coverage — every tag gated or exempt; the gate refuses thin samples
+  V17 Season completeness — missing games vs the schedule, the finished rule, opener dates
+  V18 Regular season only — raw caches and BRef totals hold no other games
+  V19 Team stints — team PA/BF reconcile; a traded player splits by team
+  V20 League caches current — rebuilt and fingerprinted alike, none older than raw
 """
 
 from __future__ import annotations
@@ -1043,6 +1050,412 @@ def v12_park_factors() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V14 — Metric rank direction
+# ---------------------------------------------------------------------------
+
+def v14_metric_directions() -> Result:
+    """
+    Every ranked metric declares its direction, and the outcome gates read
+    those directions the right way round:
+      1. every BATTING_COL_MAP / PITCHING_COL_MAP target is in its
+         *_RANK_INVERT table (no metric falls back to a default)
+      2. allowing less hard contact, fewer barrels or fewer walks never lowers
+         the pitcher's percentile (monotonic in the good direction)
+      3. `contact suppressor` goes to the low-hard-hit end of a pool and
+         `walk prone` to the high-walk end — never the reverse
+    """
+    import pandas as pd
+    import team_portrait as tp
+    from pitcher_traits import outcome_traits
+
+    errors = []
+    for cmap, table, label in ((tp.BATTING_COL_MAP, tp.BATTING_RANK_INVERT, "batting"),
+                               (tp.PITCHING_COL_MAP, tp.PITCHING_RANK_INVERT, "pitching")):
+        undeclared = sorted(set(cmap.values()) - set(table))
+        if undeclared:
+            errors.append(f"{label} metrics with no declared direction: {undeclared}")
+
+    # A pool of 101 pitchers whose rates allowed rise together, raw rates as
+    # ingest stores them (hard_hit_pct 0.20-0.60, not Savant percentiles).
+    n = 101
+    hh = np.linspace(0.20, 0.60, n)
+    pool = pd.DataFrame({
+        "key_mlbam":    np.arange(n),
+        "hard_hit_pct": hh,
+        "barrel_pct":   hh / 5,
+        "bb_rate":      np.linspace(0.03, 0.15, n),
+    })
+    ranked = tp._normalize_pitching(pool, pool.copy())
+    for col in ("HardHit_allowed_pct", "Barrel_allowed_pct", "BB_pct_pitch_pct"):
+        if col not in ranked.columns:
+            errors.append(f"{col} not produced")
+            continue
+        # raw rate allowed rises down the frame, so the pct must fall
+        if not ranked[col].is_monotonic_decreasing:
+            errors.append(f"{col} rises with the rate allowed")
+
+    def tags_of(i):
+        r = ranked.iloc[i]
+        m = {"HardHit_allowed_pct": r.get("HardHit_allowed_pct"),
+             "Barrel_allowed_pct": r.get("Barrel_allowed_pct"),
+             "BB_pct_pct": r.get("BB_pct_pitch_pct")}
+        return {t["tag"] for t in outcome_traits(m)}
+
+    best, worst = tags_of(0), tags_of(n - 1)
+    if "contact suppressor" not in best:
+        errors.append("lowest hard-hit rate allowed is not a contact suppressor")
+    if "contact suppressor" in worst:
+        errors.append("highest hard-hit rate allowed is a contact suppressor")
+    if "walk prone" not in worst or "walk prone" in best:
+        errors.append("walk prone is not on the high-walk end")
+
+    passed = not errors
+    detail = (f"{len(tp.BATTING_RANK_INVERT)} batting + {len(tp.PITCHING_RANK_INVERT)} "
+              f"pitching directions declared; hard-hit {hh[0]:.0%} → "
+              f"{ranked['HardHit_allowed_pct'].iloc[0]:.0f}th pct, "
+              f"{hh[-1]:.0%} → {ranked['HardHit_allowed_pct'].iloc[-1]:.0f}th"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V15 — Batted-ball direction
+# ---------------------------------------------------------------------------
+
+def v15_spray_direction() -> Result:
+    """
+    Pull and oppo are relative to the batter, and point the right way:
+      1. synthetic balls to left field are pull for a right-handed batter and
+         oppo for a left-handed one; right field the reverse
+      2. boundaries: 15° is center, 15.1° pull gap, 30.1° pull line, and the
+         per-player shares agree with the chart zones on the same balls
+      3. on real pitches (cached June 2023 week) both hands pull their ground
+         balls more than they hit them the other way — the most reliable
+         directional fact in batted-ball data
+    """
+    import pandas as pd
+    from pitch_aggregates import (SPRAY_HOME_X, SPRAY_HOME_Y, compute_batter_spray_stats,
+                                  pull_angle, spray_angle, spray_zone)
+
+    errors = []
+
+    def ball(angle_deg: float, r: float = 150.0) -> tuple[float, float]:
+        t = np.radians(angle_deg)       # + is right field
+        return SPRAY_HOME_X + r * np.sin(t), SPRAY_HOME_Y - r * np.cos(t)
+
+    rows = []
+    for batter, stand, angle in [(1, "R", -35), (2, "L", -35), (3, "R", 35), (4, "L", 35)]:
+        x, y = ball(angle)
+        rows += [dict(batter=batter, stand=stand, hc_x=x, hc_y=y, bb_type="line_drive",
+                      events="single")] * 20
+    stats = compute_batter_spray_stats(pd.DataFrame(rows), min_bip=1).set_index("key_mlbam")
+    want = {1: (1.0, 0.0), 2: (0.0, 1.0), 3: (0.0, 1.0), 4: (1.0, 0.0)}
+    for b, (pull, oppo) in want.items():
+        got = (stats.loc[b, "pull_pct"], stats.loc[b, "oppo_pct"])
+        if got != (pull, oppo):
+            errors.append(f"batter {b}: pull/oppo {got}, want {(pull, oppo)}")
+
+    angles = pd.Series([15.0, 15.1, 30.0, 30.1, -15.0, -15.1, -30.1])
+    zones = spray_zone(pull_angle(angles, pd.Series(["L"] * len(angles)))).tolist()
+    expect = ["center", "pull_gap", "pull_gap", "pull_line", "center", "oppo_gap", "oppo_line"]
+    if zones != expect:
+        errors.append(f"boundary zones {zones}, want {expect}")
+
+    try:
+        from ingest import pull_statcast_range
+        sc = pull_statcast_range("2023-06-01", "2023-06-07", label="test")
+        gb = sc[(sc["bb_type"] == "ground_ball") & sc["hc_x"].notna()]
+        pa = pull_angle(spray_angle(gb["hc_x"], gb["hc_y"]), gb["stand"])
+        for hand in ("R", "L"):
+            p = pa[gb["stand"] == hand]
+            pull, oppo = (p > 15).mean(), (p < -15).mean()
+            if not pull > oppo:
+                errors.append(f"{hand}HB ground balls pulled {pull:.0%} vs oppo {oppo:.0%}")
+        real = (f"; June 2023 grounders pulled R {(pa[gb['stand'] == 'R'] > 15).mean():.0%}"
+                f" / L {(pa[gb['stand'] == 'L'] > 15).mean():.0%}")
+    except Exception as exc:
+        errors.append(f"real-data check failed: {exc}")
+        real = ""
+
+    passed = not errors
+    detail = (f"synthetic L/R pull/oppo and boundaries correct{real}"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V16 — Tag evidence coverage
+# ---------------------------------------------------------------------------
+
+def v16_tag_evidence() -> Result:
+    """
+    Every tag the portraits can emit is either gated on a metric or exempt
+    for a stated reason (reliability.validate_tag_evidence), and the gate
+    actually bites: a 20-BF pitcher with the worst walk and ground-ball rates
+    in the pool loses `walk prone` and `fly-ball prone`, and keeps them at
+    200 BF.
+    """
+    import team_portrait as tp
+    from pitcher_traits import outcome_traits
+    from reliability import TAG_EVIDENCE, UNGATED_TAGS, filter_traits, validate_tag_evidence
+
+    errors = list(validate_tag_evidence(tp.TAG_KIND))
+
+    raw = outcome_traits({"BB_pct_pct": 2.0, "GB_pct_pct": 2.0})
+    emitted = {t["tag"] for t in raw}
+    want = {"walk prone", "fly-ball prone"}
+    if not want <= emitted:
+        errors.append(f"test pitcher should emit {sorted(want)}, got {sorted(emitted)}")
+    small = {t["tag"] for t in filter_traits(raw, 20)}
+    large = {t["tag"] for t in filter_traits(raw, 200)}
+    if small & want:
+        errors.append(f"20 BF still carries {sorted(small & want)}")
+    if not want <= large:
+        errors.append(f"200 BF lost {sorted(want - large)}")
+
+    passed = not errors
+    detail = (f"{len(tp.TAG_KIND)} tags: {len(TAG_EVIDENCE)} gated, {len(UNGATED_TAGS)} "
+              "exempt with a reason; walk prone / fly-ball prone refused at 20 BF"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V17 — Season completeness
+# ---------------------------------------------------------------------------
+
+def v17_season_completeness() -> Result:
+    """
+    Offline (MLB's schedule is stubbed):
+      1. statcast_missing_games finds a game missing from the START of a
+         season and one from the END — the two the date table used to lose —
+         ignores today's, and reports nothing for a complete cache
+      2. a season is still in progress the morning after its last game (so
+         the nightly job collects it) and finished the day after that
+      3. SEASON_DATES starts no later than the international openers it had
+         missed (2019, 2025 Tokyo; 2026 Mar 25) and 2024 ends Sep 30
+    """
+    import datetime as dt
+    import pandas as pd
+    import ingest
+
+    errors = []
+    today = dt.date.today()
+    sched = pd.DataFrame({
+        "game_pk": [1, 2, 3, 4],
+        "date": ["2025-03-18", "2025-06-01", "2025-09-28", today.isoformat()],
+    })
+    sched["official_date"] = sched["date"]
+    real = ingest.regular_season_games
+    ingest.regular_season_games = lambda season: sched
+    try:
+        cache = pd.DataFrame({"game_pk": [2]})
+        missing = sorted(ingest.statcast_missing_games(2025, cache)["game_pk"])
+        if missing != [1, 3]:
+            errors.append(f"missing games {missing}, want [1, 3] (today's excluded)")
+        full = pd.DataFrame({"game_pk": [1, 2, 3]})
+        if not ingest.statcast_missing_games(2025, full).empty:
+            errors.append("a complete cache reported missing games")
+    finally:
+        ingest.regular_season_games = real
+
+    end = dt.date.fromisoformat(ingest.SEASON_DATES[2026][1])
+    _, ip_next = ingest.season_state(end + dt.timedelta(days=1))
+    fin_after, _ = ingest.season_state(end + dt.timedelta(days=2))
+    if ip_next != 2026:
+        errors.append("the morning after the last game no longer counts as in progress")
+    if 2026 not in fin_after:
+        errors.append("two days after the last game the season is not finished")
+
+    for season, first in [(2019, "2019-03-20"), (2025, "2025-03-18"), (2026, "2026-03-25")]:
+        if ingest.SEASON_DATES[season][0] > first:
+            errors.append(f"{season} starts {ingest.SEASON_DATES[season][0]}, after {first}")
+    if ingest.SEASON_DATES[2024][1] < "2024-09-30":
+        errors.append("2024 ends before the Sep 30 doubleheader")
+
+    passed = not errors
+    detail = ("missing-game detection, finished rule and opener dates correct"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V18 — Regular season only
+# ---------------------------------------------------------------------------
+
+# Statcast's terminal-pitch count is not an official PA count (it misses a few
+# PAs per player-season and counts the odd non-PA event), so a little slack;
+# a postseason leak is 20-50 PA for a regular, far beyond it.
+_PA_SLACK = 5
+
+
+def v18_regular_season_only() -> Result:
+    """
+    On whatever data this machine has:
+      1. every raw Statcast cache holds regular-season pitches only
+      2. no player's season total in fg_batting / fg_pitching exceeds the PA
+         or BF Statcast counts for him in that season's regular-season games
+         by more than _PA_SLACK — the signature of postseason games leaking
+         into the BRef totals (Soto 2022: 716 PA vs 664 regular season)
+    Seasons without local files are skipped and named in the detail.
+    """
+    import pandas as pd
+    from ingest import PROCESSED_DIR, RAW_DIR, SEASON_DATES
+
+    errors, checked, skipped = [], [], []
+    for season in sorted(SEASON_DATES):
+        raw = RAW_DIR / f"statcast_{season}.parquet"
+        if not raw.exists():
+            skipped.append(season)
+            continue
+        sc = pd.read_parquet(raw, columns=["game_type", "batter", "pitcher", "events"])
+        other = sc["game_type"][sc["game_type"] != "R"].value_counts().to_dict()
+        if other:
+            errors.append(f"{season} raw cache holds non-regular-season pitches {other}")
+        from pitch_aggregates import _NON_PA_EVENTS
+        ends = sc[(sc["game_type"] == "R") & sc["events"].notna()
+                  & ~sc["events"].isin(_NON_PA_EVENTS)]
+        counts = {"batter": ends.groupby("batter").size(),
+                  "pitcher": ends.groupby("pitcher").size()}
+        for fname, col, who in ((f"fg_batting_{season}.csv", "PA", "batter"),
+                                (f"fg_pitching_{season}.csv", "BF", "pitcher")):
+            path = PROCESSED_DIR / fname
+            if not path.exists():
+                continue
+            fg = pd.read_csv(path, low_memory=False)
+            if col not in fg.columns or "key_mlbam" not in fg.columns:
+                continue
+            fg = fg[["key_mlbam", col]].dropna()
+            sc_n = fg["key_mlbam"].astype(int).map(counts[who]).fillna(0)
+            over = fg[fg[col].astype(float) > sc_n + _PA_SLACK]
+            if len(over):
+                worst = over.assign(sc=sc_n[over.index]).sort_values(col).iloc[-1]
+                errors.append(f"{fname}: {len(over)} player(s) with more {col} than "
+                              f"regular-season Statcast (e.g. {int(worst['key_mlbam'])}: "
+                              f"{int(worst[col])} vs {int(worst['sc'])})")
+        checked.append(season)
+
+    passed = not errors
+    detail = (f"seasons checked {checked}" + (f"; no local data {skipped}" if skipped else "")
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V19 — Team stints
+# ---------------------------------------------------------------------------
+
+def v19_team_stints() -> Result:
+    """
+    A team gets what it got, not the player's season:
+      1. on cached pitches (June 2023 week), every team's batting stints sum
+         to the team's plate appearances and its pitching stints to its
+         batters faced, every team-game has exactly one starter, and each
+         player's stints sum to the player's total
+      2. a synthetic player traded between two teams: each team's row carries
+         its own PA and WAR, the season total sits in pa_total / war_total,
+         both list the two teams, and a stint under MIN_HITTER_PA goes to
+         also-appeared rather than the tagged roster
+    """
+    import pandas as pd
+    import team_portrait as tp
+    from ingest import pull_statcast_range
+    from pitch_aggregates import _NON_PA_EVENTS, compute_stints
+
+    errors = []
+    sc = pull_statcast_range("2023-06-01", "2023-06-07", label="test")
+    sc = sc[sc["game_type"] == "R"] if "game_type" in sc.columns else sc
+    bat, pit = compute_stints(sc, -2023)       # negative key: never collides with a season
+    ends = sc[sc["events"].notna() & ~sc["events"].isin(_NON_PA_EVENTS)]
+    top = ends["inning_topbot"] == "Top"
+    team_pa = pd.Series(np.where(top, ends["away_team"], ends["home_team"])).value_counts()
+    team_bf = pd.Series(np.where(top, ends["home_team"], ends["away_team"])).value_counts()
+    # Compared as plain dicts: Statcast's nullable Int64 vs value_counts'
+    # int64 makes Series.equals False on identical numbers.
+    def same(a: pd.Series, b: pd.Series) -> bool:
+        return {k: int(v) for k, v in a.items()} == {k: int(v) for k, v in b.items()}
+
+    if not same(bat.groupby("team")["pa"].sum(), team_pa):
+        errors.append("batting stints do not sum to team PA")
+    if not same(pit.groupby("team")["bf"].sum(), team_bf):
+        errors.append("pitching stints do not sum to team BF")
+    games = sc.groupby(["game_pk"]).size().shape[0]
+    if int(pit["gs"].sum()) != 2 * games:
+        errors.append(f"{int(pit['gs'].sum())} starts for {games} games (want 2 per game)")
+    if not same(bat.groupby("batter")["pa"].sum(), ends.groupby("batter").size()):
+        errors.append("a player's stints do not sum to the player's PA")
+
+    stints = pd.DataFrame({"batter": [1, 1, 2], "team": ["AAA", "BBB", "AAA"],
+                           "pa": [400, 25, 300], "g": [100, 8, 80]})
+    war = pd.DataFrame({"key_mlbam": [1, 1, 2], "team": ["AAA", "BBB", "AAA"],
+                        "war": [3.0, 0.2, 1.0]})
+    rows = pd.DataFrame({"key_mlbam": [1, 2], "pa": [425, 300], "war": [3.2, 1.0]})
+    a_keep, a_cameo = tp._team_stints_batting(rows, stints, war, "AAA")
+    b_keep, b_cameo = tp._team_stints_batting(rows[rows.key_mlbam == 1], stints, war, "BBB")
+    r = a_keep.set_index("key_mlbam").loc[1]
+    if (r["pa"], r["pa_total"], r["war"], r["war_total"]) != (400, 425, 3.0, 3.2):
+        errors.append(f"AAA row: pa {r['pa']}/{r['pa_total']} war {r['war']}/{r['war_total']}")
+    if r["season_teams"] != ["AAA", "BBB"]:
+        errors.append(f"season_teams {r['season_teams']}")
+    if not b_keep.empty or list(b_cameo["key_mlbam"]) != [1] or int(b_cameo["pa"].iloc[0]) != 25:
+        errors.append("a 25-PA stint should be also-appeared, not tagged")
+    if a_keep.set_index("key_mlbam").loc[2, "season_teams"] is not None:
+        errors.append("a one-team player should carry no season_teams")
+
+    passed = not errors
+    detail = (f"{len(team_pa)} teams reconcile PA/BF/starts on cached pitches; "
+              "synthetic trade splits PA and WAR by team" if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V20 — League caches current
+# ---------------------------------------------------------------------------
+
+def v20_league_caches_current() -> Result:
+    """
+      1. refresh.stage_league rebuilds exactly the caches the build fingerprint
+         hashes — one list cannot gain a cache the other lacks
+      2. on this machine's data, no league cache is older than its season's
+         raw Statcast (2026's five were 92.8 days older when this was added)
+    """
+    import importlib
+    import team_portrait as tp
+    from ingest import RAW_DIR, SEASON_DATES
+
+    sys.path.insert(0, str(_HERE.parent / "scripts"))
+    refresh = importlib.import_module("refresh")
+    errors = []
+    rebuilt = {pat for pat, _ in refresh._league_caches()}
+    hashed = {pat for _, pat in tp._FINGERPRINT_EXTRA_POOLS}
+    if rebuilt != hashed:
+        errors.append(f"refresh rebuilds {sorted(rebuilt - hashed)} not fingerprinted; "
+                      f"fingerprinted {sorted(hashed - rebuilt)} not rebuilt")
+
+    stale, checked = [], 0
+    for season in sorted(SEASON_DATES):
+        raw = RAW_DIR / f"statcast_{season}.parquet"
+        if not raw.exists():
+            continue
+        for directory, pat in tp._FINGERPRINT_EXTRA_POOLS:
+            cache = directory / pat.format(s=season)
+            if not cache.exists():
+                continue
+            checked += 1
+            days = (raw.stat().st_mtime - cache.stat().st_mtime) / 86400
+            if days > 0:
+                stale.append(f"{cache.name} ({days:.1f} d)")
+    if stale:
+        errors.append("older than raw Statcast: " + ", ".join(stale[:8])
+                      + (f" … +{len(stale) - 8}" if len(stale) > 8 else ""))
+
+    passed = not errors
+    detail = (f"{len(hashed)} caches rebuilt and fingerprinted alike; "
+              f"{checked} on disk, none older than raw" if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1060,12 +1473,19 @@ TESTS = [
     ("V11", "Spin efficiency pipeline",        v11_spin_efficiency),
     ("V12", "Park factors",                    v12_park_factors),
     ("V13", "Spin efficiency vs Savant",       v13_spin_vs_savant),
+    ("V14", "Metric rank directions",          v14_metric_directions),
+    ("V15", "Batted-ball direction",           v15_spray_direction),
+    ("V16", "Tag evidence coverage",           v16_tag_evidence),
+    ("V17", "Season completeness",             v17_season_completeness),
+    ("V18", "Regular season only",             v18_regular_season_only),
+    ("V19", "Team stints",                     v19_team_stints),
+    ("V20", "League caches current",           v20_league_caches_current),
 ]
 
 
 def run_all(verbose: bool = True) -> bool:
     """
-    Run all 13 validation tests and print a summary.
+    Run every validation test and print a summary.
     Returns True if every test passes.
     """
     results = []

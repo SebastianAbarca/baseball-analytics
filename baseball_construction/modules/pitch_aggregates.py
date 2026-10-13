@@ -413,6 +413,61 @@ def compute_platoon_optimization(statcast: pd.DataFrame) -> pd.Series:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Batted-ball direction
+# ---------------------------------------------------------------------------
+# Statcast hit coordinates put home plate at (125.42, 198.27); hc_x grows
+# toward RIGHT field and hc_y grows toward home. So a positive field angle is
+# right field — measured on 2025: balls the right fielder (hit_location 9)
+# fielded average +29°, the third baseman's (5) -33°. A right-handed batter
+# pulls to LEFT field. Both hands used to be the other way round, so
+# `pull-heavy` was tagging opposite-field hitters.
+#
+# The angle is used unscaled: 99% of home runs land within ±47°, so the foul
+# poles sit at ±45° as they should. (The 0.75 factor some write-ups apply
+# would put them at ±35°.)
+SPRAY_HOME_X, SPRAY_HOME_Y = 125.42, 198.27
+
+# Pull / center / oppo are the field in thirds, Savant's definition: beyond
+# 15° to a side. The chart splits each outer third again at 30° into the gap
+# (alley) and the line. The old boundary was 50°, which is the foul line —
+# 2-3% of balls in play.
+PULL_ANGLE_DEG = 15.0
+LINE_ANGLE_DEG = 30.0
+
+
+def spray_angle(hc_x, hc_y) -> pd.Series:
+    """Field angle in degrees from the centre line: + right field, - left field."""
+    return pd.Series(np.degrees(np.arctan2(
+        pd.to_numeric(hc_x, errors="coerce").astype(float) - SPRAY_HOME_X,
+        SPRAY_HOME_Y - pd.to_numeric(hc_y, errors="coerce").astype(float),
+    )), index=getattr(hc_x, "index", None))
+
+
+def pull_angle(angle: pd.Series, stand: pd.Series) -> pd.Series:
+    """
+    The field angle turned toward the batter's pull side: + pull, - oppo.
+    Left-handed batters pull to right field (+), right-handed to left (-), so
+    only the right-handed angle flips. A switch hitter's `stand` is the side
+    batted from on that pitch, which is the side that decides it.
+    """
+    return angle.where(stand.astype(str) == "L", -angle)
+
+
+def spray_zone(pull_ang: pd.Series) -> pd.Series:
+    """
+    Five handedness-aware zones: pull line, pull gap, center, oppo gap, oppo
+    line. Centre is closed (|a| <= 15° is center), the same boundaries as
+    compute_batter_spray_stats, so the chart and the tags agree on every ball.
+    """
+    a = pull_ang
+    return pd.Series(np.select(
+        [a > LINE_ANGLE_DEG, a > PULL_ANGLE_DEG, a >= -PULL_ANGLE_DEG,
+         a >= -LINE_ANGLE_DEG],
+        ["pull_line", "pull_gap", "center", "oppo_gap"],
+        default="oppo_line"), index=a.index).where(a.notna())
+
+
 def compute_batter_spray_stats(
     statcast: pd.DataFrame,
     min_bip: int = 20,
@@ -420,22 +475,22 @@ def compute_batter_spray_stats(
     """
     Per-batter spray chart statistics from Statcast hit coordinates.
 
-    Uses hc_x / hc_y to compute spray angle, then classifies each batted
-    ball as pull, gap, center, or oppo.  Gaps (LC and RC) are the ±20–50°
-    band from the field center line.
+    Classifies each ball in play by its angle toward the batter's pull side
+    (pull_angle): pull beyond +15°, oppo beyond -15°, the gaps 15-30° either
+    side of centre. See SPRAY_HOME_X for the coordinate system.
 
     Args:
         statcast: full-season Statcast DataFrame (must have hc_x, hc_y,
-                  bb_type, events, batter columns)
+                  bb_type, events, batter, stand columns)
         min_bip:  minimum balls-in-play required to include a batter
 
     Returns DataFrame with columns:
         key_mlbam  — MLBAM batter ID
         bip        — total balls in play
         xb_pct     — (2B + 3B) / bip   (extra-base contact rate)
-        gap_pct    — BIP with |spray_angle| in [20, 50]° / bip
-        pull_pct   — BIP with |spray_angle| > 50° to pull side / bip
-        oppo_pct   — BIP with |spray_angle| > 50° to oppo side / bip
+        gap_pct    — BIP 15–30° from centre, either side (the alleys) / bip
+        pull_pct   — BIP more than 15° to the pull side / bip
+        oppo_pct   — BIP more than 15° to the opposite field / bip
         hr_per_bip — HR / bip
         hr_fb      — HR / fly balls (pure power purity signal; None if no fly balls)
     """
@@ -452,31 +507,10 @@ def compute_batter_spray_stats(
             "pull_pct", "oppo_pct", "hr_per_bip", "hr_fb",
         ])
 
-    # ── Spray angle ──────────────────────────────────────────────────────────
-    # Home plate anchor in Statcast SVG coordinate space.
-    # Positive angle → right-field side; negative → left-field side.
-    HP_X, HP_Y = 126.0, 203.0
-    sc["_angle"] = np.degrees(np.arctan2(
-        sc["hc_x"].astype(float) - HP_X,
-        HP_Y - sc["hc_y"].astype(float),   # y-axis flipped
-    ))
-
-    # Pull side for RHH is RF (positive angle); for LHH it's LF (negative).
-    # Gap zones are field-location-based (±20–50°) regardless of handedness —
-    # both LC and RC gaps sit in this band.
-    sc["_abs_angle"]  = sc["_angle"].abs()
-    sc["_in_gap"]     = sc["_abs_angle"].between(20, 50)
-    sc["_is_pull"]    = sc["_abs_angle"] > 50   # extreme pull or oppo
-
-    # Label pull vs oppo by handedness for the pull_pct / oppo_pct split
-    rh_mask = (sc.get("stand", "R") == "R") | (sc.get("p_throws", "R") == "R")
-    # For RHH: positive angle = pull (RF); for LHH: negative angle = pull (LF)
-    sc["_is_pull_side"] = np.where(
-        sc.get("stand", pd.Series("R", index=sc.index)) == "R",
-        sc["_angle"] > 50,    # RHH pull = RF (positive)
-        sc["_angle"] < -50,   # LHH pull = LF (negative)
-    )
-    sc["_is_oppo_side"] = sc["_is_pull"] & ~sc["_is_pull_side"]
+    pa = pull_angle(spray_angle(sc["hc_x"], sc["hc_y"]), sc["stand"])
+    sc["_in_gap"]       = pa.abs().between(PULL_ANGLE_DEG, LINE_ANGLE_DEG, inclusive="right")
+    sc["_is_pull_side"] = pa > PULL_ANGLE_DEG
+    sc["_is_oppo_side"] = pa < -PULL_ANGLE_DEG
 
     # Event flags
     sc["_is_double"] = sc["events"] == "double"
@@ -867,26 +901,8 @@ _POS_NAMES = {2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS",
 MIN_DEFENSIVE_PITCHES = 300   # below → home position "DH"
 POS_MIN_PITCHES       = 150   # a position "counts" at ≥ this OR ≥5% share
 
-def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
-    """
-    Per player: defensive pitch counts by position (fielder_2..9 alignment
-    columns — verified 100% populated), home_position, and positions_played.
-
-    Returns: key_mlbam, home_position, positions_played, total_def_pitches,
-             pos_detail (dict pos → share)
-    """
-    if season in _POSITION_CACHE:
-        return _POSITION_CACHE[season]
-
-    counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
-    for n in range(2, 10):
-        col = f"fielder_{n}"
-        if col not in statcast.columns:
-            continue
-        vc = pd.to_numeric(statcast[col], errors="coerce").dropna().astype(int).value_counts()
-        for pid, c in vc.items():
-            counts[pid][_POS_NAMES[n]] += int(c)
-
+def _positions_from_counts(counts: dict) -> list[dict]:
+    """home_position / positions_played / pos_detail from {pid: Counter(pos)}."""
     rows = []
     for pid, ctr in counts.items():
         total = sum(ctr.values())
@@ -902,10 +918,114 @@ def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.Data
                      "total_def_pitches": total,
                      "pos_detail": {p: round(c / total, 3)
                                     for p, c in ctr.most_common()}})
+    return rows
+
+
+def compute_position_appearances(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
+    """
+    Per player AND TEAM: defensive pitch counts by position (fielder_2..9
+    alignment columns — verified 100% populated), home_position, and
+    positions_played, counted only on pitches that team was fielding.
+
+    Per team because `super-utility` is a deployment tag — what a club asked
+    of the player — and a traded player's other club does not count toward
+    it. A full-season count gave the receiving team the positions he played
+    for the trading one.
+
+    Returns: key_mlbam, team, home_position, positions_played,
+             total_def_pitches, pos_detail (dict pos → share)
+    """
+    if season in _POSITION_CACHE:
+        return _POSITION_CACHE[season]
+
+    fld_team = np.where(statcast["inning_topbot"] == "Top",
+                        statcast["home_team"], statcast["away_team"])
+    rows = []
+    for team in pd.unique(fld_team):
+        part = statcast[fld_team == team]
+        counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
+        for n in range(2, 10):
+            col = f"fielder_{n}"
+            if col not in part.columns:
+                continue
+            vc = pd.to_numeric(part[col], errors="coerce").dropna().astype(int).value_counts()
+            for pid, c in vc.items():
+                counts[pid][_POS_NAMES[n]] += int(c)
+        rows += [{**r, "team": team} for r in _positions_from_counts(counts)]
     out = pd.DataFrame(rows)
     _POSITION_CACHE[season] = out
-    log.info("Position appearances — %d players", len(out))
+    log.info("Position appearances — %d player-team rows", len(out))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Stints — what each club got from each player
+# ---------------------------------------------------------------------------
+# A player traded mid-season is one player-season and two contributions.
+# The season totals (BRef/DB) describe the player; the stint describes what
+# THIS team got: Soto 2022 is 437 PA for WSH and 228 for SD, not 664 for both.
+# Counted from regular-season Statcast, which knows the team of every pitch.
+#
+# `truncated_pa` (the inning ended on a runner mid-PA) is not a plate
+# appearance. A GS is a game in which he threw his team's first pitch.
+
+_STINT_CACHE: dict[int, tuple[pd.DataFrame, pd.DataFrame]] = {}
+_NON_PA_EVENTS = {"truncated_pa"}
+
+
+def compute_stints(statcast: pd.DataFrame, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    (batting, pitching) stints, one row per player and team.
+
+    batting:  batter, team, pa, g
+    pitching: pitcher, team, bf, g, gs, same_hand_bf_share,
+              lev_n_pa, mean_abs_dwe  (leverage exposure WITH THIS TEAM —
+              the same |ΔWE|-per-PA proxy as compute_pitcher_leverage)
+    """
+    if season in _STINT_CACHE:
+        return _STINT_CACHE[season]
+
+    cols = ["game_pk", "at_bat_number", "pitch_number", "inning", "inning_topbot",
+            "home_team", "away_team", "batter", "pitcher", "events", "stand",
+            "p_throws", "delta_home_win_exp"]
+    sc = statcast[[c for c in cols if c in statcast.columns]].copy()
+    top = sc["inning_topbot"] == "Top"
+    sc["bat_team"] = np.where(top, sc["away_team"], sc["home_team"])
+    sc["fld_team"] = np.where(top, sc["home_team"], sc["away_team"])
+    ends = sc[sc["events"].notna() & ~sc["events"].isin(_NON_PA_EVENTS)]
+
+    bat = (ends.groupby(["batter", "bat_team"])
+               .agg(pa=("game_pk", "size"), g=("game_pk", "nunique"))
+               .reset_index().rename(columns={"bat_team": "team"}))
+
+    pit = (ends.assign(_same=(ends["stand"] == ends["p_throws"]).astype(float))
+               .groupby(["pitcher", "fld_team"])
+               .agg(bf=("game_pk", "size"), same_hand_bf_share=("_same", "mean"))
+               .reset_index())
+    pit["same_hand_bf_share"] = pit["same_hand_bf_share"].round(3)
+    g = (sc.groupby(["pitcher", "fld_team"])["game_pk"].nunique()
+           .rename("g").reset_index())
+    first = (sc.sort_values(["game_pk", "inning", "at_bat_number", "pitch_number"])
+               .drop_duplicates(["game_pk", "fld_team"]))
+    gs = (first.groupby(["pitcher", "fld_team"]).size()
+               .rename("gs").reset_index())
+    pit = (pit.merge(g, on=["pitcher", "fld_team"], how="outer")
+              .merge(gs, on=["pitcher", "fld_team"], how="left"))
+    pit[["bf", "gs"]] = pit[["bf", "gs"]].fillna(0).astype(int)
+
+    if "delta_home_win_exp" in sc.columns:
+        sc["_dwe"] = pd.to_numeric(sc["delta_home_win_exp"], errors="coerce").abs()
+        per_pa = (sc.groupby(["pitcher", "fld_team", "game_pk", "at_bat_number"])["_dwe"]
+                    .sum().reset_index())
+        lev = (per_pa.groupby(["pitcher", "fld_team"])
+                     .agg(lev_n_pa=("_dwe", "count"), mean_abs_dwe=("_dwe", "mean"))
+                     .reset_index())
+        pit = pit.merge(lev, on=["pitcher", "fld_team"], how="left")
+    pit = pit.rename(columns={"fld_team": "team"})
+
+    _STINT_CACHE[season] = (bat, pit)
+    log.info("Stints — %d batting, %d pitching (player × team)", len(bat), len(pit))
+    return bat, pit
 
 
 # ---------------------------------------------------------------------------

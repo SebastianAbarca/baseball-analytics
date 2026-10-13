@@ -34,10 +34,10 @@ Stages run in dependency order. One is opt-in.
 
 | stage | what it does | default |
 |---|---|---|
-| `statcast` | tops up the in-progress season | on |
+| `statcast` | tops up the in-progress season; fetches any game MLB's schedule lists that a cache lacks | on |
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
-| `tunnel` | rebuilds tunnel caches where Statcast moved | on |
-| `spin` | rebuilds spin caches where Statcast or the spin method moved; re-pulls Savant active spin | on |
+| `seed` | writes the re-pulled season totals to `player_batting`/`player_pitching`, where the portraits read them — **writes production** | **off** |
+| `league` | rebuilds every league cache (tunnel, pitch mix, spin, plate discipline, mechanics, sequencing) where Statcast moved; spin also when its method changes, re-pulling Savant active spin | on |
 | `portraits` | rebuilds whatever the fingerprint marks stale | on |
 | `tags` | regenerates TAGS.md and tag_reference | on |
 | `publish` | writes portraits, league seasons and Scout to the serving tables | on |
@@ -48,9 +48,10 @@ Stages run in dependency order. One is opt-in.
 # See what would change. Touches nothing.
 python baseball_construction/scripts/refresh.py --dry-run
 
-# Everything, including re-pulling every external feed
+# Everything, including re-pulling every external feed and re-seeding the
+# database from it (sources without seed changes nothing a portrait reads)
 python baseball_construction/scripts/refresh.py \
-    --stages statcast,sources,tunnel,spin,portraits,tags
+    --stages statcast,sources,seed,league,portraits,tags,publish
 
 # One season
 python baseball_construction/scripts/refresh.py --seasons 2026
@@ -58,11 +59,12 @@ python baseball_construction/scripts/refresh.py --seasons 2026
 # Rebuild seasons in parallel (see the memory note below)
 python baseball_construction/scripts/refresh.py --jobs 3
 
-# After changing tunnelling CODE rather than data
-python baseball_construction/scripts/refresh.py --force-tunnel
+# After changing league-cache CODE rather than data (tunnel, pitch mix,
+# spin, discipline, mechanics, sequencing); --force-tunnel still works
+python baseball_construction/scripts/refresh.py --force-league
 
-# Re-pull Savant active spin and rebuild spin caches with nothing moved
-# (a spin CODE change bumps SPIN_METHOD_VERSION, which rebuilds on its own)
+# Re-pull Savant active spin and rebuild only the spin caches with nothing
+# moved (a spin CODE change bumps SPIN_METHOD_VERSION, which rebuilds on its own)
 python baseball_construction/scripts/refresh.py --force-spin
 ```
 
@@ -79,6 +81,7 @@ real run does, so it cannot drift from what would actually happen.
 | a tag threshold, `TAG_KIND`, a zone constant | **all 360 portraits** — the gate digest moved |
 | the in-progress season's data | that season's 30 — finished seasons rank against a pool it is not in |
 | a finished season's data | all 360 — finished seasons are in every season's era pool |
+| raw Statcast for a season (top-up, backfill) | its six league caches and cross-team rows, then its portraits — the `league` stage does the first two |
 | a chart, a layout, a callback | nothing; restart the dashboard |
 | `TAGS.md` content | run `--stages tags`, about 3s |
 | anything published | `publish.py` (or `--stages publish`); the dashboard picks it up within 10 min |
@@ -180,7 +183,7 @@ for f in glob.glob('baseball_construction/data/processed/portraits/*.json'):
     if not tp.portrait_is_current(p):
         stale += 1
 print('portraits:', sum(c.values()), '| distinct stamps:', len(c), '| stale:', stale)
-print('current fingerprint:', tp.build_fingerprint())
+print('current fingerprint:', {s: tp.build_fingerprint(s) for s in range(2015, 2027)})
 PY
 ```
 
@@ -231,24 +234,38 @@ no commits, and the off-season is longer than that.
 **Before Opening Day:** add the season to `SEASON_DATES` in
 `modules/ingest.py` (first and last regular-season dates) and to `SEASONS` in
 `dashboard/layout.py`. From March the nightly job fails, deliberately, while a
-season is missing.
+season is missing. The first date is the first regular-season game
+**anywhere** — Tokyo, Seoul and other international openers count, and three
+seasons once started late because they were missed. Check it against MLB's
+schedule (`statsapi.mlb.com/api/v1/schedule?sportId=1&gameType=R&season=<year>`).
+A wrong date no longer loses games silently — the `statcast` stage fetches any
+completed game the cache lacks — but the dates still bound the BRef season
+totals.
 
 **After the last regular-season game — finalize.** On the machine with all the
 data:
 
-1. `python baseball_construction/scripts/refresh.py --seasons <year> --stages statcast,sources,tunnel`
-   to take the season to its final game.
-2. `python baseball_construction/seed.py --season <year> --force` to write its
-   final totals.
+1. `python baseball_construction/scripts/refresh.py --seasons <year> --stages statcast,sources,seed,league`
+   to take the season to its final game and write its final totals.
+2. `python baseball_construction/modules/validation.py` — V16, V17 and V19
+   confirm the season is complete, regular-season only, and its caches
+   current. Do not continue on a failure.
 3. `python baseball_construction/scripts/refresh.py --stages portraits,tags,publish --jobs 3` (about 20
    minutes). Every portrait re-ranks, because the season just joined the era
    pool.
 4. `python baseball_construction/scripts/freeze_era.py`, then commit `data/era/`, `TAGS.md`,
    `dashboard/tag_reference.json` and `dashboard/strike_zones.json`.
 
-Check SEASON_DATES' end date against Statcast's `game_type` (`R` regular, `F`
-wild card, `D` division series) first. The projected date ran a week into the
-postseason for 2026.
+Check SEASON_DATES' end date against MLB's schedule or Statcast's
+`game_type` (`R` regular, `F` wild card, `D` division series) first. The
+projected date ran a week into the postseason for 2026; 2024's ran a day
+short and lost a doubleheader. Step 1's `statcast` stage logs
+`INCOMPLETE vs MLB's schedule` if any completed game is still missing — do
+not continue until it is clean.
+
+A season counts as finished from the **second** day after its last game
+(`ingest.season_state`): the morning after it, the nightly job still runs and
+collects that night's games.
 
 ---
 

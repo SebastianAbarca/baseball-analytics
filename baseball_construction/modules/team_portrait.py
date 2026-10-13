@@ -58,7 +58,12 @@ sys.path.insert(0, str(_HERE))
 # 21 adds the per-player `gate_inputs` block — everything build_*_traits was
 # called with, so tags can be recomputed by scripts/rederive_traits.py without
 # a rebuild. This is the last rebuild a pure gate change should ever require.
-PORTRAIT_SCHEMA_VERSION = 21
+# 22: spray_data zones are all batter-relative (pull_line … oppo_line); the
+# old pull/rc_gap/center/lc_gap/oppo keys had pull and oppo reversed. And
+# players carry their TEAM stint (pa/bf/g/gs/war) beside *_total season
+# fields and season_teams; players under the minimum are in
+# players.also_appeared.
+PORTRAIT_SCHEMA_VERSION = 22
 
 from ingest import (
     pull_statcast_range,
@@ -159,9 +164,10 @@ def _get_player_info_map() -> dict[int, dict]:
 # Constants
 # ---------------------------------------------------------------------------
 
-# Minimum PAs for a hitter to be included in team roster
+# Minimum PA / BF WITH THIS TEAM for a player to carry tags and count toward
+# the team's weighted metrics. Below it the player is still on the roster,
+# listed under players.also_appeared.
 MIN_HITTER_PA    = 30
-# Minimum BF for a pitcher to be classified
 MIN_PITCHER_BF   = 20
 # Minimum BF to count as a starter candidate
 STARTER_MIN_BF   = 50
@@ -221,7 +227,7 @@ BATTING_COL_MAP: dict[str, str] = {
     "est_woba_minus_woba_diff": "LuckDelta",
     # Spray chart metrics (computed from Statcast hc_x/hc_y)
     "xb_pct":    "XB_pct",       # (2B + 3B) / BIP — gap contact rate
-    "gap_pct":   "GapTend_pct",  # fraction of BIP in ±20–50° gap zones
+    "gap_pct":   "GapTend_pct",  # fraction of BIP 15–30° from centre (the alleys)
     "pull_pct":  "Pull_pct",     # fraction of BIP to pull side
     "oppo_pct":  "Oppo_pct",     # fraction of BIP to opposite field
     "hr_fb":     "HR_FB_pct",    # HR / fly balls — per-player power purity
@@ -261,6 +267,46 @@ PITCHING_COL_MAP: dict[str, str] = {
     "fip":              "FIP",
     "avg_spin_rate":    "AvgSpinRate",
     "arsenal_diversity":"ArsenalDiversity",
+}
+
+# Rank direction of every metric the two maps above produce: True means the
+# percentile is inverted (100 - rank), so a LOW raw value earns a HIGH pct.
+# Declared for every target, not defaulted, because a default is how hard-hit
+# and barrel rate allowed came to be ranked backwards: they were left out on
+# the belief that Savant had already inverted them, then ingest replaced the
+# Savant percentiles with raw rates allowed, and `contact suppressor` went to
+# the pitchers allowing the MOST hard contact (Graceffo 2025: 53.6% hard-hit,
+# ranked 98.6). validation.validate_metric_directions fails on any target
+# missing here.
+#
+# Hitters rank raw except K%: OSwing_pct_pct is "chases more", the gates read
+# it that way. Pitchers rank so that a high pct is good for the pitcher on
+# every outcome (K, BB, contact quality, FIP); shape and usage metrics (GB%,
+# zone%, velocity, spin) rank raw.
+BATTING_RANK_INVERT: dict[str, bool] = {
+    "K_pct": True,          # higher pct = fewer strikeouts
+    "BB_pct": False, "HardHit_pct": False, "sprint_speed": False,
+    "SwStr_pct": False, "OSwing_pct": False, "xwOBA": False,
+    "Barrel_pct": False, "xBA": False, "xSLG": False, "ISO": False,
+    "OBP": False, "AVG": False, "PA": False, "EV_avg": False, "SB": False,
+    "CS": False, "SLG": False, "BatGB_pct": False, "FPS_pct": False,
+    "PitchesPerPA": False, "WAR_bat": False, "ZSwing_pct": False,
+    "Contact_pct": False, "LuckDelta": False, "XB_pct": False,
+    "GapTend_pct": False, "Pull_pct": False, "Oppo_pct": False,
+    "HR_FB_pct": False, "OBP_SLG_gap": False,
+}
+
+PITCHING_RANK_INVERT: dict[str, bool] = {
+    "K_pct_pitch": False,
+    "BB_pct_pitch": True,      # higher pct = fewer walks
+    "HardHit_allowed": True,   # higher pct = less hard contact allowed
+    "Barrel_allowed": True,    # higher pct = fewer barrels allowed
+    "xwOBA_allowed": True,
+    "FIP": True,
+    "BF": False, "SwStr_pct_pitch": False, "avg_velo": False, "GS": False,
+    "GB_pct_pitch": False, "Zone_pct": False, "CSW_pct": False,
+    "PitchesPerBF": False, "WAR_pitch": False, "AvgSpinRate": False,
+    "ArsenalDiversity": False,
 }
 
 # Curated percentile keys shown on pitcher cards (starters AND relievers —
@@ -382,100 +428,43 @@ def _league_team_spin_pct(statcast: pd.DataFrame, league_spin: pd.DataFrame) -> 
     return normalize_percentile(team_mean)
 
 
-def _compute_cross_team_metrics(
+def cross_team_path(season: int) -> Path:
+    """
+    The per-season cross-team rows file. `_v2` because the unversioned files
+    summed season-wide PA and WAR into every team a player joined and counted
+    a traded hitter's batted balls for both clubs; reading one of those into a
+    pool would mix the two definitions.
+    """
+    return PROCESSED_DIR / f"cross_team_metrics_v2_{season}.csv"
+
+
+def cross_team_rows(
     statcast: pd.DataFrame,
     batting_full: pd.DataFrame,
-    target_team: str,
     season: int,
+    bat_stints: pd.DataFrame,
+    bwar_bat: pd.DataFrame,
     debut_seasons: dict[int, int],
     est_service_time: dict[int, float],
-) -> dict[str, float]:
+) -> pd.DataFrame:
     """
-    Compute spread/concentration and tenure metrics for all 30 teams then
-    return the target team's percentile rank in each metric.
-
-    Metrics produced:
-      ISO_spread_pct, PA_concentration_pct, WAR_concentration_pct,
-      WAR_variance_inv_pct, RosterFloor_pct,
-      AvgTenure_inv_pct, AvgTenure_pct,   # C3/C4 — MLB years since debut
-      NewPlayerShare_pct,                  # C3 — share with tenure <= 2
-      VeteranShare_pct,                    # C4 — share with tenure >= 5
-      HR_FB_pct
+    One row per team: spread/concentration, tenure and lineup-power metrics,
+    from each team's OWN stints — its players' PA and WAR with the team, its
+    own batted balls. Season rates (ISO, xwOBA, SLG, barrel%) are the
+    player's, weighted by what the team got. Written to cross_team_path().
     """
-    # ── Use cached current-season DataFrame when available ───────────────────
-    # The 30-team computation (all_team_hitter_ids + metrics loop) is expensive.
-    # If the cache already exists for this season, load it instead of recomputing.
-    cache_path_early = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"
-    if cache_path_early.exists():
-        try:
-            cross_cached = pd.read_csv(cache_path_early)
-            if "pool_season" in cross_cached.columns:
-                cross_cached = cross_cached.drop(columns=["pool_season"], errors="ignore")
-            cross = cross_cached.set_index("team") if "team" in cross_cached.columns else cross_cached
-            log.info("Cross-team metrics cache hit for %d — skipping 30-team recomputation", season)
-
-            # Jump straight to pool building + normalization
-            pool_frames = [cross.reset_index().assign(pool_season=season)]
-            for p in sorted(PROCESSED_DIR.glob("cross_team_metrics_*.csv")):
-                try:
-                    other_season = int(p.stem.split("_")[-1])
-                except ValueError:
-                    continue
-                if other_season == season:
-                    continue
-                try:
-                    df_hist = pd.read_csv(p)
-                    df_hist["pool_season"] = other_season
-                    pool_frames.append(df_hist)
-                except Exception:
-                    pass
-
-            pool = pd.concat(pool_frames, ignore_index=True) if len(pool_frames) > 1 else cross.reset_index()
-
-            METRIC_MAP = [
-                ("iso_spread","ISO_spread_pct",False),("xwoba_spread","wRCplus_spread_pct",False),
-                ("pa_concentration","PA_concentration_pct",False),("war_concentration","WAR_concentration_pct",False),
-                ("war_variance","WAR_variance_inv_pct",True),("roster_floor","RosterFloor_pct",False),
-                ("avg_tenure","AvgTenure_inv_pct",True),("avg_tenure","AvgTenure_pct",False),
-                ("new_player_share","PreArbShare_pct",False),("veteran_share","FAShare_pct",False),
-                ("arb_share","ArbShare_pct",False),
-                ("hr_fb","HR_FB_pct",False),("team_hr","TeamHR_pct",False),
-                ("team_slg","TeamSLG_pct",False),("power_contributors","PowerContributors_pct",False),
-                ("team_barrel","TeamBarrel_pct",False),("team_xb_rate","TeamXB_pct",False),
-                ("team_gap_pct","TeamGap_pct",False),
-            ]
-            out: dict[str, float] = {}
-            if target_team not in cross.index:
-                return out
-            for col, key, invert in METRIC_MAP:
-                pool_col = pool[col] if col in pool.columns else None
-                if pool_col is None or pool_col.notna().sum() <= 1:
-                    continue
-                target_val = cross.loc[target_team, col] if col in cross.columns else None
-                if target_val is None or (isinstance(target_val, float) and np.isnan(target_val)):
-                    continue
-                pool_vals = pool_col.dropna()
-                pct = float((pool_vals < target_val).sum() / len(pool_vals) * 100) if invert \
-                      else float((pool_vals <= target_val).sum() / len(pool_vals) * 100)
-                out[key] = pct
-                if "power_source_ratio" in cross.columns and target_team in cross.index:
-                    out["power_source_ratio"] = float(cross.loc[target_team, "power_source_ratio"]) \
-                        if not np.isnan(float(cross.loc[target_team, "power_source_ratio"])) else None
-            log.info("Cross-team metrics (cached) — %d populated for %s", len(out), target_team)
-            return out
-        except Exception as exc:
-            log.warning("Cross-team cache load failed, recomputing: %s", exc)
-
-    all_team_ids = _all_team_hitter_ids(statcast)
-
-    # League-wide ISO median — used for PowerContributors threshold
     all_bat = batting_full.rename(columns=BATTING_COL_MAP)
     _league_iso = pd.to_numeric(all_bat.get("ISO", pd.Series(dtype=float)), errors="coerce")
     league_median_iso = float(_league_iso.median()) if _league_iso.notna().sum() > 0 else 0.15
 
+    bat_team = np.where(statcast["inning_topbot"] == "Top",
+                        statcast["away_team"], statcast["home_team"])
     rows = []
-    for team, ids in all_team_ids.items():
-        tb = batting_full[batting_full["key_mlbam"].isin(ids)].rename(columns=BATTING_COL_MAP)
+    for team in sorted(bat_stints["team"].dropna().unique()):
+        ids = set(bat_stints.loc[bat_stints["team"] == team, "batter"].astype(int))
+        tb, _ = _team_stints_batting(batting_full[batting_full["key_mlbam"].isin(ids)],
+                                     bat_stints, bwar_bat, team)
+        tb = tb.rename(columns=BATTING_COL_MAP)
 
         iso     = pd.to_numeric(tb.get("ISO",       pd.Series(dtype=float)), errors="coerce")
         xwoba   = pd.to_numeric(tb.get("xwOBA",     pd.Series(dtype=float)), errors="coerce")
@@ -500,24 +489,18 @@ def _compute_cross_team_metrics(
         war_variance = float(war.std()) if war.notna().sum() > 1 else np.nan
 
         # Estimated Service Time (EST) per player — years.days float (e.g. 5.143).
-        # Uses exact MLB debut dates + actual IL deductions per season.
         # Falls back to calendar-year tenure when EST is unavailable.
         # CBA thresholds: <3.0 pre-arb · 3.0-5.999 arb-eligible · ≥6.0 free agent.
-        mlbam_ids = tb["key_mlbam"].dropna().astype(int).tolist() if "key_mlbam" in tb.columns else list(ids)
-        service_vals = []
-        pa_vals      = []
-        for pid in mlbam_ids:
+        service_vals, pa_vals = [], []
+        for pid, player_pa in zip(tb["key_mlbam"].astype(int), pa):
             est = est_service_time.get(pid)
             if est is None or (isinstance(est, float) and np.isnan(est)):
-                # Fallback: calendar years
                 debut = debut_seasons.get(pid)
                 if debut is None:
                     continue
                 est = float(int(season) - int(debut))
-            player_pa_series = pa[tb["key_mlbam"].astype(int) == pid] if "key_mlbam" in tb.columns else pd.Series([1])
-            player_pa = float(player_pa_series.iloc[0]) if not player_pa_series.empty else 1.0
             service_vals.append(est)
-            pa_vals.append(player_pa)
+            pa_vals.append(float(player_pa))
 
         if service_vals:
             svc_arr = np.array(service_vals, dtype=float)
@@ -529,8 +512,8 @@ def _compute_cross_team_metrics(
         else:
             avg_tenure = new_player_share = veteran_share = arb_share = np.nan
 
-        # HR/FB and raw HR count from Statcast for this team's batters
-        team_sc    = statcast[statcast["batter"].isin(ids)]
+        # HR/FB, XBH and gap share from THIS team's batted balls
+        team_sc    = statcast[(bat_team == team) & statcast["batter"].isin(ids)]
         hr_count   = int((team_sc["events"] == "home_run").sum())
         double_count = int((team_sc["events"] == "double").sum())
         triple_count = int((team_sc["events"] == "triple").sum())
@@ -544,20 +527,16 @@ def _compute_cross_team_metrics(
         total_xbh = hr_count + xb_count
         power_source_ratio = float(hr_count / total_xbh) if total_xbh > 0 else np.nan
 
-        # Gap-zone BIP from Statcast hc_x/hc_y
-        team_sc_bip = team_sc[team_sc["hc_x"].notna() & team_sc["hc_y"].notna()].copy()
+        team_sc_bip = team_sc[team_sc["hc_x"].notna() & team_sc["hc_y"].notna()]
         if not team_sc_bip.empty:
-            HP_X, HP_Y = 126.0, 203.0
-            angles = np.degrees(np.arctan2(
-                team_sc_bip["hc_x"].astype(float) - HP_X,
-                HP_Y - team_sc_bip["hc_y"].astype(float),
-            ))
-            team_gap_pct = float((angles.abs().between(20, 50)).sum() / len(angles))
+            from pitch_aggregates import LINE_ANGLE_DEG, PULL_ANGLE_DEG, spray_angle
+            angles = spray_angle(team_sc_bip["hc_x"], team_sc_bip["hc_y"])
+            team_gap_pct = float(angles.abs().between(
+                PULL_ANGLE_DEG, LINE_ANGLE_DEG, inclusive="right").sum() / len(angles))
         else:
             team_gap_pct = np.nan
 
-        # A4 — Lineup Power metrics
-        # PA-weighted SLG and Barrel%
+        # A4 — Lineup Power metrics: PA-weighted SLG and Barrel%
         team_slg    = float((slg.fillna(0) * pa).sum() / total_pa)    if total_pa > 0 and slg.notna().any()    else np.nan
         team_barrel = float((barrel.fillna(0) * pa).sum() / total_pa) if total_pa > 0 and barrel.notna().any() else np.nan
         # Fraction of PA from batters with ISO >= league median (power breadth)
@@ -577,98 +556,221 @@ def _compute_cross_team_metrics(
             "veteran_share":      veteran_share,     # fraction FA eligible (EST >= 6.0)
             "arb_share":          arb_share,         # fraction arb-eligible (3.0 <= EST < 6.0)
             "hr_fb":              float(hr_count / fb_count)                 if fb_count > 0            else np.nan,
-            # A4
             "team_hr":            float(hr_count),
             "team_slg":           team_slg,
             "power_contributors": power_contributors,
             "team_barrel":        team_barrel,
-            # A2 — Gap contact
             "team_xb_rate":       team_xb_rate,
             "team_gap_pct":       team_gap_pct,
             "power_source_ratio": power_source_ratio,   # display metadata, not scored
         })
 
-    cross = pd.DataFrame(rows).set_index("team")
-
-    # ── Cache current season's cross-team DataFrame ────────────────────────
-    # Then load all other cached seasons to build a multi-year normalization
-    # pool. Normalizing against 30-team × N-season history rather than just
-    # 30-team × 1-season means "70" = "better than 70% of Statcast-era teams"
-    # and scores are stable year-over-year.
-    cache_path = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"
+    cross = pd.DataFrame(rows)
     try:
-        cross.reset_index().to_csv(cache_path, index=False)
+        cross.to_csv(cross_team_path(season), index=False)
     except Exception as exc:
-        log.warning("Could not save cross-team cache for %d: %s", season, exc)
+        log.warning("Could not save cross-team rows for %d: %s", season, exc)
+    return cross
 
-    pool_frames = [cross.reset_index().assign(pool_season=season)]
-    for p in sorted(PROCESSED_DIR.glob("cross_team_metrics_*.csv")):
-        try:
-            other_season = int(p.stem.split("_")[-1])
-        except ValueError:
-            continue
-        if other_season == season:
-            continue
-        try:
-            df_hist = pd.read_csv(p)
-            df_hist["pool_season"] = other_season
-            pool_frames.append(df_hist)
-        except Exception:
-            pass
 
-    if len(pool_frames) > 1:
-        pool = pd.concat(pool_frames, ignore_index=True)
-        log.info("Cross-team pool: %d team-seasons (%d historical seasons)",
-                 len(pool), len(pool_frames))
+def ensure_cross_team_rows(season: int, force: bool = False) -> bool:
+    """
+    Build one season's cross-team rows if absent (or forced). Every season's
+    rows must exist BEFORE any portrait ranks against them: they used to be
+    written as a side effect of each season's first portrait, so in a full
+    rebuild a season ranked against whichever seasons happened to have been
+    built before it. refresh.py calls this for every season ahead of the
+    portrait stage. Returns True if it wrote the file.
+    """
+    if cross_team_path(season).exists() and not force:
+        return False
+    from pitch_aggregates import compute_stints
+    statcast = pull_statcast_season(season, top_up=False)
+    batting_full, _, bwar_bat, _ = _load_season_players(season)
+    bat_stints, _ = compute_stints(statcast, season)
+    hitter_ids = [int(p) for p in bat_stints["batter"].unique()]
+    cross_team_rows(statcast, batting_full, season, bat_stints, bwar_bat,
+                    query_debut_seasons(),
+                    query_estimated_service_time(hitter_ids, season))
+    return True
+
+
+_CROSS_TEAM_METRIC_MAP = [
+    ("iso_spread",        "ISO_spread_pct",        False),
+    ("xwoba_spread",      "wRCplus_spread_pct",    False),
+    ("pa_concentration",  "PA_concentration_pct",  False),
+    ("war_concentration", "WAR_concentration_pct", False),
+    ("war_variance",      "WAR_variance_inv_pct",  True),
+    ("roster_floor",      "RosterFloor_pct",       False),
+    ("avg_tenure",        "AvgTenure_inv_pct",     True),
+    ("avg_tenure",        "AvgTenure_pct",         False),
+    ("new_player_share",  "PreArbShare_pct",       False),  # pre-arb: EST < 3.0
+    ("veteran_share",     "FAShare_pct",           False),  # FA eligible: EST >= 6.0
+    ("arb_share",         "ArbShare_pct",          False),  # arb-eligible: 3.0 <= EST < 6.0
+    ("hr_fb",             "HR_FB_pct",             False),
+    ("team_hr",           "TeamHR_pct",            False),
+    ("team_slg",          "TeamSLG_pct",           False),
+    ("power_contributors","PowerContributors_pct", False),
+    ("team_barrel",       "TeamBarrel_pct",        False),
+    ("team_xb_rate",      "TeamXB_pct",            False),  # A2 — gap contact
+    ("team_gap_pct",      "TeamGap_pct",           False),
+]
+
+
+def _compute_cross_team_metrics(
+    statcast: pd.DataFrame,
+    batting_full: pd.DataFrame,
+    target_team: str,
+    season: int,
+    debut_seasons: dict[int, int],
+    est_service_time: dict[int, float],
+    bat_stints: pd.DataFrame,
+    bwar_bat: pd.DataFrame,
+) -> tuple[dict[str, float], Optional[pd.Series]]:
+    """
+    The target team's percentile in each cross-team metric, ranked against the
+    team-seasons of its ERA POOL (ingest.era_pool_seasons — finished seasons
+    plus its own), the same pool its player percentiles use. It used to rank
+    against every cached season, future ones included, so what 2019 was
+    compared with depended on what had been built on the machine.
+
+    Returns (metrics, the target team's raw row or None).
+    """
+    from ingest import era_pool_seasons
+    path = cross_team_path(season)
+    if path.exists():
+        cross = pd.read_csv(path)
     else:
-        pool = cross.reset_index()
+        cross = cross_team_rows(statcast, batting_full, season, bat_stints, bwar_bat,
+                                debut_seasons, est_service_time)
 
-    METRIC_MAP = [
-        ("iso_spread",        "ISO_spread_pct",        False),
-        ("xwoba_spread",      "wRCplus_spread_pct",    False),
-        ("pa_concentration",  "PA_concentration_pct",  False),
-        ("war_concentration", "WAR_concentration_pct", False),
-        ("war_variance",      "WAR_variance_inv_pct",  True),
-        ("roster_floor",      "RosterFloor_pct",       False),
-        ("avg_tenure",        "AvgTenure_inv_pct",     True),
-        ("avg_tenure",        "AvgTenure_pct",         False),
-        ("new_player_share",  "PreArbShare_pct",       False),  # pre-arb: EST < 3.0
-        ("veteran_share",     "FAShare_pct",           False),  # FA eligible: EST >= 6.0
-        ("arb_share",         "ArbShare_pct",          False),  # arb-eligible: 3.0 <= EST < 6.0
-        ("hr_fb",             "HR_FB_pct",             False),
-        ("team_hr",           "TeamHR_pct",            False),
-        ("team_slg",          "TeamSLG_pct",           False),
-        ("power_contributors","PowerContributors_pct", False),
-        ("team_barrel",       "TeamBarrel_pct",        False),
-        # A2 — Gap contact metrics
-        ("team_xb_rate",      "TeamXB_pct",            False),
-        ("team_gap_pct",      "TeamGap_pct",           False),
-    ]
+    frames = [cross.assign(pool_season=season)]
+    for other in era_pool_seasons(season):
+        p = cross_team_path(other)
+        if other != season and p.exists():
+            frames.append(pd.read_csv(p).assign(pool_season=other))
+    pool = pd.concat(frames, ignore_index=True)
 
+    cross = cross.set_index("team")
     out: dict[str, float] = {}
-    # Target team's current-season values (from the just-computed cross frame)
     if target_team not in cross.index:
         log.warning("Cross-team: target team %s not in current season cross frame", target_team)
-        return out
-
-    for col, key, invert in METRIC_MAP:
-        pool_col = pool[col] if col in pool.columns else None
-        if pool_col is None or pool_col.notna().sum() <= 1:
+        return out, None
+    for col, key, invert in _CROSS_TEAM_METRIC_MAP:
+        if col not in pool.columns or pool[col].notna().sum() <= 1:
             continue
-        target_val = cross.loc[target_team, col] if col in cross.columns else None
+        target_val = cross.loc[target_team, col]
         if target_val is None or (isinstance(target_val, float) and np.isnan(target_val)):
             continue
-        # Rank target_val against the full historical pool
-        pool_vals = pool_col.dropna()
+        pool_vals = pool[col].dropna()
         if invert:
             pct = float((pool_vals < target_val).sum() / len(pool_vals) * 100)
         else:
             pct = float((pool_vals <= target_val).sum() / len(pool_vals) * 100)
         out[key] = pct
 
-    log.info("Cross-team metrics — %d populated for %s (pool size: %d team-seasons)",
-             len(out), target_team, len(pool))
-    return out
+    log.info("Cross-team metrics — %d populated for %s (pool: %d team-seasons, %d seasons)",
+             len(out), target_team, len(pool), pool["pool_season"].nunique())
+    return out, cross.loc[target_team]
+
+
+# ---------------------------------------------------------------------------
+# Step 1c — Team stints: what this club got from each player
+# ---------------------------------------------------------------------------
+# The roster is everyone who appeared for the team. Each player's row keeps
+# the SEASON rates (one player, whichever uniform) but the workload, WAR and
+# deployment become this team's stint — the season totals
+# move to *_total fields. Soto 2022: 436 PA / 3.73 WAR on WSH and 228 / 1.74
+# on SD, "664 total" on both, instead of 664 PA and 5.47 WAR credited twice.
+#
+# Below MIN_HITTER_PA / MIN_PITCHER_BF with this team a player is listed
+# under `also_appeared` — on the roster, without tags or weight.
+
+def _col(frame: pd.DataFrame, *names: str) -> Optional[str]:
+    return next((c for c in names if c in frame.columns), None)
+
+
+def _season_teams(stints: pd.DataFrame, id_col: str, work: str) -> dict[int, list[str]]:
+    """{player: teams played for, most work first} — for players with 2+."""
+    multi = stints[stints.groupby(id_col)["team"].transform("nunique") > 1]
+    return {int(pid): grp.sort_values(work, ascending=False)["team"].tolist()
+            for pid, grp in multi.groupby(id_col)}
+
+
+def _team_stints_batting(rows: pd.DataFrame, stints: pd.DataFrame,
+                         war_stints: pd.DataFrame, team: str
+                         ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(qualified rows, also-appeared rows). PA/WAR become this team's."""
+    rows = rows.copy()
+    pa_col = _col(rows, "pa", "PA") or "pa"
+    war_col = _col(rows, "war", "WAR") or "war"
+    ids = rows["key_mlbam"].astype(int)
+    mine = stints[stints["team"] == team].set_index("batter")
+    rows["pa_total"] = pd.to_numeric(rows.get(pa_col), errors="coerce")
+    rows[pa_col] = ids.map(mine["pa"]).fillna(0).astype(int).values
+    rows["games_team"] = ids.map(mine["g"]).fillna(0).astype(int).values
+    rows["war_total"] = pd.to_numeric(rows.get(war_col), errors="coerce")
+    w = war_stints[war_stints["team"] == team].set_index("key_mlbam")["war"]
+    rows[war_col] = ids.map(w).values
+    teams = _season_teams(stints, "batter", "pa")
+    rows["season_teams"] = [teams.get(int(i)) for i in ids]
+    keep = rows[pa_col] >= MIN_HITTER_PA
+    return rows[keep], rows[~keep]
+
+
+def _team_stints_pitching(rows: pd.DataFrame, stints: pd.DataFrame,
+                          war_stints: pd.DataFrame, team: str
+                          ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(qualified rows, also-appeared rows). BF/G/GS/WAR and the deployment
+    inputs (same-hand share, leverage) become this team's."""
+    rows = rows.copy()
+    bf_col = _col(rows, "bf", "BF") or "bf"
+    g_col = _col(rows, "g", "G") or "g"
+    gs_col = _col(rows, "gs", "GS") or "gs"
+    war_col = _col(rows, "war", "WAR") or "war"
+    ids = rows["key_mlbam"].astype(int)
+    mine = stints[stints["team"] == team].set_index("pitcher")
+    for col, stint in ((bf_col, "bf"), (g_col, "g"), (gs_col, "gs")):
+        rows[f"{stint}_total"] = pd.to_numeric(rows.get(col), errors="coerce")
+        rows[col] = ids.map(mine[stint]).fillna(0).astype(int).values
+    rows["same_hand_bf_share_team"] = ids.map(mine["same_hand_bf_share"]).values
+    if "mean_abs_dwe" in mine.columns:
+        rows["leverage_team"] = ids.map(mine["mean_abs_dwe"]).values
+        rows["leverage_n_team"] = ids.map(mine["lev_n_pa"]).values
+    rows["war_total"] = pd.to_numeric(rows.get(war_col), errors="coerce")
+    w = war_stints[war_stints["team"] == team].set_index("key_mlbam")["war"]
+    rows[war_col] = ids.map(w).values
+    teams = _season_teams(stints, "pitcher", "bf")
+    rows["season_teams"] = [teams.get(int(i)) for i in ids]
+    keep = rows[bf_col] >= MIN_PITCHER_BF
+    return rows[keep], rows[~keep]
+
+
+def _also_appeared(bat: pd.DataFrame, pit: pd.DataFrame) -> list[dict]:
+    """Players under the minimum with this team: listed, never tagged or weighted."""
+    info = _get_player_info_map()
+    out = []
+    for frame, side, work, total in ((bat, "hitter", "pa", "pa_total"),
+                                     (pit, "pitcher", "bf", "bf_total")):
+        if frame.empty:
+            continue
+        wcol = _col(frame, work, work.upper())
+        for _, r in frame.iterrows():
+            pid = int(r["key_mlbam"])
+            n = int(r[wcol]) if wcol and not pd.isna(r[wcol]) else 0
+            if n <= 0:
+                continue
+            war = r.get("war", r.get("WAR"))
+            out.append(_jsonable({
+                "player_id": pid,
+                "name": info.get(pid, {}).get("name") or r.get("name"),
+                "side": side,
+                work: n,
+                total: r.get(total),
+                "war": war,
+                "season_teams": r.get("season_teams"),
+            }))
+    return sorted(out, key=lambda d: -(d.get("pa") or d.get("bf") or 0))
 
 
 # ---------------------------------------------------------------------------
@@ -779,10 +881,6 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
             - pd.to_numeric(team["SLG"], errors="coerce")
         )
 
-    metric_invert: dict[str, bool] = {
-        "K_pct":  True,   # lower K = better contact → invert
-    }
-
     # Metrics to rank: all BATTING_COL_MAP targets + derived OBP_SLG_gap
     metrics_to_rank = list(dict.fromkeys(BATTING_COL_MAP.values()))
     if "OBP_SLG_gap" in full.columns:
@@ -793,9 +891,9 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
             continue
         if metric not in team.columns:
             continue
-        invert = metric_invert.get(metric, False)
         col_name = f"{metric}_pct"
-        team[col_name] = _pool_rank(full[metric], team[metric], invert=invert)
+        team[col_name] = _pool_rank(full[metric], team[metric],
+                                    invert=BATTING_RANK_INVERT[metric])
 
     # K_pct_raw_pct: non-inverted K% percentile for TTO classifier
     # (K_pct_pct is inverted; TTO classifier needs raw strikeout rank)
@@ -831,22 +929,12 @@ def _normalize_pitching(pitching_pool: pd.DataFrame, team_pit: pd.DataFrame) -> 
     full = pitching_pool.rename(columns=PITCHING_COL_MAP)
     team = team_pit.rename(columns=PITCHING_COL_MAP).copy()
 
-    metric_invert: dict[str, bool] = {
-        "BB_pct_pitch":  True,
-        "xwOBA_allowed": True,
-        "FIP":           True,   # lower FIP = better
-        # HardHit_allowed and Barrel_allowed are NOT inverted here.
-        # Statcast already expresses them as "higher = better pitcher"
-        # (they invert hard-hit/barrel rate before ranking), so pool_rank
-        # with invert=False naturally gives higher pct = better suppressor.
-    }
-
     for metric in dict.fromkeys(PITCHING_COL_MAP.values()):
         if metric not in full.columns or metric not in team.columns:
             continue
-        invert = metric_invert.get(metric, False)
         col_name = f"{metric}_pct"
-        team[col_name] = _pool_rank(full[metric], team[metric], invert=invert)
+        team[col_name] = _pool_rank(full[metric], team[metric],
+                                    invert=PITCHING_RANK_INVERT[metric])
 
     return team
 
@@ -971,7 +1059,8 @@ def _classify_hitters(
         sb_ = _nz(row_.get("SB", 0))
         cs_ = _nz(row_.get("CS", 0))
         obp_= _nz(row_.get("OBP")) or _nz(row_.get("obp"))
-        pa_ = _nz(row_.get("PA")) or _nz(row_.get("pa"), 1)
+        # Season PA: SB/CS and OBP are season totals, so is the denominator.
+        pa_ = _nz(row_.get("pa_total")) or _nz(row_.get("PA")) or _nz(row_.get("pa"), 1)
         tob = obp_ * pa_
         if tob <= 0:
             return None
@@ -1030,18 +1119,32 @@ def _classify_hitters(
 
         # SB/CS — available from BRef merge; Savant-only falls back to 0
         obp_val = _nz(row.get("OBP")) or _nz(row.get("obp"))
-        pa_val  = _nz(row.get("PA")) or _nz(row.get("pa"), 1)
+        # Two workloads. pa_team: what THIS club got — the displayed PA, the
+        # team weight, the deployment gates. pa_total: the season, all teams —
+        # the sample the season-wide rates (and so every non-deployment tag's
+        # reliability gate) rest on.
+        pa_team  = int(_nz(row.get("PA")) or _nz(row.get("pa")))
+        pa_total = int(_nz(row.get("pa_total")) or pa_team)
+        pa_val   = float(pa_total or 1)
         profile: dict = {"player_id": int(player_id)}
         info = _get_player_info_map().get(int(player_id), {})
         profile["name"] = info.get("name")
         # Prefer DB age (BRef season-specific) over Chadwick today-computed age
         db_age = row.get("age") or row.get("Age")
         profile["age"]  = (int(db_age) if db_age is not None and not pd.isna(db_age) else None) or info.get("age")
-        profile["pa"]   = int(_nz(row.get("PA")) or _nz(row.get("pa")))
+        profile["pa"]   = pa_team
+        profile["pa_total"] = pa_total
         profile["home_position"] = ((positions_map or {}).get(int(player_id))
                                     or {}).get("home_position")
         war_raw = row.get("WAR_bat")
         profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
+        war_tot = row.get("war_total")
+        profile["war_total"] = float(war_tot) if war_tot is not None and not pd.isna(war_tot) else None
+        # Teams of a traded player, most PA first — the card says the tags'
+        # evidence is the full season across them.
+        teams = row.get("season_teams")
+        if isinstance(teams, list) and len(teams) > 1:
+            profile["season_teams"] = teams
 
         # ── Trait tags (archetype-replacement layer) ──────────────────────────
         # Season-pool gate overrides: _szn columns → hitter_traits gate keys
@@ -1066,7 +1169,8 @@ def _classify_hitters(
                 catching=(catcher_map or {}).get(int(player_id)),
                 advancement=(advancement_map or {}).get(int(player_id)),
                 positions=(positions_map or {}).get(int(player_id)),
-                pa=int(_nz(row.get("PA")) or _nz(row.get("pa"))),
+                pa=pa_total,
+                pa_team=pa_team,
             )
         except Exception as _ht_exc:
             log.warning("hitter traits failed for %s: %s", player_id, _ht_exc)
@@ -1089,7 +1193,8 @@ def _classify_hitters(
             "catching":         (catcher_map or {}).get(int(player_id)),
             "advancement":      (advancement_map or {}).get(int(player_id)),
             "positions":        (positions_map or {}).get(int(player_id)),
-            "pa":               int(_nz(row.get("PA")) or _nz(row.get("pa"))),
+            "pa":               pa_total,
+            "pa_team":          pa_team,
         })
 
         # Eligible-population membership — the denominator each tag is scored
@@ -1101,7 +1206,7 @@ def _classify_hitters(
             advancement=(advancement_map or {}).get(int(player_id)),
             splits=(split_map or {}).get(int(player_id)),
             positions=(positions_map or {}).get(int(player_id)),
-            pa=int(_nz(row.get("PA")) or _nz(row.get("pa"))),
+            pa=pa_total,
             metrics=metrics,
             attempt_rate_pct=att_pct,
             attempts=int(_nz(row.get("SB", 0))) + int(_nz(row.get("CS", 0))),
@@ -1111,8 +1216,7 @@ def _classify_hitters(
         # a reader needs to know "don't lean on this profile", not to audit
         # thirteen separate denominators. The per-tag gate has already run
         # inside build_hitter_traits.
-        profile["limited_sample"] = is_limited_sample(
-            int(_nz(row.get("PA")) or _nz(row.get("pa"))), LIMITED_SAMPLE_PA)
+        profile["limited_sample"] = is_limited_sample(pa_total, LIMITED_SAMPLE_PA)
 
         # Store curated percentile metrics for the interactive player chart.
         # Each raw_key is the exact key that _classify_hitters puts in `metrics`
@@ -1162,6 +1266,7 @@ def _classify_pitchers(
     tempo_map: Optional[dict[int, dict]] = None,
     runner_ctrl_map: Optional[dict[int, dict]] = None,
     league_sequencing: Optional[pd.DataFrame] = None,
+    pitch_stints: Optional[pd.DataFrame] = None,
 ) -> tuple[list[dict], dict]:
     """
     Classify starters individually (build_starter_profile per pitcher) and
@@ -1184,17 +1289,16 @@ def _classify_pitchers(
     bullpen_metrics_acc: list[dict[str, float]] = []
     bullpen_weights: list[float] = []
 
-    # ── Role pool thresholds — season-wide starter/reliever usage quantiles ──
-    # Computed once from the full league pitching table so "workhorse" means
-    # top-of-THE-LEAGUE workload, not top of this team's five starters.
+    # ── Role pool thresholds — league starter/reliever usage quantiles ──────
+    # Computed once so "workhorse" means top-of-THE-LEAGUE workload, not top
+    # of this team's five starters — and over player-TEAM stints, because the
+    # role tags are deployment: what one club did with the pitcher. Scherzer
+    # 2021 was 19 starts for WSH and 11 for LAD; the season's 30 made him a
+    # workhorse on both before.
     role_pool: dict[str, float] = {}
     try:
-        if pitching_full is not None and not pitching_full.empty:
-            lp = pitching_full.copy()
-            for c in ("bf", "g", "gs"):
-                if c in lp.columns:
-                    lp[c] = pd.to_numeric(lp[c], errors="coerce")
-            lp = lp[(lp.get("g", pd.Series(dtype=float)).fillna(0) > 0)]
+        if pitch_stints is not None and not pitch_stints.empty:
+            lp = pitch_stints[pitch_stints["g"].fillna(0) > 0].copy()
             lp["_is_starter"] = (lp["gs"].fillna(0) / lp["g"]) > 0.5
             sp_pool = lp[lp["_is_starter"]]
             rp_pool = lp[~lp["_is_starter"]]
@@ -1210,13 +1314,9 @@ def _classify_pitchers(
                 if len(qual) > 5:
                     role_pool["reliever_bfg_hi"] = float(
                         (qual["bf"] / qual["g"]).quantile(0.85))
-                # Leverage-exposure thresholds among relievers (min 80 PA)
-                if leverage_df is not None and not leverage_df.empty:
-                    lev = leverage_df.copy()
-                    lev["pitcher"] = pd.to_numeric(lev["pitcher"], errors="coerce")
-                    rel_ids = set(pd.to_numeric(rp_pool["key_mlbam"],
-                                                errors="coerce").dropna())
-                    rl = lev[lev["pitcher"].isin(rel_ids) & (lev["n_pa"] >= 80)]
+                # Leverage-exposure thresholds among reliever stints (min 80 PA)
+                if "mean_abs_dwe" in rp_pool.columns:
+                    rl = rp_pool[rp_pool["lev_n_pa"].fillna(0) >= 80]
                     if len(rl) > 10:
                         role_pool["reliever_lev_hi"] = float(
                             rl["mean_abs_dwe"].quantile(0.85))
@@ -1225,21 +1325,31 @@ def _classify_pitchers(
     except Exception as _rp_exc:
         log.warning("Role pool thresholds failed: %s", _rp_exc)
 
-    _lev_map: dict[int, float] = {}
-    if leverage_df is not None and not leverage_df.empty:
-        for r in leverage_df.itertuples():
-            if r.n_pa >= 80:
-                _lev_map[int(r.pitcher)] = float(r.mean_abs_dwe)
-
     for _, row in team_pit.iterrows():
         player_id = row.get("key_mlbam")
         if pd.isna(player_id):
             continue
         player_id = int(player_id)
 
+        # bf/g/gs: this team's stint (deployment, display, weight).
+        # bf_total: the season, all teams (the reliability gate's sample).
         bf = int(row.get(bf_col, 0) or 0) if bf_col else 0
         if bf < MIN_PITCHER_BF:
             continue
+        _bft = row.get("bf_total")
+        bf_total = int(_bft) if _bft is not None and not pd.isna(_bft) else bf
+        _wt = row.get("war_total")
+        war_total = float(_wt) if _wt is not None and not pd.isna(_wt) else None
+        _teams = row.get("season_teams")
+        season_teams = _teams if isinstance(_teams, list) and len(_teams) > 1 else None
+        # Leverage and same-hand share with THIS team (deployment).
+        _lev = row.get("leverage_team")
+        leverage = (float(_lev) if _lev is not None and not pd.isna(_lev)
+                    and (row.get("leverage_n_team") or 0) >= 80 else None)
+        splits = (pitcher_splits or {}).get(player_id)
+        _share = row.get("same_hand_bf_share_team")
+        if splits is not None and _share is not None and not pd.isna(_share):
+            splits = {**splits, "same_hand_bf_share": float(_share)}
 
         # Build metrics dict from _pct columns (strip trailing _pct for key names)
         metrics: dict[str, float] = {}
@@ -1277,9 +1387,8 @@ def _classify_pitchers(
             if old_key in metrics:
                 metrics[new_key] = metrics[old_key]
 
-        # hard_hit_pct / barrel_pct from Statcast are already "higher = better"
-        # (Statcast inverts before ranking: 100 = best at preventing hard contact).
-        # Use them directly — no double-inversion.
+        # HardHit_allowed_pct / Barrel_allowed_pct are already "higher =
+        # better" — ranked inverted in _normalize_pitching (PITCHING_RANK_INVERT).
         # K_inv_pct: P3 scoring uses low-K as a signal (ground-ball style, not strikeout).
         if "K_pct_pct" in metrics:
             metrics["K_inv_pct"] = 100.0 - metrics["K_pct_pct"]
@@ -1308,8 +1417,13 @@ def _classify_pitchers(
             _db_age = row.get("age")
             profile["age"]  = (int(_db_age) if _db_age is not None and not pd.isna(_db_age) else None) or info.get("age")
             profile["bf"]   = bf
+            profile["bf_total"] = bf_total
+            profile["g"], profile["gs"] = g, gs
             war_raw = row.get("WAR_pitch")
             profile["war"]  = float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None
+            profile["war_total"] = war_total
+            if season_teams:
+                profile["season_teams"] = season_teams
             try:
                 from pitcher_traits import build_pitcher_traits
                 profile["traits"] = build_pitcher_traits(
@@ -1318,10 +1432,11 @@ def _classify_pitchers(
                     arsenal_profile=profile.get("arsenal_profile"),
                     metrics=metrics,
                     bf=bf, g=g, gs=gs, is_starter=True, role_pool=role_pool,
-                    leverage=_lev_map.get(player_id),
-                    splits=(pitcher_splits or {}).get(player_id),
+                    leverage=leverage,
+                    splits=splits,
                     tempo=(tempo_map or {}).get(player_id),
                     runner_control=(runner_ctrl_map or {}).get(player_id),
+                    bf_total=bf_total,
                 )
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
@@ -1329,11 +1444,10 @@ def _classify_pitchers(
             profile["populations"] = _pitcher_populations(
                 player_id, True, league_mechanics,
                 tempo=(tempo_map or {}).get(player_id),
-                splits=(pitcher_splits or {}).get(player_id),
+                splits=splits,
                 runner_control=(runner_ctrl_map or {}).get(player_id),
             )
-            profile["limited_sample"] = is_limited_sample(
-                profile.get("bf"), LIMITED_SAMPLE_BF)
+            profile["limited_sample"] = is_limited_sample(bf_total, LIMITED_SAMPLE_BF)
             # See the hitter equivalent. The five league frames are stored as
             # this pitcher's row from each (pool_rows), not whole: the rows
             # already carry the league percentiles, and storing them makes a
@@ -1341,8 +1455,9 @@ def _classify_pitchers(
             profile["gate_inputs"] = _jsonable({
                 "metrics":        metrics,
                 "bf": bf, "g": g, "gs": gs, "is_starter": True,
-                "leverage":       _lev_map.get(player_id),
-                "splits":         (pitcher_splits or {}).get(player_id),
+                "bf_total":       bf_total,
+                "leverage":       leverage,
+                "splits":         splits,
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
                 "pool_rows":      _pool_rows(
@@ -1381,7 +1496,12 @@ def _classify_pitchers(
                 "age":       (int(row.get("age")) if row.get("age") is not None and not pd.isna(row.get("age")) else None) or info.get("age"),
                 "handedness": ((pitcher_splits or {}).get(player_id) or {}).get("p_throws"),
                 "bf":        bf,
+                "bf_total":  bf_total,
+                "g":         g,
+                "gs":        gs,
                 "war":       float(war_raw) if war_raw is not None and not pd.isna(war_raw) else None,
+                "war_total": war_total,
+                **({"season_teams": season_teams} if season_teams else {}),
                 "metrics_pct": {
                     k: metrics[k] for k in _PITCHER_DISPLAY_KEYS if k in metrics
                 },
@@ -1411,10 +1531,11 @@ def _classify_pitchers(
                     arsenal_profile=_bp_arsenal,
                     metrics=metrics,
                     bf=bf, g=g, gs=gs, is_starter=False, role_pool=role_pool,
-                    leverage=_lev_map.get(player_id),
-                    splits=(pitcher_splits or {}).get(player_id),
+                    leverage=leverage,
+                    splits=splits,
                     tempo=(tempo_map or {}).get(player_id),
                     runner_control=(runner_ctrl_map or {}).get(player_id),
+                    bf_total=bf_total,
                 )
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
@@ -1422,16 +1543,16 @@ def _classify_pitchers(
             bullpen_arms[-1]["populations"] = _pitcher_populations(
                 player_id, False, league_mechanics,
                 tempo=(tempo_map or {}).get(player_id),
-                splits=(pitcher_splits or {}).get(player_id),
+                splits=splits,
                 runner_control=(runner_ctrl_map or {}).get(player_id),
             )
-            bullpen_arms[-1]["limited_sample"] = is_limited_sample(
-                bullpen_arms[-1].get("bf"), LIMITED_SAMPLE_BF)
+            bullpen_arms[-1]["limited_sample"] = is_limited_sample(bf_total, LIMITED_SAMPLE_BF)
             bullpen_arms[-1]["gate_inputs"] = _jsonable({
                 "metrics":        metrics,
                 "bf": bf, "g": g, "gs": gs, "is_starter": False,
-                "leverage":       _lev_map.get(player_id),
-                "splits":         (pitcher_splits or {}).get(player_id),
+                "bf_total":       bf_total,
+                "leverage":       leverage,
+                "splits":         splits,
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
                 "pool_rows":      _pool_rows(
@@ -2314,18 +2435,29 @@ _GATE_FINGERPRINT_CACHE: Optional[str] = None
 # is a pure function of these roots, and both are created lazily mid-build,
 # which is what used to move the fingerprint under a running rebuild and force
 # a second pass.
-_FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv")
+# The cross-team rows of every era-pool season are what the team-construction
+# percentiles rank against, so they are pool files exactly like the fg roots.
+_FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
+                           "cross_team_metrics_v2_{s}.csv")
 
 # Pools that live outside PROCESSED_DIR, hashed for the portrait's own season.
 # tunneling.py writes tunnel_league_{s}.parquet into modules/processed; left
 # out, a change to how tunnel_score is computed could not move the fingerprint
 # and every portrait kept a `tunneler` tag cut by the old maths.
-_FINGERPRINT_EXTRA_POOLS = (
-    (Path(__file__).resolve().parent / "processed", "tunnel_league_{s}.parquet"),
-    # Same failure for spin: the `high spin efficiency` tag and the
-    # SpinEfficiency_pct archetype input read this pool.
-    (Path(__file__).resolve().parent / "processed", "spin_league_{s}.parquet"),
-)
+#
+# Pitch mix, plate discipline, mechanics and sequencing were missing for the
+# same reason, and had no rebuild either: a portrait cut from a 93-day-old
+# pitch mix still matched the fingerprint.
+# refresh.stage_league rebuilds all six when Statcast moves.
+_LEAGUE_DIR = Path(__file__).resolve().parent / "processed"
+_FINGERPRINT_EXTRA_POOLS = tuple((_LEAGUE_DIR, pat) for pat in (
+    "tunnel_league_{s}.parquet",
+    "pitch_mix_{s}.parquet",
+    "spin_league_{s}.parquet",   # `high spin efficiency`, SpinEfficiency_pct
+    "plate_discipline_league_{s}.parquet",
+    "mechanics_league_{s}.parquet",
+    "sequencing_league_{s}.parquet",
+))
 
 
 def _jsonable(obj):
@@ -2436,8 +2568,11 @@ def _gate_digest() -> str:
             val = getattr(mod, name)
             if isinstance(val, (int, float, str, bool, dict, list, tuple, set, frozenset)):
                 items.append(f"{mod.__name__}.{name}={_stable_repr(val)}")
-    # Vocabulary axes defined in this module.
-    for name in ("TAG_POPULATION", "TAG_KIND", "TAG_KINDS", "TAG_EXCLUSIVE_GROUPS"):
+    # Vocabulary axes and rank directions defined in this module. A direction
+    # flip changes every tag cut from that metric's percentile.
+    for name in ("TAG_POPULATION", "TAG_KIND", "TAG_KINDS", "TAG_EXCLUSIVE_GROUPS",
+                 "BATTING_RANK_INVERT", "PITCHING_RANK_INVERT",
+                 "MIN_HITTER_PA", "MIN_PITCHER_BF"):
         items.append(f"team_portrait.{name}={_stable_repr(globals()[name])}")
     return "|".join(items)
 
@@ -2776,6 +2911,63 @@ def _build_team_identity(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _load_season_players(season: int):
+    """
+    (batting_full, pitching_full, bwar_bat, bwar_pitch) for one season.
+
+    batting_full / pitching_full hold SEASON TOTALS, one row per player — what
+    the player did, all teams together; their `war` is the season sum. The
+    bwar frames keep one row per team stint (ingest.pull_bwar) for what each
+    team got.
+    """
+    if season_batting_seeded(season):
+        log.info("Loading season %d from Supabase", season)
+        batting_full  = query_batting(season)
+        pitching_full = query_pitching(season)
+        _sprint_speed_is_raw = True   # DB stores raw ft/sec after re-seeding
+    else:
+        log.info("Season %d not in Supabase — pulling from BRef/Savant", season)
+        batting_full  = pull_fg_batting(season)
+        pitching_full = pull_fg_pitching(season)
+        _sprint_speed_is_raw = False  # Savant CSV stores percentile rank (0-100)
+
+    # Ensure key_mlbam column exists (Savant fallback uses player_id)
+    for df_obj in [batting_full, pitching_full]:
+        if "key_mlbam" not in df_obj.columns and "player_id" in df_obj.columns:
+            df_obj.rename(columns={"player_id": "key_mlbam"}, inplace=True)
+
+    batting_full["key_mlbam"]  = pd.to_numeric(batting_full.get("key_mlbam"),  errors="coerce")
+    pitching_full["key_mlbam"] = pd.to_numeric(pitching_full.get("key_mlbam"), errors="coerce")
+
+    # When batting_full comes from the Savant CSV (non-seeded season), sprint_speed
+    # is a Statcast percentile rank (0-100). compute_speed_tier expects raw ft/sec.
+    # Null it out so _classify_hitters skips speed tier rather than producing garbage.
+    if not _sprint_speed_is_raw and "sprint_speed" in batting_full.columns:
+        log.info("Non-seeded season — nulling sprint_speed (percentile rank, not ft/sec)")
+        batting_full["sprint_speed"] = np.nan
+
+    # Merge bWAR season totals into batting_full / pitching_full — overrides
+    # the empty DB war column. The per-team stints are returned alongside.
+    bwar_bat = pd.DataFrame(columns=["key_mlbam", "team", "war"])
+    bwar_pitch = pd.DataFrame(columns=["key_mlbam", "team", "war"])
+    try:
+        bwar_bat, bwar_pitch = pull_bwar(season)
+        for frame, side in ((bwar_bat, "batting"), (bwar_pitch, "pitching")):
+            if frame.empty:
+                continue
+            frame["key_mlbam"] = pd.to_numeric(frame["key_mlbam"], errors="coerce")
+            total = frame.groupby("key_mlbam", as_index=False)["war"].sum()
+            if side == "batting":
+                batting_full = batting_full.drop(columns=["war"], errors="ignore").merge(
+                    total, on="key_mlbam", how="left")
+            else:
+                pitching_full = pitching_full.drop(columns=["war"], errors="ignore").merge(
+                    total, on="key_mlbam", how="left")
+    except Exception as exc:
+        log.warning("bWAR merge failed: %s", exc)
+    return batting_full, pitching_full, bwar_bat, bwar_pitch
+
+
 def build_team_portrait(
     team: str,
     season: int,
@@ -2816,49 +3008,7 @@ def build_team_portrait(
 
     # ── 3. Load and normalize player aggregates ───────────────────────────
     # current-season pool: used for team filtering and cross-team metrics
-    if season_batting_seeded(season):
-        log.info("Loading season %d from Supabase", season)
-        batting_full  = query_batting(season)
-        pitching_full = query_pitching(season)
-        _sprint_speed_is_raw = True   # DB stores raw ft/sec after re-seeding
-    else:
-        log.info("Season %d not in Supabase — pulling from BRef/Savant", season)
-        batting_full  = pull_fg_batting(season)
-        pitching_full = pull_fg_pitching(season)
-        _sprint_speed_is_raw = False  # Savant CSV stores percentile rank (0-100)
-
-    # Ensure key_mlbam column exists (Savant fallback uses player_id)
-    for df_obj in [batting_full, pitching_full]:
-        if "key_mlbam" not in df_obj.columns and "player_id" in df_obj.columns:
-            df_obj.rename(columns={"player_id": "key_mlbam"}, inplace=True)
-
-    batting_full["key_mlbam"]  = pd.to_numeric(batting_full.get("key_mlbam"),  errors="coerce")
-    pitching_full["key_mlbam"] = pd.to_numeric(pitching_full.get("key_mlbam"), errors="coerce")
-
-    # When batting_full comes from the Savant CSV (non-seeded season), sprint_speed
-    # is a Statcast percentile rank (0-100). compute_speed_tier expects raw ft/sec.
-    # Null it out so _classify_hitters skips speed tier rather than producing garbage.
-    if not _sprint_speed_is_raw and "sprint_speed" in batting_full.columns:
-        log.info("Non-seeded season — nulling sprint_speed (percentile rank, not ft/sec)")
-        batting_full["sprint_speed"] = np.nan
-
-    # Merge bWAR into batting_full / pitching_full — overrides the empty DB war column
-    try:
-        bwar_bat, bwar_pitch = pull_bwar(season)
-        if not bwar_bat.empty:
-            bwar_bat["key_mlbam"] = pd.to_numeric(bwar_bat["key_mlbam"], errors="coerce")
-            batting_full = batting_full.drop(columns=["war"], errors="ignore").merge(
-                bwar_bat.rename(columns={"war": "war"}), on="key_mlbam", how="left"
-            )
-            log.info("bWAR merged into batting_full — %d players have WAR", batting_full["war"].notna().sum())
-        if not bwar_pitch.empty:
-            bwar_pitch["key_mlbam"] = pd.to_numeric(bwar_pitch["key_mlbam"], errors="coerce")
-            pitching_full = pitching_full.drop(columns=["war"], errors="ignore").merge(
-                bwar_pitch.rename(columns={"war": "war"}), on="key_mlbam", how="left"
-            )
-            log.info("bWAR merged into pitching_full — %d pitchers have WAR", pitching_full["war"].notna().sum())
-    except Exception as exc:
-        log.warning("bWAR merge failed: %s", exc)
+    batting_full, pitching_full, bwar_bat, bwar_pitch = _load_season_players(season)
 
     # ── 3c. Spray chart stats from Statcast hc_x / hc_y ─────────────────────
     # Computed once for the full season and merged into batting_full so that
@@ -2956,8 +3106,13 @@ def build_team_portrait(
         batting_pool  = batting_full
         pitching_pool = pitching_full
 
-    team_bat_raw = batting_full[batting_full["key_mlbam"].isin(hitter_ids)].copy()
-    team_pit_raw = pitching_full[pitching_full["key_mlbam"].isin(pitcher_ids)].copy()
+    from pitch_aggregates import compute_stints
+    bat_stints, pit_stints = compute_stints(statcast, season)
+    team_bat_raw, _bat_cameos = _team_stints_batting(
+        batting_full[batting_full["key_mlbam"].isin(hitter_ids)], bat_stints, bwar_bat, team)
+    team_pit_raw, _pit_cameos = _team_stints_pitching(
+        pitching_full[pitching_full["key_mlbam"].isin(pitcher_ids)], pit_stints, bwar_pitch, team)
+    also_appeared = _also_appeared(_bat_cameos, _pit_cameos)
 
     # Normalize against multi-season historical pool
     team_bat = _normalize_batting(batting_pool,  team_bat_raw)
@@ -3003,7 +3158,6 @@ def build_team_portrait(
         ("hard_hit_percent", "HardHit_pct", False),
         ("gb_pct",       "BatGB_pct",  False),  # batter GB% (air/ground tags)
         ("sprint_speed", "SprintSpeed", False),  # station-to-station gate
-        ("pa",           "PAvol",      False),   # everyday-player gate
         ("swing_discrim","SwingDiscrim", False), # zone-hunter gate
     ]
     def _first_col(frame: pd.DataFrame, col: str) -> Optional[pd.Series]:
@@ -3029,6 +3183,18 @@ def build_team_portrait(
                     pool_series, team_series, invert=invert).values
         except Exception as exc:
             log.warning("Season-pool rank failed for %s: %s", key, exc)
+
+    # PAvol_szn — the `everyday player` gate. A deployment tag, so it ranks
+    # what THIS team gave the player (stint PA) against every player-team
+    # stint in the league, not the season total: a regular traded in July is
+    # an everyday player for neither club's full season, and a club that
+    # had the player for 25 games did not make an everyday player of them.
+    try:
+        _pa_col = _col(team_bat_raw, "pa", "PA")
+        team_bat["PAvol_szn"] = _pool_rank(
+            bat_stints["pa"], pd.to_numeric(team_bat_raw[_pa_col], errors="coerce")).values
+    except Exception as exc:
+        log.warning("Stint PA rank failed: %s", exc)
 
     # LuckDelta_szn — the query_batting frame lacks the Savant luck column,
     # but the history pool carries it. Filter the pool to THIS season (the
@@ -3151,30 +3317,27 @@ def build_team_portrait(
     _power_source_ratio: Optional[float] = None
     _roster_ctrl: dict = {}
     try:
-        debut_seasons    = query_debut_seasons()
-        all_hitter_ids   = list({int(p) for ids in _all_team_hitter_ids(statcast).values() for p in ids})
-        est_service_time = query_estimated_service_time(all_hitter_ids, season)
-        cross_team = _compute_cross_team_metrics(statcast, batting_full, team, season,
-                                                 debut_seasons, est_service_time)
-        # Extract raw power_source_ratio for the target team from the cross frame
-        # (it's display metadata — stored in team_metrics, not scored)
-        _ps_cache = PROCESSED_DIR / f"cross_team_metrics_{season}.csv"
-        _roster_ctrl: dict[str, Optional[float]] = {}
-        if _ps_cache.exists():
-            _ct_df = pd.read_csv(_ps_cache)
-            _row = _ct_df[_ct_df["team"] == team]
-            if not _row.empty and "power_source_ratio" in _ct_df.columns:
-                _power_source_ratio = float(_row["power_source_ratio"].iloc[0])
-            # Raw roster-control shares — stored for display (not scored)
+        debut_seasons, est_service_time = {}, {}
+        if not cross_team_path(season).exists():
+            debut_seasons    = query_debut_seasons()
+            all_hitter_ids   = [int(p) for p in bat_stints["batter"].unique()]
+            est_service_time = query_estimated_service_time(all_hitter_ids, season)
+        cross_team, _row = _compute_cross_team_metrics(
+            statcast, batting_full, team, season, debut_seasons, est_service_time,
+            bat_stints, bwar_bat)
+        # Raw values for display (not scored): power_source_ratio and the
+        # roster-control shares.
+        if _row is not None:
+            _v = _row.get("power_source_ratio")
+            _power_source_ratio = None if _v is None or pd.isna(_v) else float(_v)
             for _rc_col, _rc_key in [
                 ("new_player_share", "pre_arb"),
                 ("arb_share",        "arb"),
                 ("veteran_share",    "fa_eligible"),
                 ("avg_tenure",       "avg_tenure"),
             ]:
-                if _rc_col in _ct_df.columns and not _row.empty:
-                    _v = _row[_rc_col].iloc[0]
-                    _roster_ctrl[_rc_key] = None if pd.isna(_v) else float(_v)
+                _v = _row.get(_rc_col)
+                _roster_ctrl[_rc_key] = None if _v is None or pd.isna(_v) else float(_v)
     except Exception as exc:
         log.warning("Cross-team metrics failed: %s", exc)
 
@@ -3248,20 +3411,16 @@ def build_team_portrait(
             tun_df = tun_pitcher_level.copy()
             if "pitcher" in tun_df.columns and "tunnel_score_pct" in tun_df.columns:
                 tun_df["pitcher"] = tun_df["pitcher"].astype(int)
-                # Attempt BF join
+                # BF weights: this team's stint BF. team_pit is keyed by
+                # key_mlbam (renamed BF), never "pitcher", so this join used to
+                # find nothing and every pitcher weighed 1.0.
                 bf_map: dict[int, float] = {}
-                if "pitcher" in team_pit.columns and "BF" in team_pit.columns:
+                _bfc = _col(team_pit, "BF", "bf")
+                if _bfc:
                     for _, row in team_pit.iterrows():
-                        pid = int(row["pitcher"]) if not pd.isna(row.get("pitcher", np.nan)) else None
-                        bf  = float(row["BF"])    if not pd.isna(row.get("BF",      np.nan)) else None
-                        if pid and bf:
-                            bf_map[pid] = bf
-                elif "pitcher" in team_pit.columns and "bf" in team_pit.columns:
-                    for _, row in team_pit.iterrows():
-                        pid = int(row["pitcher"]) if not pd.isna(row.get("pitcher", np.nan)) else None
-                        bf  = float(row["bf"])    if not pd.isna(row.get("bf",      np.nan)) else None
-                        if pid and bf:
-                            bf_map[pid] = bf
+                        pid, bf = row.get("key_mlbam"), row.get(_bfc)
+                        if not pd.isna(pid) and bf is not None and not pd.isna(bf) and bf:
+                            bf_map[int(pid)] = float(bf)
 
                 tun_df["_weight"] = tun_df["pitcher"].map(bf_map).fillna(1.0)
                 valid = tun_df["tunnel_score_pct"].notna()
@@ -3361,7 +3520,10 @@ def build_team_portrait(
                     "first_to_third_n": int(r.first_to_third_n),
                     "first_to_third_opps": int(r.first_to_third_opps),
                 }
+        # Positions THIS team played the player at (`super-utility` is a
+        # deployment tag; home_position is shown on this team's card).
         _pos = compute_position_appearances(statcast, season)
+        _pos = _pos[_pos["team"] == team]
         for r in _pos.itertuples():
             _positions_map[int(r.key_mlbam)] = {
                 "home_position": r.home_position,
@@ -3486,6 +3648,7 @@ def build_team_portrait(
         leverage_df=_leverage_df,
         tempo_map=_tempo_map, runner_ctrl_map=_runner_ctrl_map,
         league_sequencing=_league_seq,
+        pitch_stints=pit_stints,
     )
 
     # ── 14. Data coverage ─────────────────────────────────────────────────
@@ -3531,9 +3694,13 @@ def build_team_portrait(
     # ── 15. Spray chart data ──────────────────────────────────────────────
     spray_data: dict = {}
     try:
-        HP_X, HP_Y = 126.0, 203.0
+        from pitch_aggregates import pull_angle, spray_angle, spray_zone
+        # This team's balls in play only: selecting by batter alone gave a
+        # traded hitter's balls for another club to both teams' charts.
+        bat_team = np.where(statcast["inning_topbot"] == "Top",
+                            statcast["away_team"], statcast["home_team"])
         team_bip = statcast[
-            statcast["batter"].isin(hitter_ids) &
+            (bat_team == team) & statcast["batter"].isin(hitter_ids) &
             statcast["hc_x"].notna() & statcast["hc_y"].notna()
         ].copy()
 
@@ -3545,45 +3712,23 @@ def build_team_portrait(
             return "out"
 
         team_bip["_bucket"] = team_bip["events"].fillna("out").apply(_event_bucket)
-        team_bip["_angle"]  = np.degrees(np.arctan2(
-            team_bip["hc_x"].astype(float) - HP_X,
-            HP_Y - team_bip["hc_y"].astype(float),
-        ))
         n_bip = len(team_bip)
-        rh = (team_bip.get("stand", pd.Series("R", index=team_bip.index)) == "R")
-        lh = ~rh
-        a  = team_bip["_angle"]
 
-        # 5 field-location zones — Pull/Oppo flip by handedness,
-        # LC Gap / Center / RC Gap are absolute field locations.
-        # Boundary: 45° separates extreme pull/oppo from the gap zones.
-        pull_mask   = (rh & (a >  45)) | (lh & (a < -45))   # pull side (RF for RHH, LF for LHH)
-        rc_gap_mask = a.between(20, 45)                        # right-center gap (absolute)
-        center_mask = a.abs() < 20                             # up the middle
-        lc_gap_mask = a.between(-45, -20)                      # left-center gap (absolute)
-        oppo_mask   = (rh & (a < -45)) | (lh & (a >  45))   # oppo side (LF for RHH, RF for LHH)
+        # Five zones, all handedness-aware (pitch_aggregates.spray_zone):
+        # pull line, pull gap, center, oppo gap, oppo line. The chart used to
+        # mix pull/oppo with ABSOLUTE left/right gaps, which cannot be summed
+        # across a lineup of both hands, and had pull and oppo reversed.
+        SPRAY_ZONES = ("pull_line", "pull_gap", "center", "oppo_gap", "oppo_line")
 
-        def _zone_pct(mask):
-            return float(mask.sum() / n_bip) if n_bip else 0.0
+        def _zone_shares(frame: pd.DataFrame) -> dict[str, float]:
+            z = spray_zone(pull_angle(spray_angle(frame["hc_x"], frame["hc_y"]),
+                                      frame["stand"]))
+            n = int(z.notna().sum())
+            return {k: (float((z == k).sum() / n) if n else 0.0) for k in SPRAY_ZONES}
 
+        team_zones = _zone_shares(team_bip)
         # League-wide directional averages (all batters this season)
-        lg_bip = statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()].copy()
-        lg_n   = len(lg_bip)
-        if lg_n > 0:
-            lg_bip["_angle"] = np.degrees(np.arctan2(
-                lg_bip["hc_x"].astype(float) - HP_X,
-                HP_Y - lg_bip["hc_y"].astype(float),
-            ))
-            lg_rh = (lg_bip.get("stand", pd.Series("R", index=lg_bip.index)) == "R")
-            lg_lh = ~lg_rh
-            la    = lg_bip["_angle"]
-            lg_pull   = float(((lg_rh & (la >  45)) | (lg_lh & (la < -45))).sum() / lg_n)
-            lg_rc_gap = float(la.between(20, 45).sum() / lg_n)
-            lg_center = float((la.abs() < 20).sum() / lg_n)
-            lg_lc_gap = float(la.between(-45, -20).sum() / lg_n)
-            lg_oppo   = float(((lg_rh & (la < -45)) | (lg_lh & (la >  45))).sum() / lg_n)
-        else:
-            lg_pull = lg_rc_gap = lg_center = lg_lc_gap = lg_oppo = 0.20
+        lg_zones = _zone_shares(statcast[statcast["hc_x"].notna() & statcast["hc_y"].notna()])
 
         hr_n     = int((team_bip["_bucket"] == "hr").sum())
         double_n = int((team_bip["_bucket"] == "double").sum())
@@ -3613,16 +3758,8 @@ def build_team_portrait(
             log.warning("Spray sidecar write failed: %s", _sp_exc)
 
         spray_data = {
-            "pull_pct":    _zone_pct(pull_mask),
-            "rc_gap_pct":  _zone_pct(rc_gap_mask),
-            "center_pct":  _zone_pct(center_mask),
-            "lc_gap_pct":  _zone_pct(lc_gap_mask),
-            "oppo_pct":    _zone_pct(oppo_mask),
-            "lg_pull_pct":    lg_pull,
-            "lg_rc_gap_pct":  lg_rc_gap,
-            "lg_center_pct":  lg_center,
-            "lg_lc_gap_pct":  lg_lc_gap,
-            "lg_oppo_pct":    lg_oppo,
+            **{f"{k}_pct": v for k, v in team_zones.items()},
+            **{f"lg_{k}_pct": v for k, v in lg_zones.items()},
             "hr_count":     hr_n,
             "xbh_count":    xbh_n,
             "double_count": double_n,
@@ -3660,10 +3797,14 @@ def build_team_portrait(
         "gate_fingerprint":  gate_fingerprint(),
         "team":   team,
         "season": season,
+        # Everyone who appeared for this team, most work with the team first.
+        # Under MIN_HITTER_PA / MIN_PITCHER_BF a player is in also_appeared:
+        # on the roster, without tags or weight.
         "players": {
-            "hitters":      hitter_profiles,
-            "starters":     starters,
-            "bullpen_arms": bullpen_arms,
+            "hitters":      sorted(hitter_profiles, key=lambda p: -(p.get("pa") or 0)),
+            "starters":     sorted(starters, key=lambda p: -(p.get("bf") or 0)),
+            "bullpen_arms": sorted(bullpen_arms, key=lambda p: -(p.get("bf") or 0)),
+            "also_appeared": also_appeared,
         },
         # Team-level collective (scores/out-mechanism/leverage-structure) —
         # lives beside the other team-level rollups, not inside players.

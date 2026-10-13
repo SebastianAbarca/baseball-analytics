@@ -941,15 +941,22 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
         # Bats/throws as a marker on the name — the fact a reader wants while
         # looking at a platoon tag, without a column of its own.
         hand = _handedness_mark(groups.get("attribute") or [], is_pitcher)
+        # A traded player's tags rest on the full season with every club;
+        # the workload and WAR beside them are this team's stint.
+        teams = p.get("season_teams") or []
+        traded = (html.Div(f"full season: {' + '.join(teams)}", style={
+            "color": COLORS["subtext"], "fontSize": "0.6rem"})
+            if len(teams) > 1 else None)
+        work, work_total = p.get(meta["weight"]), p.get(f"{meta['weight']}_total")
         cells = [
             td(html.Span([
                 html.Span(name, style={"color": dim, "fontWeight": "700"}),
-                hand,
+                hand, traded,
             ]), size="0.78rem"),
             td(str(slot) if slot not in (None, "") else "—",
                align="center", color=COLORS["subtext"]),
-            td(str(p.get(meta["weight"]) or "—"), align="right", color=dim),
-            td(f"{war:+.1f}" if war is not None else "—", align="right"),
+            td(_with_total(work, work_total, "{:,.0f}"), align="right", color=dim),
+            td(_with_total(war, p.get("war_total"), "{:+.1f}"), align="right"),
         ]
         if is_pitcher:
             cells.append(td(_arsenal_cell(p, season)))
@@ -964,6 +971,26 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
                 html.Span("·", style={"color": COLORS["border"]})))
         body.append(html.Tr(cells, style={"opacity": "0.7" if limited else "1"}))
 
+    # Everyone who appeared is on the roster: players under the minimum with
+    # this team close the last page, folded, without tags. Pitchers have no
+    # starter/reliever role at that size, so they close the bullpen.
+    cameo_side = {"hitters": "hitter", "bullpen_arms": "pitcher"}.get(unit)
+    cameos = [a for a in (portrait.get("players") or {}).get("also_appeared") or []
+              if a.get("side") == cameo_side]
+    if cameos and page == n_pages - 1:
+        unit_word = "PA" if cameo_side == "hitter" else "BF"
+        floor = 30 if cameo_side == "hitter" else 20
+        items = ", ".join(
+            f"{(a.get('name') or 'ID ' + str(a.get('player_id'))).strip()} "
+            f"{a.get(meta['weight']) or 0}" for a in cameos)
+        body.append(html.Tr(html.Td(html.Details([
+            html.Summary(f"Also appeared ({len(cameos)}) — under {floor} {unit_word} "
+                         "with the team: on the roster, no tags, no weight",
+                         style={"cursor": "pointer"}),
+            html.Div(items, style={"paddingTop": "4px"}),
+        ]), colSpan=4 + (1 if is_pitcher else 0) + len(shown_kinds), style={
+            "padding": "6px", "fontSize": "0.66rem", "color": COLORS["subtext"]})))
+
     table = html.Table([
         html.Thead(html.Tr(
             [th("Player", "12%" if is_pitcher else "13%"),
@@ -976,6 +1003,19 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
     ], style={"width": "100%", "borderCollapse": "collapse",
               "tableLayout": "fixed"})
     return table, page, n_pages
+
+
+def _with_total(value, total, fmt: str):
+    """This team's number, with the season total under it when they differ
+    (a traded player): "436" over "664 total"."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "—"
+    main = fmt.format(value)
+    if total is None or (isinstance(total, float) and np.isnan(total)) \
+            or round(float(total), 1) == round(float(value), 1):
+        return main
+    return html.Span([main, html.Div(f"{fmt.format(total)} total", style={
+        "color": COLORS["subtext"], "fontSize": "0.6rem"})])
 
 
 def hitter_roster_card(portrait: dict):
@@ -2501,8 +2541,9 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         horizontal_spacing=0.08,
     )
 
-    # ── Field geometry (Statcast coords: HP≈(126,203), CF≈(126,15)) ──────────
-    HP_X, HP_Y = 126.0, 203.0
+    # ── Field geometry (Statcast coords; same home plate as the zone shares,
+    # pitch_aggregates.SPRAY_HOME_X/Y) ─────────────────────────────────────
+    HP_X, HP_Y = 125.42, 198.27
 
     # Outfield arc (approx fence at 300–350 Statcast units from HP)
     arc_angles = [a for a in range(-45, 46)]
@@ -2608,14 +2649,15 @@ def team_spray_heatmap(portrait: dict) -> go.Figure:
         hoverinfo="skip", showlegend=False,
     ), row=1, col=1)
 
-    # ── Directional split bars (5 field-location zones) ──────────────────────
-    # Pull/Oppo are handedness-aware; LC Gap, Center, RC Gap are absolute field locations.
+    # ── Directional split bars (5 zones, all relative to the batter) ─────────
+    # pitch_aggregates.spray_zone: pull line, pull gap, center, oppo gap, oppo
+    # line — split at 15° and 30° toward each side of the batter.
     DIRS = [
-        ("Pull",    "pull"),
-        ("RC Gap",  "rc_gap"),
-        ("Center",  "center"),
-        ("LC Gap",  "lc_gap"),
-        ("Oppo",    "oppo"),
+        ("Pull line", "pull_line"),
+        ("Pull gap",  "pull_gap"),
+        ("Center",    "center"),
+        ("Oppo gap",  "oppo_gap"),
+        ("Oppo line", "oppo_line"),
     ]
     dirs      = [label for label, _ in DIRS]
     team_vals = [spray.get(f"{key}_pct", 0) * 100 for _, key in DIRS]

@@ -67,7 +67,8 @@ P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 # P3 — Ground Ball Craftsman: min thresholds + K% CEILING
 # GB floor lowered to 35 to capture command-based contact managers (finesse types)
 # who have below-average-but-not-extreme ground-ball rates.
-# HardHit_allowed_pct is already Statcast-inverted (higher = better suppressor);
+# HardHit_allowed_pct is ranked inverted (higher = better suppressor; see
+# team_portrait.PITCHING_RANK_INVERT);
 # it drives the score rather than a binary ceiling gate.
 P3_MIN      = {"GB_pct_pct": 35.0}
 P3_K_CEILING = 65.0   # K_pct_pct must be AT OR BELOW — GB craftsmen are not K pitchers
@@ -205,7 +206,7 @@ def _score_p1(metrics: dict[str, float]) -> Optional[float]:
         "K_pct_pct":            0.25,
         "SwStr_pct_pct":        0.20,
         "CSW_pct_pct":          0.15,
-        "HardHit_allowed_pct":  0.10,  # Statcast rank: higher = better at preventing hard contact
+        "HardHit_allowed_pct":  0.10,  # inverted rank: higher = better at preventing hard contact
     }
     score, _ = _weighted_score(metrics, weights)
     return score
@@ -294,8 +295,8 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
 def _score_p3(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "GB_pct_pct":          0.35,
-        "HardHit_allowed_pct": 0.25,  # Statcast rank: higher = better at preventing hard contact
-        "Barrel_allowed_pct":  0.20,  # Statcast rank: higher = better at preventing barrels
+        "HardHit_allowed_pct": 0.25,  # inverted rank: higher = better at preventing hard contact
+        "Barrel_allowed_pct":  0.20,  # inverted rank: higher = better at preventing barrels
         "BB_pct_pct":          0.10,  # (already inverted: higher = fewer walks)
         "K_inv_pct":           0.10,  # (100 - K_pct_pct) — low K confirms GB type
     }
@@ -307,7 +308,7 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
     """
     Ground Ball Craftsman — GB% >= 40th, K% <= 65th.
 
-    HardHit_allowed_pct is Statcast's already-inverted rank (higher = better at
+    HardHit_allowed_pct is an inverted rank of hard-hit rate allowed (higher = better at
     preventing hard contact).  We use it directly in scoring rather than gating
     on a ceiling — the scoring naturally rewards strong contact suppression.
 
@@ -353,9 +354,9 @@ def _score_p4(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "avg_velo_pct":        0.25,
         "GB_pct_pct":          0.25,
-        "HardHit_allowed_pct": 0.25,  # Statcast rank: higher = better at preventing hard contact
+        "HardHit_allowed_pct": 0.25,  # inverted rank: higher = better at preventing hard contact
         "K_pct_pct":           0.15,  # moderate — not a strikeout pitcher
-        "Barrel_allowed_pct":  0.10,  # Statcast rank: higher = better at preventing barrels
+        "Barrel_allowed_pct":  0.10,  # inverted rank: higher = better at preventing barrels
     }
     score, _ = _weighted_score(metrics, weights)
     return score
@@ -778,7 +779,7 @@ def build_bullpen_profile(
     dimension_weights = {
         "velocity":           {"avg_velo_pct":        1.0},
         "attack_philosophy":  {"Zone_pct_pct":        1.0},
-        # HardHit_allowed_pct / Barrel_allowed_pct are Statcast ranks: higher = better suppressor
+        # HardHit_allowed_pct / Barrel_allowed_pct are inverted ranks (team_portrait.PITCHING_RANK_INVERT): higher = better suppressor
         "damage_prevention":  {"HardHit_allowed_pct": 0.50, "Barrel_allowed_pct": 0.50},
         "platoon_balance":    {"Platoon_bal_pct":      1.0},
         "leverage_structure": {"LevWPA_conc_pct":      1.0},

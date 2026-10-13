@@ -32,10 +32,12 @@ sample. So there is one tunable knob in the whole system rather than ninety
 hand-set cutoffs, which is the same reason the team headline labels were
 retired.
 
-Tags absent from TAG_EVIDENCE are ungated ON PURPOSE. Attributes (handedness),
-counts (super-utility's four positions) and tags that already carry a
-purpose-built floor in their own gate (`rarely strikes out`, the steal tags,
-platoon splits) do not need a second one.
+Tags absent from TAG_EVIDENCE are ungated ON PURPOSE, and each one says why
+in UNGATED_TAGS. Attributes (handedness), counts (super-utility's four
+positions) and tags that already carry a purpose-built floor in their own gate
+(`rarely strikes out`, the steal tags, platoon splits) do not need a second
+one. validate_tag_evidence checks that every tag in the vocabulary is in
+exactly one of the two maps, so a renamed or new tag cannot slip through.
 """
 
 from __future__ import annotations
@@ -143,17 +145,94 @@ TAG_EVIDENCE: dict[str, str] = {
     "unlucky":         "xwOBA",
     # ── pitchers ─────────────────────────────────────────────────────────
     "bat-misser":        "K_pct_pitch",
-    "ground-baller":     "GB_pct_pitch",
-    "contact suppressor":"HardHit_allowed",
     "pitch-to-contact":  "K_pct_pitch",
+    "ground-baller":     "GB_pct_pitch",
+    "fly-ball prone":    "GB_pct_pitch",
+    "contact suppressor":"HardHit_allowed",
     "elite command":     "BB_pct_pitch",
     "plus command":      "BB_pct_pitch",
-    "wild":              "BB_pct_pitch",
-    "zone-filler":       "Zone_pct",
-    "nibbler":           "Zone_pct",
+    "walk prone":        "BB_pct_pitch",
+    "invisible ball":    "SwStr_pct",     # velocity-adjusted whiff rate
+    "first-pitch attacker": "FPS_pct",
     "high spin efficiency": "spin_efficiency",
     "tunneler":          "tunnel_score",
 }
+
+# Every other tag in the vocabulary, and why it is not gated here. Explicit,
+# because "absent means ungated" is how `walk prone` and `fly-ball prone`
+# went ungated: the map keyed `wild`, a name nothing has ever emitted, while
+# the shipped tag was `walk prone`, and `fly-ball prone` was never added
+# beside `ground-baller` — 751 walk-prone firings below the 75 BF floor.
+# validate_tag_evidence fails on any vocabulary tag that is in neither map,
+# or in both. Candidate tags that do not exist yet (`wild`, `zone-filler`,
+# `nibbler`) live in scripts/tag_reference.PROSPECTIVE_TAGS, not here.
+_ATTRIBUTE   = "an attribute of the player, not a rate"
+_MECHANICS   = "release geometry; the mechanics pool requires 150 pitches"
+_ARSENAL     = "pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type"
+_VELO        = "a physical measurement, stable within the 20-BF roster minimum"
+_SEQUENCING  = "the sequencing pool requires 300 pitches"
+_TEMPO       = "the tempo pool requires 300 bases-empty pitches"
+_SAVANT_QUAL = "a Savant leaderboard that publishes qualified players only"
+_OWN_FLOOR   = "its gate carries a purpose-built floor"
+_DEPLOYMENT  = "how the club used the player; a count or a usage share"
+
+UNGATED_TAGS: dict[str, str] = {
+    **dict.fromkeys(["left-handed hitter", "right-handed hitter", "switch hitter",
+                     "left-handed pitcher", "right-handed pitcher"], _ATTRIBUTE),
+    **dict.fromkeys(["over-the-top", "sidearm", "submarine", "wide release",
+                     "deep extension", "short extension"], _MECHANICS),
+    **dict.fromkeys(["ride four-seam", "deep arsenal", "two-pitch", "cutter-primary",
+                     "sinker-baller", "knuckleballer"], _ARSENAL),
+    **dict.fromkeys(["elite velo", "plus velo", "soft tosser"], _VELO),
+    **dict.fromkeys(["count-shifter", "steady mix", "patterned", "unpredictable"],
+                    _SEQUENCING),
+    **dict.fromkeys(["quick pitcher", "slow pitcher"], _TEMPO),
+    **dict.fromkeys(["elite speed", "fast", "station-to-station",
+                     "elite defender", "plus defender", "defensive liability",
+                     "good blocker", "bad blocker", "cannon arm", "quick pop"],
+                    _SAVANT_QUAL),
+    "elite framer":       "framing requires 500 taken pitches near the edge",
+    "poor framer":        "framing requires 500 taken pitches near the edge",
+    "rarely strikes out": f"{_OWN_FLOOR}: 200 PA",
+    "high steal rate":    f"{_OWN_FLOOR}: 10 attempts",
+    "low steal rate":     f"{_OWN_FLOOR}: 10 attempts",
+    "high steal attempts": f"{_OWN_FLOOR}: ranked among runners with 2+ attempts",
+    "low steal attempts":  f"{_OWN_FLOOR}: ranked among runners with 2+ attempts",
+    "extra base taker":   f"{_OWN_FLOOR}: 10 advancement chances",
+    "controls runners":   f"{_OWN_FLOOR}: 100 runner opportunities",
+    "platoon liability":  f"{_OWN_FLOOR}: 50 PA on each side",
+    "reverse split":      f"{_OWN_FLOOR}: 50 PA/BF on each side",
+    "platoon-vulnerable": f"{_OWN_FLOOR}: 50 BF on each side",
+    **dict.fromkeys(["everyday player", "heavy usage", "high-leverage arm",
+                     "mop-up duty", "multi-inning reliever", "short-outing starter",
+                     "swingman", "workhorse", "platoon specialist", "super-utility"],
+                    _DEPLOYMENT),
+}
+
+
+def validate_tag_evidence(vocabulary) -> list[str]:
+    """
+    Problems with the gate map against the live tag vocabulary
+    (team_portrait.TAG_KIND): a tag in neither TAG_EVIDENCE nor UNGATED_TAGS
+    passes ungated by accident, one in both is ambiguous, and a key the
+    vocabulary no longer has is a retired name that gates nothing. Every
+    evidence metric must have a stabilization point, or reliability() reads
+    it as 0 and the tag can never fire. Empty list = consistent.
+    """
+    vocab = set(vocabulary)
+    gated, exempt = set(TAG_EVIDENCE), set(UNGATED_TAGS)
+    problems = []
+    if vocab - gated - exempt:
+        problems.append(f"neither gated nor exempt: {sorted(vocab - gated - exempt)}")
+    if gated & exempt:
+        problems.append(f"both gated and exempt: {sorted(gated & exempt)}")
+    if (gated | exempt) - vocab:
+        problems.append(f"not in the vocabulary (retired?): {sorted((gated | exempt) - vocab)}")
+    no_stab = sorted({m for m in list(TAG_EVIDENCE.values()) + [OUT_PITCH_EVIDENCE]
+                      if m not in STABILIZATION})
+    if no_stab:
+        problems.append(f"evidence metric with no stabilization point: {no_stab}")
+    return problems
 
 # The `<pitch> out pitch` tags, matched by suffix in tag_supported.
 OUT_PITCH_EVIDENCE = "SwStr_pct"
@@ -185,8 +264,8 @@ def tag_supported(tag: str, n: Optional[float],
     """
     May this tag fire on a player with `n` of the relevant sample?
 
-    True for any tag not in TAG_EVIDENCE — those are gated by their own
-    purpose-built floors, or rest on attributes where sample is irrelevant.
+    True for any tag not in TAG_EVIDENCE — UNGATED_TAGS says why for each
+    (validate_tag_evidence keeps the two maps covering the vocabulary).
     """
     metric = TAG_EVIDENCE.get(tag)
     if metric is None and tag.endswith(" out pitch"):

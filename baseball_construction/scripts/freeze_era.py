@@ -10,7 +10,7 @@ which is not in git, so a machine without this one's data — the GitHub runner
 of Statcast for each to compute the pitch aggregates in them (~1 GB, hours),
 and would still not be guaranteed byte-identical files.
 
-So the finished seasons' roots are committed: 24 small CSVs, about 7 MB. The
+So the finished seasons' roots are committed: three small CSVs a season. The
 nightly job copies them into data/processed before building, so it ranks
 against exactly the pool this machine does, and build fingerprints agree.
 
@@ -35,7 +35,11 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 from ingest import PROCESSED_DIR, season_state  # noqa: E402
 
 ERA_DIR = _HERE.parent / "data" / "era"
-ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv")
+# The fg roots behind the player percentiles, and the cross-team rows behind
+# the team-construction percentiles (team_portrait.cross_team_path) — both
+# ranked against the era pool, and neither rebuildable on the runner without
+# a full season of Statcast per season.
+ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v2_{s}.csv")
 
 
 def main() -> int:

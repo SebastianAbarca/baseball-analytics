@@ -126,7 +126,8 @@ def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.
             catching=gi.get("catching"),
             advancement=gi.get("advancement"),
             positions=gi.get("positions"),
-            pa=gi.get("pa"),
+            pa=gi.get("pa"),            # season, all teams: the gate's sample
+            pa_team=gi.get("pa_team"),  # this team (absent before schema 22)
         )
         h["traits"], h["spectrum"] = traits, spectrum
         h["limited_sample"] = is_limited_sample(gi.get("pa"), LIMITED_SAMPLE_PA)
@@ -164,9 +165,11 @@ def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.
                 splits=gi.get("splits"),
                 tempo=gi.get("tempo"),
                 runner_control=gi.get("runner_control"),
+                bf_total=gi.get("bf_total"),   # absent before schema 22
             )
             p["traits"] = traits
-            p["limited_sample"] = is_limited_sample(gi.get("bf"), LIMITED_SAMPLE_BF)
+            p["limited_sample"] = is_limited_sample(
+                gi.get("bf_total") or gi.get("bf"), LIMITED_SAMPLE_BF)
             after = {t["tag"] for t in traits}
             for t in after - before:
                 delta[f"+{t}"] += 1
