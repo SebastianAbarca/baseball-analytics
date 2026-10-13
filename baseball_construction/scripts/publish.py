@@ -40,6 +40,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
@@ -111,7 +112,7 @@ def publish_portraits(root: Path, seasons: set[int], client, dry: bool, force: b
             log.error("  ✗ %s %s is not current (schema %s, fingerprint %s; this "
                       "machine is at %s, %s) — rebuild or re-derive it first",
                       team, season, p.get("schema_version"), p.get("build_fingerprint"),
-                      tp.PORTRAIT_SCHEMA_VERSION, tp.build_fingerprint())
+                      tp.PORTRAIT_SCHEMA_VERSION, tp.build_fingerprint(season))
             refused += 1
             continue
         h = _sha(text)
@@ -182,7 +183,7 @@ def publish_league(root: Path, seasons: set[int], client, dry: bool, force: bool
             log.info("  league %s: would publish", season)
             continue
         row = {"season": season, **payload, "content_hash": h,
-               "build_fingerprint": tp.build_fingerprint(),
+               "build_fingerprint": tp.build_fingerprint(season),
                "gate_fingerprint": tp.gate_fingerprint(),
                "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         _retry(f"league {season}",
@@ -194,9 +195,27 @@ def publish_league(root: Path, seasons: set[int], client, dry: bool, force: bool
 # Scout
 # ---------------------------------------------------------------------------
 
-def flatten_scout(portrait_dir: Path) -> dict:
+def _scout_ord(team: str, season: int, grp_idx: int, idx: int) -> int:
     """
-    Flatten all portraits into the Scout catalogue and player-season rows.
+    A row's position in the flattening order, computed from the row alone.
+
+    Every Scout sort breaks ties on `ord`, and the order it encodes is the one
+    the in-memory index had: portrait files sorted by name (team, then season),
+    then hitters / starters / bullpen_arms, then roster order. It used to be a
+    running count over every portrait, which only a whole-league publish could
+    compute; the nightly job publishes one season, so the position is built
+    from its parts instead. Same order, same ties.
+    """
+    from build_league_identity import MLB_TEAMS
+    teams = sorted(MLB_TEAMS)
+    t = teams.index(team) if team in teams else len(teams)
+    return t * 10_000_000 + (int(season) - 2000) * 10_000 + grp_idx * 1_000 + idx
+
+
+def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dict:
+    """
+    Flatten portraits into the Scout catalogue and player-season rows — all of
+    them, or only `seasons`.
 
     The portraits already carry everything Scout needs — 18,664 player-seasons,
     every tag with the evidence sentence that earned it — so Scout reads them
@@ -217,15 +236,17 @@ def flatten_scout(portrait_dir: Path) -> dict:
     sides: defaultdict = defaultdict(set)
     players: list[dict] = []
 
-    for f in sorted(portrait_dir.glob("*.json")):
+    for f in sorted(portrait_dir.glob("*_*.json")):
+        if seasons and int(f.stem.rsplit("_", 1)[1]) not in seasons:
+            continue
         try:
             p = json.loads(f.read_text())
         except Exception as exc:
             log.warning("  scout: skipping %s (%s)", f.name, exc)
             continue
         team, season = p.get("team"), p.get("season")
-        for grp, side in GROUPS:
-            for pl in (p.get("players") or {}).get(grp) or []:
+        for grp_idx, (grp, side) in enumerate(GROUPS):
+            for idx, pl in enumerate((p.get("players") or {}).get(grp) or []):
                 tg = []
                 for t in (pl.get("traits") or []):
                     tag = t.get("tag")
@@ -243,6 +264,7 @@ def flatten_scout(portrait_dir: Path) -> dict:
                                round(float(pct), 1) if isinstance(pct, (int, float)) else None,
                                t.get("evidence")])
                 players.append({
+                    "_ord": _scout_ord(team, season, grp_idx, idx),
                     "i": pl.get("player_id"), "n": pl.get("name"),
                     "t": team, "s": season, "d": side, "g": grp,
                     "a": pl.get("age"),
@@ -283,45 +305,69 @@ def flatten_scout(portrait_dir: Path) -> dict:
     return {"tags": cat, "players": players}
 
 
-def publish_scout(root: Path, client, dry: bool) -> None:
+def _all_scout_rows(client, columns: str, seasons: Optional[set[int]] = None) -> list[dict]:
+    """Every scout_players row (optionally only `seasons`), paging past the cap."""
+    out: list[dict] = []
+
+    def fetch(start: int) -> list[dict]:
+        # A fresh builder per request: postgrest-py builders accumulate
+        # parameters, so reusing one across pages would stack its ranges.
+        q = client.table("scout_players").select(columns)
+        if seasons:
+            q = q.in_("season", sorted(seasons))
+        return q.order("ord").range(start, start + 999).execute().data
+
+    while True:
+        page = _retry("list scout rows", lambda: fetch(len(out)))
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+
+
+def publish_scout(root: Path, client, dry: bool,
+                  seasons: Optional[set[int]] = None) -> None:
+    """
+    Publish Scout. Whole (the default) or only `seasons` — the nightly job's
+    mode, where the machine holds one season's portraits and must not treat
+    every other season's rows as stale. Season-scoped, the tag catalogue keeps
+    its kind/family/side/direction and recounts `n` from the published rows.
+    """
     import charts
 
-    ix = flatten_scout(root / "data/processed/portraits")
+    ix = flatten_scout(root / "data/processed/portraits", seasons)
     cat, players = ix["tags"], ix["players"]
 
-    tag_rows = [{"tag": t, **{k: m.get(k) for k in ("kind", "family", "side", "n", "dir")}}
-                for t, m in cat.items()]
+    if seasons:
+        # Catalogue as published, so vectors and directions use the same
+        # metadata as every other season's rows.
+        published = {r["tag"]: r for r in _retry("list tags", lambda: client
+                     .table("scout_tags").select("*").execute().data)}
+        cat = {**cat, **{t: {k: r[k] for k in ("kind", "family", "side", "n", "dir")}
+                         for t, r in published.items()}}
+
     rows = []
-    for ord_, p in enumerate(players):
+    for p in players:
         vec = charts._comp_vector(p, cat)
         rows.append({
             "season": p["s"], "team": p["t"], "player_id": p["i"], "grp": p["g"],
-            "ord": ord_, "side": p["d"], "name": p["n"], "age": p["a"],
+            "ord": p["_ord"], "side": p["d"], "name": p["n"], "age": p["a"],
             "volume": p["v"], "war": p["w"], "limited": p["l"],
             "position": p["p"], "hand": p["h"], "populations": p["pop"],
             "metrics": p["m"], "tags": [g[0] for g in p["tg"]], "tag_detail": p["tg"],
             "vec": vec, "vec_norm": math.sqrt(sum(x * x for x in vec.values())),
         })
 
-    # Always republished whole: ~38 batched requests, and Scout is one
-    # consistent snapshot of all portraits rather than a per-row diff.
+    scope = f"season(s) {', '.join(map(str, sorted(seasons)))}" if seasons else "all seasons"
     if dry:
-        log.info("  scout: would publish %d player-seasons, %d tags", len(rows), len(cat))
+        log.info("  scout: would publish %d player-seasons (%s)", len(rows), scope)
         return
 
     keep = {(r["season"], r["team"], r["player_id"], r["grp"]) for r in rows}
     for i in range(0, len(rows), SCOUT_BATCH):
         chunk = rows[i:i + SCOUT_BATCH]
         _retry(f"scout rows {i}", lambda: client.table("scout_players").upsert(chunk).execute())
-    # Rows for player-seasons no longer in any portrait.
-    existing = []
-    while True:
-        page = _retry("list scout keys", lambda: client.table("scout_players")
-                      .select("season, team, player_id, grp")
-                      .range(len(existing), len(existing) + 999).execute().data)
-        existing.extend(page)
-        if len(page) < 1000:
-            break
+    # Rows no longer in any portrait — within the published scope only.
+    existing = _all_scout_rows(client, "season, team, player_id, grp", seasons)
     stale = [r for r in existing
              if (r["season"], r["team"], r["player_id"], r["grp"]) not in keep]
     for r in stale:
@@ -329,15 +375,26 @@ def publish_scout(root: Path, client, dry: bool) -> None:
                .eq("season", r["season"]).eq("team", r["team"])
                .eq("player_id", r["player_id"]).eq("grp", r["grp"]).execute())
 
+    if seasons:
+        # Incidence across every season, from what is now published.
+        counts: Counter = Counter()
+        for r in _all_scout_rows(client, "tags"):
+            counts.update(r["tags"] or [])
+        for t, meta in cat.items():
+            meta["n"] = counts.get(t, 0)
+    tag_rows = [{"tag": t, **{k: m.get(k) for k in ("kind", "family", "side", "n", "dir")}}
+                for t, m in cat.items() if m.get("n")]
     _retry("scout tags", lambda: client.table("scout_tags").upsert(tag_rows).execute())
+    live = {r["tag"] for r in tag_rows}
     gone = [t["tag"] for t in _retry("list tags", lambda: client.table("scout_tags")
                                       .select("tag").execute().data)
-            if t["tag"] not in cat]
+            if t["tag"] not in live]
     if gone:
         _retry("delete retired tags", lambda: client.table("scout_tags").delete()
                .in_("tag", gone).execute())
-    log.info("  scout: published %d player-seasons, %d tags (%d stale rows, %d retired tags removed)",
-             len(rows), len(cat), len(stale), len(gone))
+    log.info("  scout: published %d player-seasons (%s), %d tags "
+             "(%d stale rows, %d retired tags removed)",
+             len(rows), scope, len(tag_rows), len(stale), len(gone))
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +411,7 @@ def _point_at(root: Path) -> None:
     tp.PROCESSED_DIR = root / "data" / "processed"
     tp._FINGERPRINT_EXTRA_POOLS = tuple(
         (root / "modules" / "processed", pat) for _d, pat in tp._FINGERPRINT_EXTRA_POOLS)
-    tp.build_fingerprint(refresh=True)
+    tp.clear_fingerprint_cache()
 
 
 def main() -> int:

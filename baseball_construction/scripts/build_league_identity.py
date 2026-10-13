@@ -350,14 +350,27 @@ def _compute_positions(league: dict[str, dict]) -> None:
             }
 
 
-def main(season: int):
+def main(season: int, force: bool = False) -> int:
+    """
+    Build (or reuse) a season's 30 portraits and write its league identity.
+
+    force rebuilds every portrait even when it reads as current. The nightly
+    job needs that: the database totals a portrait is built from are not in
+    the fingerprint, so a night of new games leaves yesterday's portrait
+    looking current. If a forced build fails, the existing portrait is kept
+    for the identity and the failure is counted.
+
+    Returns the number of teams whose build failed.
+    """
     league: dict[str, dict] = {}
     rosters: dict[str, dict] = {}
     t0 = time.time()
+    failed = 0
 
     for i, team in enumerate(MLB_TEAMS, 1):
         cp = _cache_path(team, season)
         portrait = None
+        cached = None
 
         if cp.exists():
             try:
@@ -366,10 +379,10 @@ def main(season: int):
                 # current schema and still have been built against different
                 # pools or gates, which is exactly how 31 stale portraits and
                 # HOU_2025 were skipped as cache hits during earlier rebuilds.
-                if portrait_is_current(cached):
+                if portrait_is_current(cached) and not force:
                     portrait = cached
             except Exception:
-                pass
+                cached = None
 
         if portrait is None:
             print(f"[{i}/30] Building {team} {season}...", flush=True)
@@ -377,15 +390,20 @@ def main(season: int):
                 portrait = build_team_portrait(team, season)
             except Exception as exc:
                 print(f"  FAILED {team}: {exc}", flush=True)
-                continue
+                failed += 1
+                if not (force and cached):
+                    continue
+                portrait = cached          # forced rebuild failed: keep the old one
+                print(f"  kept the existing {team} {season} portrait", flush=True)
             if portrait.get("error"):
                 print(f"  SKIP {team}: {portrait['error']}", flush=True)
+                failed += 1
                 continue
-            # Save to disk cache so the dashboard picks it up too
-            try:
-                cp.write_text(json.dumps(portrait, cls=_NumpyEncoder, default=str))
-            except Exception as exc:
-                print(f"  WARN: could not cache {team}: {exc}", flush=True)
+            if portrait is not cached:
+                try:
+                    cp.write_text(json.dumps(portrait, cls=_NumpyEncoder, default=str))
+                except Exception as exc:
+                    print(f"  WARN: could not cache {team}: {exc}", flush=True)
         else:
             print(f"[{i}/30] {team} {season} — cache hit", flush=True)
 
@@ -412,6 +430,7 @@ def main(season: int):
     n_teams = sum(1 for k in league if not k.startswith("_"))
     print(f"\nWrote {n_teams}/30 teams (+fingerprints) to {out_path} "
           f"in {time.time()-t0:.1f}s")
+    return failed
 
 
 if __name__ == "__main__":

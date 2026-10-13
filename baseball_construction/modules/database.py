@@ -207,16 +207,6 @@ def season_batting_seeded(season: int) -> bool:
     return len(result.data) > 0
 
 
-def query_seeded_seasons() -> list[int]:
-    """Return sorted list of seasons that have data in player_batting."""
-    client = get_client()
-    result = client.table("player_batting").select("season").execute()
-    df = pd.DataFrame(result.data)
-    if df.empty:
-        return []
-    return sorted(df["season"].dropna().unique().astype(int).tolist())
-
-
 def season_pitching_seeded(season: int) -> bool:
     client = get_client()
     result = (

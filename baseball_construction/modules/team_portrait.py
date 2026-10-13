@@ -72,6 +72,7 @@ from ingest import (
     compute_reliability,
     apply_reliability_weight,
     normalize_percentile,
+    era_pool_seasons,
     PROCESSED_DIR,
 )
 from reliability import (
@@ -82,7 +83,6 @@ from reliability import (
 from database import (
     query_batting, query_pitching,
     season_batting_seeded, query_debut_seasons, query_estimated_service_time,
-    query_seeded_seasons,
 )
 from spin_efficiency import build_pitcher_spin_profile
 from tunneling import build_tunnel_profile
@@ -2269,26 +2269,30 @@ def _ordinal(n: float) -> str:
 # the normalization pools it was ranked against, and every gate constant and
 # vocabulary map the tags were cut with. A mismatch means rebuild, decided by
 # the data rather than by remembering to bump a number.
-_FINGERPRINT_CACHE: Optional[str] = None
+#
+# PER SEASON. It used to hash every pool file of every season, so one night of
+# 2027 games would have marked all 360 portraits stale, 2015 included. A
+# portrait now hashes only what it reads: the root files of the seasons in its
+# era pool (finished seasons + its own — ingest.era_pool_seasons) and its own
+# season's tunnel pool. Finished seasons share a pool that stops moving until
+# the next season finishes, so in season only the current one goes stale.
+_FINGERPRINT_CACHE: dict[int, str] = {}
 _GATE_FINGERPRINT_CACHE: Optional[str] = None
 
-# Pools a portrait's percentiles are ranked against. Content-hashed rather
-# than mtime-checked: regenerating a cache byte-identically should NOT
-# invalidate anything, and today's incidents all involved files whose contents
-# changed while their names did not.
-_FINGERPRINT_POOL_GLOBS = (
-    "fg_batting_*.csv", "fg_pitching_*.csv",
-    "*history*.csv", "*prior*.parquet",
-)
+# Root files hashed for every season in the portrait's era pool. Content-hashed
+# rather than mtime-checked: regenerating a cache byte-identically should NOT
+# invalidate anything. The derived history/prior pools are not hashed: history
+# is a pure function of these roots, and both are created lazily mid-build,
+# which is what used to move the fingerprint under a running rebuild and force
+# a second pass.
+_FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv")
 
-# Derived pools that do NOT live in PROCESSED_DIR and so are invisible to the
-# globs above. tunneling.py writes tunnel_league_*.parquet into its own
-# modules/processed directory, which meant a change to how tunnel_score is
-# computed could not move the fingerprint: every portrait stayed a cache hit
-# and kept a `tunneler` tag cut by the old maths. Same failure as the stale
-# schema-20 portraits, one directory further out.
+# Pools that live outside PROCESSED_DIR, hashed for the portrait's own season.
+# tunneling.py writes tunnel_league_{s}.parquet into modules/processed; left
+# out, a change to how tunnel_score is computed could not move the fingerprint
+# and every portrait kept a `tunneler` tag cut by the old maths.
 _FINGERPRINT_EXTRA_POOLS = (
-    (Path(__file__).resolve().parent / "processed", "tunnel_league_*.parquet"),
+    (Path(__file__).resolve().parent / "processed", "tunnel_league_{s}.parquet"),
 )
 
 
@@ -2355,20 +2359,26 @@ def _stable_repr(v) -> str:
     return str(v)
 
 
-def _pool_digest() -> str:
+def _pool_digest(season: int) -> str:
+    """Content hash of the pool files one season's portraits read."""
+    from ingest import era_pool_seasons
+    paths = [PROCESSED_DIR / pat.format(s=s)
+             for s in era_pool_seasons(season) for pat in _FINGERPRINT_POOL_FILES]
+    paths += [directory / pat.format(s=season)
+              for directory, pat in _FINGERPRINT_EXTRA_POOLS]
     parts = []
-    targets = [(PROCESSED_DIR, pat) for pat in _FINGERPRINT_POOL_GLOBS]
-    targets += list(_FINGERPRINT_EXTRA_POOLS)
-    for directory, pattern in targets:
-        for path in sorted(directory.glob(pattern)):
-            h = hashlib.sha256()
-            try:
-                with open(path, "rb") as fh:
-                    for chunk in iter(lambda: fh.read(1 << 20), b""):
-                        h.update(chunk)
-            except OSError:
-                continue
-            parts.append(f"{path.name}:{h.hexdigest()[:16]}")
+    for path in paths:
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            # Absent is part of the state: a portrait built without a file
+            # must not match one built with it.
+            parts.append(f"{path.name}:missing")
+            continue
+        parts.append(f"{path.name}:{h.hexdigest()[:16]}")
     return "|".join(parts)
 
 
@@ -2400,17 +2410,23 @@ def _gate_digest() -> str:
     return "|".join(items)
 
 
-def build_fingerprint(refresh: bool = False) -> str:
+def build_fingerprint(season: int, refresh: bool = False) -> str:
     """
-    Short hash of everything a portrait depends on beyond its own team-season:
-    the normalization pools, and the gate constants and vocabulary the tags
-    were cut with. Memoised per process — the pools do not change mid-run.
+    Short hash of everything one season's portraits depend on beyond their own
+    team-season: the pool files that season reads, and the gate constants and
+    vocabulary the tags were cut with. Memoised per process and season — the
+    pools do not change mid-run; pass refresh=True after changing them.
     """
-    global _FINGERPRINT_CACHE
-    if _FINGERPRINT_CACHE is None or refresh:
-        blob = _pool_digest() + "||" + _gate_digest()
-        _FINGERPRINT_CACHE = hashlib.sha256(blob.encode()).hexdigest()[:16]
-    return _FINGERPRINT_CACHE
+    season = int(season)
+    if refresh or season not in _FINGERPRINT_CACHE:
+        blob = _pool_digest(season) + "||" + _gate_digest()
+        _FINGERPRINT_CACHE[season] = hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return _FINGERPRINT_CACHE[season]
+
+
+def clear_fingerprint_cache() -> None:
+    """Forget every memoised fingerprint (after pools were rewritten)."""
+    _FINGERPRINT_CACHE.clear()
 
 
 def gate_fingerprint(refresh: bool = False) -> str:
@@ -2433,8 +2449,8 @@ def portrait_is_current(portrait: Optional[dict]) -> bool:
     """
     Is this stored portrait current, for the machine that builds them?
 
-    Schema must match, and so must the full build fingerprint (pools + gates)
-    when the portrait carries one. Portraits predating the fingerprint are
+    Schema must match, and so must its season's build fingerprint (that
+    season's pools + gates) when the portrait carries one. Portraits predating the fingerprint are
     accepted on schema alone — they cannot be checked, and refusing them would
     force a rebuild of everything already known to be good.
 
@@ -2447,7 +2463,10 @@ def portrait_is_current(portrait: Optional[dict]) -> bool:
     if portrait.get("schema_version") != PORTRAIT_SCHEMA_VERSION:
         return False
     stamped = portrait.get("build_fingerprint")
-    return stamped is None or stamped == build_fingerprint()
+    if stamped is None:
+        return True
+    season = portrait.get("season")
+    return season is not None and stamped == build_fingerprint(int(season))
 
 
 def kind_of(tag: str) -> Optional[str]:
@@ -2878,13 +2897,18 @@ def build_team_portrait(
         log.warning("Chase/FPS backfill failed: %s", exc)
 
     # ── 3b. Multi-season historical pool for percentile normalization ─────
-    # Percentiles are computed against ALL seeded seasons so that "70" means
-    # 70th pct of the Statcast era, not just this year's 30 teams.
+    # Percentiles are computed against the Statcast era so that "70" means 70th
+    # pct of the era, not just this year's 30 teams. The era is every FINISHED
+    # season plus this one (ingest.era_pool_seasons): finished seasons all
+    # share one pool that does not move while the next season is played, so a
+    # night of new games re-ranks only the season it happened in.
+    #
+    # This used to be query_seeded_seasons(), which read player_batting through
+    # the API's 1,000-row cap and returned whichever seasons came back first —
+    # 2015-2025 without 2026 when replaced, so 2026 portraits ranked against a
+    # different era than every other season.
     try:
-        seeded_seasons = query_seeded_seasons()
-        # Always include the current season even if not in Supabase
-        if season not in seeded_seasons:
-            seeded_seasons = sorted(seeded_seasons + [season])
+        seeded_seasons = era_pool_seasons(season)
         batting_pool  = pull_batting_history(seeded_seasons)
         pitching_pool = pull_pitching_history(seeded_seasons)
         # Normalise key_mlbam in pool
@@ -3607,7 +3631,7 @@ def build_team_portrait(
         # What this portrait was built AGAINST — pools and gates. See
         # build_fingerprint: the schema catches a change of shape, this
         # catches a change of inputs.
-        "build_fingerprint": build_fingerprint(),
+        "build_fingerprint": build_fingerprint(season),
         # Its code half alone, for readers without the pools.
         "gate_fingerprint":  gate_fingerprint(),
         "team":   team,

@@ -195,12 +195,27 @@ def _source_specs():
 # prior pools are built FROM fg_*, so re-pulling the root without clearing
 # these would rebuild nothing — the layering trap from repair_metric_units.
 def _derived_globs(seasons: list[int]) -> list[Path]:
+    """
+    Derived files that contain one of `seasons`, and only those.
+
+    It used to clear every history and prior pool on any refresh, which made
+    "refresh 2026" a 12-season rebuild. A history pool is named for the season
+    range it concatenates (batting_history_2015_2027.csv), so only ranges that
+    include a refreshed season are touched; the finished seasons' shared pool
+    survives a night of new games. A prior pool holds season s for season
+    s+1's projection, so *_prior_{s} goes when s is refreshed.
+    """
+    import re
+    want = set(seasons)
     out: list[Path] = []
     for s in seasons:
         out += [PROCESSED / f"team_turnover_{s}.csv",
                 PROCESSED / f"est_service_time_{s}.csv"]
-    out += sorted(PROCESSED.glob("*history*.csv"))
-    out += sorted(PROCESSED.glob("*prior*.parquet"))
+        out += sorted(PROCESSED.glob(f"*_prior_{s}.parquet"))
+    for p in sorted(PROCESSED.glob("*_history_*_*.csv")):
+        m = re.search(r"_history_(\d{4})_(\d{4})\.csv$", p.name)
+        if m and any(int(m.group(1)) <= s <= int(m.group(2)) for s in want):
+            out.append(p)
     return [p for p in out if p.exists()]
 
 
@@ -272,15 +287,15 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
     if derived:
         log.info("  %s %d derived pool file(s) so they rebuild from the new roots",
                  "would clear" if dry else "clearing", len(derived))
-        # The history and prior pools span every season, not just the ones
-        # asked for, so touching one season's roots invalidates all of them.
-        # Correct — the pool contains the season that changed — but it turns
-        # "refresh 2026" into a full 12-season rebuild, which is too expensive
-        # to discover only when it starts.
-        if any("history" in p.name or "prior" in p.name for p in derived):
-            log.warning("  note: history/prior pools are cross-season, so this "
-                        "forces a FULL portrait rebuild, not just %s",
-                        ", ".join(str(s) for s in seasons))
+        # A finished season is in every season's era pool, so refreshing its
+        # roots re-ranks all of them — a full rebuild, worth knowing before it
+        # starts. The season in progress is only in its own pool.
+        from ingest import season_state
+        finished, _ = season_state()
+        if any(s in finished for s in seasons):
+            log.warning("  note: %s finished, and finished seasons are in every "
+                        "season's era pool, so this forces a FULL portrait "
+                        "rebuild", ", ".join(str(s) for s in seasons if s in finished))
         if not dry:
             for p in derived:
                 p.unlink()
@@ -324,21 +339,33 @@ def stage_tunnel(seasons: list[int], changed: list[int], force: bool, dry: bool)
     return done
 
 
-def _rebuild_season(season: int) -> tuple[int, int, float]:
-    """Worker: rebuild one season's stale portraits. Returns (season, n, secs)."""
+def _rebuild_season(season: int, force: bool = False) -> tuple[int, int, float, int]:
+    """
+    Worker: rebuild one season's stale portraits (all of them if force).
+    Returns (season, portraits on disk, secs, failed builds).
+    """
     import build_league_identity as B
     t0 = time.time()
-    B.main(season)
+    failed = B.main(season, force=force)
     n = len(list(PORTRAIT_DIR.glob(f"*_{season}.json")))
-    return season, n, time.time() - t0
+    return season, n, time.time() - t0, failed
 
 
-def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
+def stage_portraits(seasons: list[int], jobs: int, dry: bool,
+                    force: bool = False) -> int:
+    """
+    Rebuild stale portraits (every portrait of `seasons` if force) and their
+    league identity. Returns the number of portraits still stale afterwards
+    plus failed builds — 0 means the stage did what it was asked.
+    """
     import json
-    from team_portrait import portrait_is_current, build_fingerprint
+    from team_portrait import (portrait_is_current, build_fingerprint,
+                               clear_fingerprint_cache)
 
-    fp = build_fingerprint()
-    log.info("  build fingerprint: %s", fp)
+    # Per season: each season's portraits hash only the pools they read.
+    fp = {s: build_fingerprint(s) for s in seasons}
+    log.info("  build fingerprints: %s",
+             ", ".join(f"{s}={fp[s]}" for s in seasons))
 
     # Drive off the roster of teams, not off the files on disk. Globbing what
     # exists can only ever find portraits that are present and stale; a
@@ -360,30 +387,37 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
                     n += 1
             except Exception:
                 n += 1
+        if force:
+            n = len(MLB_TEAMS)
         if n:
             stale_by_season[s] = n
 
     if not stale_by_season:
         log.info("  every portrait is current — nothing to rebuild")
-        return
+        return 0
     total = sum(stale_by_season.values())
-    log.info("  %d stale portraits across %d seasons: %s",
-             total, len(stale_by_season),
+    log.info("  %d %s portraits across %d seasons: %s",
+             total, "forced" if force else "stale", len(stale_by_season),
              ", ".join(f"{s}({n})" for s, n in sorted(stale_by_season.items())))
     if dry:
-        return
+        return 0
 
     todo = sorted(stale_by_season)
+    failed = 0
     if jobs > 1:
         with ProcessPoolExecutor(max_workers=jobs) as pool:
-            futs = {pool.submit(_rebuild_season, s): s for s in todo}
+            futs = {pool.submit(_rebuild_season, s, force): s for s in todo}
             for f in as_completed(futs):
-                s, n, secs = f.result()
-                log.info("  %d done — %d portraits in %.0fs", s, n, secs)
+                s, n, secs, nf = f.result()
+                failed += nf
+                log.info("  %d done — %d portraits in %.0fs%s", s, n, secs,
+                         f", {nf} FAILED" if nf else "")
     else:
         for s in todo:
-            _, n, secs = _rebuild_season(s)
-            log.info("  %d done — %d portraits in %.0fs", s, n, secs)
+            _, n, secs, nf = _rebuild_season(s, force)
+            failed += nf
+            log.info("  %d done — %d portraits in %.0fs%s", s, n, secs,
+                     f", {nf} FAILED" if nf else "")
 
     # Did the fingerprint move underneath the rebuild?
     #
@@ -405,6 +439,7 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
     # ATH 2015/2016/2017 stayed on the previous build while the run reported
     # success. Counting what is still stale afterwards is the only check that
     # speaks to the goal rather than to the attempt.
+    clear_fingerprint_cache()          # re-read the pools the build just wrote
     still = 0
     for s in todo:
         for team in MLB_TEAMS:
@@ -415,23 +450,26 @@ def stage_portraits(seasons: list[int], jobs: int, dry: bool) -> None:
             except Exception:
                 still += 1
 
-    after = build_fingerprint(refresh=True)
-    if still and after == fp:
+    after = {s: build_fingerprint(s) for s in todo}
+    moved = {s for s in todo if after[s] != fp[s]}
+    if still and not moved:
         log.warning(
             "  %d portrait(s) are STILL stale after the rebuild — their builds "
             "failed and the old files were kept. Check the log above for "
             "'FAILED'; a transient database error is the usual cause, and "
             "re-running this stage picks up exactly those.", still)
-    if after != fp:
+    if moved:
         log.warning(
-            "  fingerprint moved during the rebuild: %s -> %s.\n"
+            "  fingerprint moved during the rebuild for %s.\n"
             "  The pools these portraits depend on were still being written "
             "when the build started, so they are stamped with a value that is "
             "already out of date. The DATA is fine; the stamp is not.\n"
             "  Run the portraits stage once more to settle it — the pools all "
             "exist now, so the second pass converges:\n"
             "      python scripts/refresh.py --stages portraits --jobs %d",
-            fp, after, max(1, jobs))
+            ", ".join(f"{s} ({fp[s]} -> {after[s]})" for s in sorted(moved)),
+            max(1, jobs))
+    return still + failed
 
 
 def stage_tags(dry: bool) -> None:

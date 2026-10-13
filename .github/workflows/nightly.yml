@@ -1,0 +1,81 @@
+name: Nightly season build
+
+# Rebuilds and publishes the season in progress — its 30 portraits, its league
+# data, its Scout rows — every morning from March to October. Finished seasons
+# are not touched (see baseball_construction/scripts/nightly.py). With no
+# season in progress it exits 0 in a few seconds.
+#
+# Data between runs lives in GitHub's cache. GitHub drops a cache nobody has
+# read for 7 days, so the first run each spring rebuilds it: the Chadwick
+# register, last season's Statcast, and this season's to date. That run is
+# long (allow an hour or more); every run after it restores the cache and takes
+# minutes.
+
+on:
+  schedule:
+    - cron: '30 10 * 3-10 *'   # 10:30 UTC daily, March-October
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'Season to run (default: the one in progress)'
+        required: false
+        default: ''
+      no_publish:
+        description: 'Build only, write nothing to the database'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+concurrency:
+  group: nightly            # never two builds writing at once
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: baseball_construction/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r baseball_construction/requirements.txt
+
+      - name: Restore build data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            baseball_construction/data
+            baseball_construction/modules/processed
+          key: build-data-${{ github.run_id }}
+          restore-keys: build-data-
+
+      - name: Run nightly
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.season }}" ]; then ARGS="$ARGS --season ${{ github.event.inputs.season }}"; fi
+          if [ "${{ github.event.inputs.no_publish }}" = "true" ]; then ARGS="$ARGS --no-publish"; fi
+          python baseball_construction/scripts/nightly.py $ARGS
+
+      # Saved only when the run succeeded, so a half-built night can never
+      # become the starting point for the next one.
+      - name: Save build data
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            baseball_construction/data
+            baseball_construction/modules/processed
+          key: build-data-${{ github.run_id }}
