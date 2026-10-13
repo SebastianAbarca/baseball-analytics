@@ -17,6 +17,8 @@ Stages run in dependency order, each feeding the next:
                fielding OAA, bWAR, defensive runs, IL — and clear the pools
                built from them                          (opt-in)
     tunnel     regenerate tunnel_league_*.parquet where Statcast moved
+    spin       regenerate spin_league_*.parquet where Statcast moved or the
+               spin method changed; re-pulls Savant's measured active spin
     portraits  rebuild whatever the build fingerprint now marks stale,
                and rewrite league_identity_*.json
     tags       regenerate TAGS.md and dashboard/tag_reference.json
@@ -27,7 +29,7 @@ Routine refresh (data you own, no external feeds):
     python scripts/refresh.py
 
 EVERYTHING, including re-pulling every external source:
-    python scripts/refresh.py --stages statcast,sources,tunnel,portraits,tags,publish
+    python scripts/refresh.py --stages statcast,sources,tunnel,spin,portraits,tags,publish
 
 See what would change, touch nothing:
     python scripts/refresh.py --dry-run
@@ -81,11 +83,11 @@ PORTRAIT_DIR  = _HERE.parent / "data" / "processed" / "portraits"
 
 FIRST_SEASON, LAST_SEASON = 2015, 2026
 
-STAGES = ("statcast", "sources", "tunnel", "portraits", "tags", "publish")
+STAGES = ("statcast", "sources", "tunnel", "spin", "portraits", "tags", "publish")
 # `sources` is opt-in: it re-pulls every external feed (slow, network-bound,
 # and the least reliable step). `publish` is on: a build nobody can read is
 # not finished.
-DEFAULT_STAGES = ("statcast", "tunnel", "portraits", "tags", "publish")
+DEFAULT_STAGES = ("statcast", "tunnel", "spin", "portraits", "tags", "publish")
 
 log = logging.getLogger("refresh")
 
@@ -346,6 +348,46 @@ def stage_tunnel(seasons: list[int], changed: list[int], force: bool, dry: bool)
     return done
 
 
+def stage_spin(seasons: list[int], changed: list[int], force: bool, dry: bool) -> int:
+    """
+    Regenerate spin_league caches whose Statcast is newer than they are, or
+    that an older SPIN_METHOD_VERSION built. A rebuild also re-pulls Savant's
+    measured active spin, which moves with the season just like Statcast.
+    """
+    import pandas as pd
+    from spin_efficiency import SPIN_METHOD_VERSION, load_league_spin
+
+    COLS = ["pitcher", "pitch_type", "game_year", "home_team", "release_speed",
+            "release_spin_rate", "release_pos_y", "release_extension",
+            "vx0", "vy0", "vz0", "ax", "ay", "az", "pfx_x", "pfx_z", "spin_axis"]
+    done = 0
+    for s in seasons:
+        sc = RAW_DIR / f"statcast_{s}.parquet"
+        sp = TUNNEL_DIR / f"spin_league_{s}.parquet"
+        if not sc.exists():
+            continue
+        stale = (force or s in changed or not sp.exists()
+                 or sc.stat().st_mtime > sp.stat().st_mtime)
+        if not stale:
+            cached = pd.read_parquet(sp)
+            stale = ("spin_method_version" not in cached.columns
+                     or not (cached["spin_method_version"] == SPIN_METHOD_VERSION).all())
+        if not stale:
+            continue
+        if dry:
+            log.info("  %d: spin cache would be rebuilt", s)
+            done += 1
+            continue
+        df = pd.read_parquet(sc, columns=COLS)
+        summary = load_league_spin(s, statcast=df, force=True)
+        share = ((summary["spin_savant_share"] * summary["total_pitches"]).sum()
+                 / summary["total_pitches"].sum()) if len(summary) else 0.0
+        log.info("  %d: spin rebuilt — %d pitchers, %.0f%% of pitches from Savant",
+                 s, len(summary), 100 * share)
+        done += 1
+    return done
+
+
 def _rebuild_season(season: int, force: bool = False) -> tuple[int, int, float, int]:
     """
     Worker: rebuild one season's stale portraits (all of them if force).
@@ -524,6 +566,9 @@ def main() -> int:
     ap.add_argument("--force-tunnel", action="store_true",
                     help="rebuild tunnel caches even when Statcast has not moved "
                          "(use after changing tunnelling code)")
+    ap.add_argument("--force-spin", action="store_true",
+                    help="rebuild spin caches and re-pull Savant active spin even "
+                         "when nothing has moved")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what each stage would do, change nothing")
     args = ap.parse_args()
@@ -533,7 +578,7 @@ def main() -> int:
     # order the moment the output is piped anywhere.
     logging.basicConfig(level=logging.INFO, format="%(message)s",
                         stream=sys.stdout)
-    for noisy in ("ingest", "tunneling", "team_portrait", "pitch_aggregates"):
+    for noisy in ("ingest", "tunneling", "spin_efficiency", "team_portrait", "pitch_aggregates"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if "-" in args.seasons:
@@ -569,6 +614,10 @@ def main() -> int:
             n = stage_tunnel(seasons, changed, args.force_tunnel, args.dry_run)
             if not n:
                 log.info("  all tunnel caches current")
+        elif name == "spin":
+            n = stage_spin(seasons, changed, args.force_spin, args.dry_run)
+            if not n:
+                log.info("  all spin caches current")
         elif name == "portraits":
             stage_portraits(seasons, max(1, args.jobs), args.dry_run)
         elif name == "tags":

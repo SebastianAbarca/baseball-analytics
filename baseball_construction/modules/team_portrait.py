@@ -2293,6 +2293,9 @@ _FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv")
 # and every portrait kept a `tunneler` tag cut by the old maths.
 _FINGERPRINT_EXTRA_POOLS = (
     (Path(__file__).resolve().parent / "processed", "tunnel_league_{s}.parquet"),
+    # Same failure for spin: the `high spin efficiency` tag and the
+    # SpinEfficiency_pct archetype input read this pool.
+    (Path(__file__).resolve().parent / "processed", "spin_league_{s}.parquet"),
 )
 
 
@@ -3049,7 +3052,8 @@ def build_team_portrait(
     spin_pitcher_level: Optional[pd.DataFrame] = None
     try:
         if not pitcher_sc.empty:
-            spin_pitch_level, spin_pitcher_level = build_pitcher_spin_profile(pitcher_sc)
+            spin_pitch_level, spin_pitcher_level = build_pitcher_spin_profile(
+                pitcher_sc, season=season)
             log.info("Spin efficiency computed for %d pitchers", len(spin_pitcher_level))
     except Exception as exc:
         log.warning("Spin efficiency failed: %s", exc)

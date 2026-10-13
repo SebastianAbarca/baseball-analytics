@@ -212,6 +212,7 @@ def main() -> int:
             seed_season(season, force=True)
         step("seed", seed)
     step("tunnel", lambda: R.stage_tunnel([season], moved, force=False, dry=False))
+    step("spin", lambda: R.stage_spin([season], moved, force=False, dry=False))
     problems = step("portraits", lambda: R.stage_portraits([season], jobs=1, dry=False,
                                                           force=True))
     elsewhere = _stale_elsewhere(season)

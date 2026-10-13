@@ -1,5 +1,5 @@
 """
-validation.py — 12 validation tests against known outputs.
+validation.py — 13 validation tests against known outputs.
 
 Each test is self-contained and returns (passed: bool, detail: str).
 run_all() executes every test and prints a summary.
@@ -15,8 +15,9 @@ Tests:
   V8  Pitch mix aggregation — build_pitch_mix produces expected schema
   V9  Arsenal profile — build_arsenal_profile classifies correctly
   V10 Service time estimation — CBA thresholds and IL deduction logic
-  V11 Spin efficiency pipeline — compute and aggregate on synthetic pitches
+  V11 Spin efficiency pipeline — physics, Savant precedence, within-type ranks
   V12 Park factors — build_park_profile returns normalized pitcher_friendly
+  V13 Spin efficiency vs Savant — physics estimate ranks and scales like measured
 """
 
 from __future__ import annotations
@@ -827,99 +828,152 @@ def v10_service_time() -> Result:
 
 def v11_spin_efficiency() -> Result:
     """
-    Verify the spin efficiency pipeline on synthetic pitch data:
-      1. compute_spin_efficiency adds a spin_efficiency column
-      2. aggregate_pitcher_pitch_type groups correctly
-      3. apply_reliability_weighting shrinks toward league mean
-      4. build_pitcher_spin_profile returns (pitch_type_level, pitcher_level)
-         with expected columns and value ranges
+    Verify the spin efficiency pipeline on cached 2023 Statcast (offline —
+    Savant values are injected, never fetched):
+      1. compute_spin_efficiency yields values in [0, 1] for most pitches
+      2. the physics is sane: four-seamers mostly active, sliders mostly gyro
+      3. attach_savant_active_spin replaces a row's value and marks its source
+      4. percentiles are ranked within pitch type, not pooled
+      5. build_pitcher_spin_profile returns one row per pitcher
     """
     import pandas as pd
-    import numpy as np
+    from ingest import pull_statcast_range
     from spin_efficiency import (
         compute_spin_efficiency,
         aggregate_pitcher_pitch_type,
-        apply_reliability_weighting,
+        attach_savant_active_spin,
         build_pitcher_spin_profile,
     )
 
     errors = []
 
-    # Build synthetic pitch-level data — 3 pitchers, 2 pitch types each
-    rng = np.random.default_rng(42)
-    n = 300
-    rows = []
-    for pid in [100, 200, 300]:
-        for ptype, baked_angle in [("FF", 210), ("SL", 160)]:
-            for _ in range(n // 6):
-                rows.append({
-                    "pitcher":           pid,
-                    "pitch_type":        ptype,
-                    "release_spin_rate": float(rng.integers(2000, 2800)),
-                    "release_speed":     float(rng.integers(88, 97)),
-                    "spin_axis":         float(baked_angle + rng.integers(-10, 10)),
-                    "pfx_z":             rng.uniform(0.5, 1.5),
-                    "pfx_x":             rng.uniform(-1.0, 1.0),
-                    "release_pos_z":     rng.uniform(5.5, 6.5),
-                    "p_throws":          "R",
-                })
-    df = pd.DataFrame(rows)
-
-    # Step 1 — compute_spin_efficiency
     try:
-        df_se = compute_spin_efficiency(df)
+        sc = pull_statcast_range("2023-06-01", "2023-06-07", label="test")
+    except Exception as exc:
+        return False, f"Failed to load cached statcast: {exc}"
+
+    # Step 1 — pitch level
+    try:
+        df_se = compute_spin_efficiency(sc)
     except Exception as exc:
         return False, f"compute_spin_efficiency raised: {exc}"
-
-    if "spin_efficiency" not in df_se.columns:
-        errors.append("compute_spin_efficiency: 'spin_efficiency' column missing")
-    elif df_se["spin_efficiency"].notna().sum() == 0:
-        errors.append("compute_spin_efficiency: all spin_efficiency values are NaN")
-    elif not df_se["spin_efficiency"].dropna().between(0, 1).all():
+    eff = df_se["spin_efficiency"]
+    if eff.notna().mean() < 0.9:
+        errors.append(f"only {eff.notna().mean():.0%} of pitches got a spin_efficiency")
+    if not eff.dropna().between(0, 1).all():
         errors.append("spin_efficiency values outside [0, 1]")
 
-    # Step 2 — aggregate
-    try:
-        agg = aggregate_pitcher_pitch_type(df_se)
-    except Exception as exc:
-        return False, f"aggregate_pitcher_pitch_type raised: {exc}"
+    # Step 2 — physics sanity (Savant measured medians: FF ≈ 0.91, SL ≈ 0.31)
+    med = df_se.groupby("pitch_type")["spin_efficiency"].median()
+    if not med.get("FF", 0) > 0.8:
+        errors.append(f"FF median spin efficiency {med.get('FF')} — expected > 0.8")
+    if not med.get("SL", 1) < 0.5:
+        errors.append(f"SL median spin efficiency {med.get('SL')} — expected < 0.5")
 
+    # Step 3 — Savant values take precedence where present
+    agg = aggregate_pitcher_pitch_type(df_se)
     if agg.empty:
-        errors.append("aggregate_pitcher_pitch_type returned empty DataFrame")
-    else:
-        expected_rows = 3 * 2   # 3 pitchers × 2 pitch types
-        if len(agg) != expected_rows:
-            errors.append(f"Expected {expected_rows} agg rows, got {len(agg)}")
+        return False, "aggregate_pitcher_pitch_type returned empty DataFrame"
+    probe = agg.iloc[0]
+    fake = pd.DataFrame({"pitcher": [probe["pitcher"]],
+                         "pitch_type": [probe["pitch_type"]],
+                         "active_spin": [0.123]})
+    attached = attach_savant_active_spin(agg, fake)
+    hit = attached[(attached["pitcher"] == probe["pitcher"])
+                   & (attached["pitch_type"] == probe["pitch_type"])].iloc[0]
+    if hit["spin_efficiency_raw"] != 0.123 or hit["spin_source"] != "savant":
+        errors.append("attach_savant_active_spin did not replace the physics value")
+    if (attached["spin_source"] == "savant").sum() != 1:
+        errors.append("attach_savant_active_spin touched rows Savant did not cover")
 
-    # Step 3 — reliability weighting
+    # Step 4/5 — full pipeline, offline
+    empty = pd.DataFrame(columns=["pitcher", "pitch_type", "active_spin"])
     try:
-        agg_rel = apply_reliability_weighting(agg)
-    except Exception as exc:
-        return False, f"apply_reliability_weighting raised: {exc}"
-
-    if "spin_efficiency_weighted" not in agg_rel.columns:
-        errors.append("apply_reliability_weighting: 'spin_efficiency_weighted' missing")
-
-    # Step 4 — full pipeline
-    try:
-        pt_level, p_level = build_pitcher_spin_profile(df)
+        pt_level, p_level = build_pitcher_spin_profile(sc, active_spin=empty)
     except Exception as exc:
         return False, f"build_pitcher_spin_profile raised: {exc}"
 
+    top = pt_level.groupby("pitch_type")["spin_efficiency_pct"].max()
+    if not (top.round(6) == 100).all():
+        errors.append("spin_efficiency_pct is not ranked within each pitch type")
     if p_level.empty:
         errors.append("pitcher_level spin profile is empty")
     else:
-        if "spin_efficiency_weighted" not in p_level.columns:
-            errors.append("pitcher_level missing 'spin_efficiency_weighted'")
-        if p_level["pitcher"].nunique() != 3:
-            errors.append(f"Expected 3 pitchers in summary, got {p_level['pitcher'].nunique()}")
+        for col in ("spin_efficiency_weighted", "spin_efficiency_pct", "spin_savant_share"):
+            if col not in p_level.columns:
+                errors.append(f"pitcher_level missing '{col}'")
+        if p_level["pitcher"].nunique() != len(p_level):
+            errors.append("pitcher_level has duplicate pitchers")
 
     passed = len(errors) == 0
     detail = (
-        f"Pipeline OK — {len(df)} pitches → {len(agg if not agg.empty else [])} agg rows → {len(p_level) if not p_level.empty else 0} pitchers"
+        f"Pipeline OK — {len(sc)} pitches → {len(pt_level)} pitcher×type rows → "
+        f"{len(p_level)} pitchers; FF median {med.get('FF', float('nan')):.2f}, "
+        f"SL median {med.get('SL', float('nan')):.2f}"
         if passed else "; ".join(errors)
     )
     return passed, detail
+
+
+# ---------------------------------------------------------------------------
+# V13 — Spin efficiency against Savant's measured active spin
+# ---------------------------------------------------------------------------
+
+# Floors sit a few points under what the estimator reached on 2024–26
+# (FF 0.92, SI 0.84, CU 0.93, SL 0.83, ST 0.76, FC 0.89, CH 0.59, FS 0.65).
+# CH and FS are low for any movement-based method: seam-shifted wake moves
+# those pitches without spin.
+V13_MIN_SPEARMAN = {"FF": 0.85, "SI": 0.75, "CU": 0.85, "SL": 0.75,
+                    "ST": 0.65, "FC": 0.80, "CH": 0.50, "FS": 0.50}
+V13_LEVEL_BAND = (0.85, 1.15)   # median(physics) / median(Savant), per type
+V13_SEASON = 2025
+
+
+def v13_spin_vs_savant() -> Result:
+    """
+    The physics estimate (used before 2020, and for rows Savant omits) must
+    rank pitchers like Savant's measured active spin and sit on its scale:
+      1. Spearman per pitch type ≥ V13_MIN_SPEARMAN
+      2. median level ratio per pitch type inside V13_LEVEL_BAND
+    Uses one full season of cached Statcast and Savant's leaderboard (cached
+    after the first pull).
+    """
+    import pandas as pd
+    from scipy.stats import spearmanr
+    from ingest import pull_statcast_season
+    from spin_efficiency import (
+        aggregate_pitcher_pitch_type,
+        compute_spin_efficiency,
+        load_savant_active_spin,
+    )
+
+    try:
+        sc = pull_statcast_season(V13_SEASON, top_up=False)
+        savant = load_savant_active_spin(V13_SEASON)
+    except Exception as exc:
+        return False, f"inputs unavailable: {exc}"
+
+    agg = aggregate_pitcher_pitch_type(compute_spin_efficiency(sc))
+    agg = agg[agg["pitch_count"] >= 50]
+    j = agg.merge(savant, on=["pitcher", "pitch_type"])
+
+    errors, parts = [], []
+    lo, hi = V13_LEVEL_BAND
+    for ptype, floor in V13_MIN_SPEARMAN.items():
+        x = j[j["pitch_type"] == ptype]
+        if len(x) < 30:
+            errors.append(f"{ptype}: only {len(x)} rows matched Savant")
+            continue
+        rho = spearmanr(x["spin_efficiency_raw"], x["active_spin"])[0]
+        level = x["spin_efficiency_raw"].median() / x["active_spin"].median()
+        parts.append(f"{ptype} ρ={rho:.2f} lvl={level:.2f}")
+        if rho < floor:
+            errors.append(f"{ptype}: Spearman {rho:.2f} < {floor}")
+        if not lo <= level <= hi:
+            errors.append(f"{ptype}: level {level:.2f} outside [{lo}, {hi}]")
+
+    passed = len(errors) == 0
+    return passed, ("; ".join(parts) if passed else "; ".join(errors))
 
 
 # ---------------------------------------------------------------------------
@@ -1005,12 +1059,13 @@ TESTS = [
     ("V10", "Service time estimation",         v10_service_time),
     ("V11", "Spin efficiency pipeline",        v11_spin_efficiency),
     ("V12", "Park factors",                    v12_park_factors),
+    ("V13", "Spin efficiency vs Savant",       v13_spin_vs_savant),
 ]
 
 
 def run_all(verbose: bool = True) -> bool:
     """
-    Run all 12 validation tests and print a summary.
+    Run all 13 validation tests and print a summary.
     Returns True if every test passes.
     """
     results = []

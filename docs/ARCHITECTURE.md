@@ -108,7 +108,7 @@ pre-repair units, and were served as valid cache hits.
 
 ```mermaid
 flowchart TD
-    P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots of its era pool · its tunnel_league"]
+    P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots of its era pool · its tunnel_league · its spin_league"]
     P2["_gate_digest()<br/>every UPPERCASE constant in<br/>hitter_traits · pitcher_traits<br/>pitch_aggregates · reliability<br/>plus TAG_KIND · TAG_POPULATION"]
     FP["<b>build_fingerprint(season)</b><br/>sha256(pools + gates) first 16"]
     Q{"portrait_is_current()"}
@@ -133,9 +133,9 @@ reads a published row only when `schema_version` and `gate_fingerprint` match
 the code it is running, so tag logic deployed over older portraits shows "being
 replaced" rather than old tags under new rules.
 
-**Two gaps this had, both now closed.** `tunnel_league_*.parquet` lives in
-`modules/processed`, outside the glob, so tunnelling changes could not move the
-fingerprint. And `pitch_aggregates` was absent from the gate digest despite
+**Three gaps this had, all now closed.** `tunnel_league_*.parquet` and
+`spin_league_*.parquet` live in `modules/processed`, outside the glob, so
+tunnelling and spin changes could not move the fingerprint. And `pitch_aggregates` was absent from the gate digest despite
 owning the strike-zone geometry behind zone%, chase%, CSW% and framing — so a
 zone constant could change tag output invisibly.
 
@@ -143,7 +143,7 @@ zone constant could change tag output invisibly.
 to hash every pool file of every season, so topping up 2026 marked all 360
 portraits stale — 2015 included. Now each season hashes only what its portraits
 read: the `fg_batting`/`fg_pitching` roots of the seasons in its era pool, and
-its own `tunnel_league` file.
+its own `tunnel_league` and `spin_league` files.
 
 The era pool is the part that genuinely spans seasons — display percentiles
 and some pitcher gates rank against the whole Statcast era. It is defined as
@@ -174,11 +174,12 @@ flowchart LR
     S1["<b>statcast</b><br/>top up in-progress season<br/><i>finished seasons immutable</i>"]
     S2["<b>sources</b><br/>re-pull external feeds<br/><i>opt-in</i>"]
     S3["<b>tunnel</b><br/>rebuild where Statcast moved"]
+    S3b["<b>spin</b><br/>rebuild where Statcast or<br/>the spin method moved"]
     S4["<b>portraits</b><br/>rebuild what the<br/>fingerprint marks stale"]
     S5["<b>tags</b><br/>TAGS.md · tag_reference"]
     S6["<b>publish</b><br/>portraits · league seasons<br/>Scout → serving tables"]
 
-    S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    S1 --> S2 --> S3 --> S3b --> S4 --> S5 --> S6
 
     style S2 stroke-dasharray: 5 5
 ```
