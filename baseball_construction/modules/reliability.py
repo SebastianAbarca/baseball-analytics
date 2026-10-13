@@ -160,10 +160,12 @@ TAG_EVIDENCE: dict[str, str] = {
 
 # Every other tag in the vocabulary, and why it is not gated here. Explicit,
 # because "absent means ungated" is how `walk prone` and `fly-ball prone`
-# went ungated: the map still keyed the retired `wild`, so the renamed tag
-# fell through, and `fly-ball prone` was never added beside `ground-baller` —
-# 751 walk-prone firings below the 75 BF floor. validate_tag_evidence fails
-# on any vocabulary tag that is in neither map, or in both.
+# went ungated: the map keyed `wild`, a name nothing has ever emitted, while
+# the shipped tag was `walk prone`, and `fly-ball prone` was never added
+# beside `ground-baller` — 751 walk-prone firings below the 75 BF floor.
+# validate_tag_evidence fails on any vocabulary tag that is in neither map,
+# or in both. Candidate tags that do not exist yet (`wild`, `zone-filler`,
+# `nibbler`) live in scripts/tag_reference.PROSPECTIVE_TAGS, not here.
 _ATTRIBUTE   = "an attribute of the player, not a rate"
 _MECHANICS   = "release geometry; the mechanics pool requires 150 pitches"
 _ARSENAL     = "pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type"

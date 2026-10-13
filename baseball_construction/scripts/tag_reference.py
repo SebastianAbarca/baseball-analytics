@@ -37,12 +37,40 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 from team_portrait import (TAG_KIND, TAG_KINDS, TAG_POPULATION, POP_ALL,  # noqa: E402
                            TAG_EXCLUSIVE_GROUPS, kind_of)
 from reliability import (TAG_EVIDENCE, STABILIZATION,  # noqa: E402
-                         RELIABILITY_FLOOR)
+                         RELIABILITY_FLOOR, UNGATED_TAGS)
 
 _PORTRAITS = _HERE.parent / "data" / "processed" / "portraits"
 _OUT = _HERE.parent / "TAGS.md"
 
 _SIDE_GROUP = {"hitters": "H", "starters": "P", "bullpen_arms": "P"}
+
+# Tags that are NOT in the vocabulary — nothing emits them — kept as
+# candidates to review. Listed here rather than in TAG_EVIDENCE or TAG_KIND
+# because a name there is a promise the portraits keep: the gate map carried
+# these three from 2026-08-22, and no code in the repository has ever
+# emitted them. Their only effect was that the walk gate keyed `wild` while
+# the shipped tag was `walk prone`, which went ungated. --check fails if one
+# of these turns up in TAG_KIND (ship it, then delete it here).
+#   tag -> (side, claim, evidence it would rest on, notes for the review)
+PROSPECTIVE_TAGS: dict[str, tuple[str, str, str, str]] = {
+    "wild": (
+        "P", "walks far more batters than peers",
+        "BB% allowed (BB_pct_pitch, 75 BF floor)",
+        "Same claim as the live `walk prone` (walk avoidance ≤ 15th pct). "
+        "Only worth keeping as a stronger tier, e.g. ≤ 5th pct."),
+    "zone-filler": (
+        "P", "throws in the strike zone far more than peers",
+        "zone% (Zone_pct, 75 BF floor); Zone_pct_pct is already in every "
+        "pitcher's metrics",
+        "A behavior, not a result. Zone% vs BB% ρ = −0.44 across 1,838 "
+        "pitcher-seasons with 200+ BF (2021–25), so it would not just restate "
+        "the command tags; check it against `first-pitch attacker` first."),
+    "nibbler": (
+        "P", "works the edges — lives out of the zone more than peers",
+        "zone% (Zone_pct), low end",
+        "The low end of the same axis as `zone-filler`; ship both or neither "
+        "and make them an exclusive group."),
+}
 
 
 def scan_portraits() -> tuple[dict, dict, dict, int, dict]:
@@ -78,11 +106,13 @@ def scan_portraits() -> tuple[dict, dict, dict, int, dict]:
     return family, dict(side), count, players, evidence
 
 
-def sample_floor(tag: str) -> str:
-    """The reliability gate in the unit a reader thinks in — PA or BF."""
+def sample_floor(tag: str, why: bool = False) -> str:
+    """The reliability gate in the unit a reader thinks in — PA or BF. With
+    `why`, an ungated tag says what covers it instead (TAGS.md only — the
+    dashboard footer shows a floor only when there is one)."""
     metric = TAG_EVIDENCE.get(tag)
     if metric is None:
-        return "—"
+        return f"— ({UNGATED_TAGS[tag]})" if why and tag in UNGATED_TAGS else "—"
     stab = STABILIZATION.get(metric)
     if not stab:
         return metric
@@ -156,13 +186,16 @@ def build(check_only: bool) -> int:
     # ── discrepancies: the reason this is generated ──────────────────────
     no_kind = sorted(t for t in seen if kind_of(t) is None)
     never_fires = sorted(t for t in TAG_KIND if t not in seen)
-    problems = len(no_kind) + len(never_fires)
+    shipped = sorted(t for t in PROSPECTIVE_TAGS if t in TAG_KIND or t in seen)
+    problems = len(no_kind) + len(never_fires) + len(shipped)
 
     if check_only:
         for t in no_kind:
             print(f"  NO KIND: {t} (fires {count[t]}x)")
         for t in never_fires:
             print(f"  NEVER FIRES: {t} (has a kind, absent from every portrait)")
+        for t in shipped:
+            print(f"  STILL PROSPECTIVE: {t} is live — remove it from PROSPECTIVE_TAGS")
         print(f"\n{len(seen)} tags in data, {len(TAG_KIND)} keyed in TAG_KIND, "
               f"{problems} discrepancies")
         return 1 if problems else 0
@@ -201,6 +234,8 @@ def build(check_only: bool) -> int:
             lines.append(f"- `{t}` fires {count[t]}x but has no kind")
         for t in never_fires:
             lines.append(f"- `{t}` has a kind but never fires")
+        for t in shipped:
+            lines.append(f"- `{t}` is live but still listed as prospective")
         lines.append("")
 
     for kind in TAG_KINDS:
@@ -218,7 +253,7 @@ def build(check_only: bool) -> int:
             lines.append(
                 f"| `{t}` | {''.join(sorted(side.get(t, ''))) or '—'} "
                 f"| {family.get(t, '—')} | {count[t]:,} "
-                f"| {TAG_POPULATION.get(t, POP_ALL)} | {sample_floor(t)} "
+                f"| {TAG_POPULATION.get(t, POP_ALL)} | {sample_floor(t, why=True)} "
                 f"| {exclusive_of(t)} |"
             )
         lines.append("")
@@ -234,10 +269,23 @@ def build(check_only: bool) -> int:
         "eight players who never crouch.",
         f"- **reliability floor** — plate appearances or batters faced needed "
         f"before the tag may fire, from the metric's stabilization point × "
-        f"{RELIABILITY_FLOOR}. `—` means the tag is gated some other way "
-        "(an attribute, a count, or its own purpose-built floor).",
+        f"{RELIABILITY_FLOOR}. `—` means the tag is not gated on PA/BF, and "
+        "the note says what covers it instead (`reliability.UNGATED_TAGS`).",
         "- **exclusive with** — tags carving up the same axis. Only one member "
         "can appear in a fingerprint row, and a presence beats an absence.",
+        "",
+        "## Prospective tags",
+        "",
+        "Not in the vocabulary: nothing emits these, and no portrait carries "
+        "them. Candidates to review, kept in `PROSPECTIVE_TAGS` in "
+        "`scripts/tag_reference.py`. Shipping one means adding it to "
+        "`TAG_KIND`, its gate to `reliability.TAG_EVIDENCE`, and deleting it "
+        "here.",
+        "",
+        "| tag | side | claim | evidence | notes |",
+        "|---|---|---|---|---|",
+        *[f"| `{t}` | {sd} | {claim} | {ev} | {note} |"
+          for t, (sd, claim, ev, note) in PROSPECTIVE_TAGS.items()],
         "",
     ]
     _OUT.write_text("\n".join(lines))

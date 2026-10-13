@@ -283,7 +283,7 @@
      "family": "sequencing",
      "fires": 824,
      "population": "all",
-     "floor": "\u2014",
+     "floor": "75 (FPS_pct)",
      "earned": "74% first-pitch strikes (100th pct)"
     },
     {
@@ -577,7 +577,7 @@
      "family": "outcome",
      "fires": 946,
      "population": "all",
-     "floor": "\u2014",
+     "floor": "100 (GB_pct_pitch)",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
     },
     {
@@ -631,7 +631,7 @@
      "family": "deception",
      "fires": 797,
      "population": "all",
-     "floor": "\u2014",
+     "floor": "75 (SwStr_pct)",
      "earned": "whiff rate +10.5% above what velocity predicts (100th pct) \u2014 misses bats the radar gun can't explain"
     },
     {
@@ -748,7 +748,7 @@
      "family": "outcome",
      "fires": 1588,
      "population": "all",
-     "floor": "\u2014",
+     "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 14th pct"
     },
     {
