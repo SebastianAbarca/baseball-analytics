@@ -21,6 +21,7 @@ Tests:
   V14 Batted-ball direction — pull/oppo relative to the batter, boundaries
   V15 Tag evidence coverage — every tag gated or exempt; the gate refuses thin samples
   V16 Season completeness — missing games vs the schedule, the finished rule, opener dates
+  V17 Regular season only — raw caches and BRef totals hold no other games
 """
 
 from __future__ import annotations
@@ -1223,6 +1224,66 @@ def v16_season_completeness() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V17 — Regular season only
+# ---------------------------------------------------------------------------
+
+# Statcast's terminal-pitch count is not an official PA count (it misses a few
+# PAs per player-season and counts the odd non-PA event), so a little slack;
+# a postseason leak is 20-50 PA for a regular, far beyond it.
+_PA_SLACK = 5
+
+
+def v17_regular_season_only() -> Result:
+    """
+    On whatever data this machine has:
+      1. every raw Statcast cache holds regular-season pitches only
+      2. no player's season total in fg_batting / fg_pitching exceeds the PA
+         or BF Statcast counts for him in that season's regular-season games
+         by more than _PA_SLACK — the signature of postseason games leaking
+         into the BRef totals (Soto 2022: 716 PA vs 664 regular season)
+    Seasons without local files are skipped and named in the detail.
+    """
+    import pandas as pd
+    from ingest import PROCESSED_DIR, RAW_DIR, SEASON_DATES
+
+    errors, checked, skipped = [], [], []
+    for season in sorted(SEASON_DATES):
+        raw = RAW_DIR / f"statcast_{season}.parquet"
+        if not raw.exists():
+            skipped.append(season)
+            continue
+        sc = pd.read_parquet(raw, columns=["game_type", "batter", "pitcher", "events"])
+        other = sc["game_type"][sc["game_type"] != "R"].value_counts().to_dict()
+        if other:
+            errors.append(f"{season} raw cache holds non-regular-season pitches {other}")
+        ends = sc[(sc["game_type"] == "R") & sc["events"].notna()]
+        counts = {"batter": ends.groupby("batter").size(),
+                  "pitcher": ends.groupby("pitcher").size()}
+        for fname, col, who in ((f"fg_batting_{season}.csv", "PA", "batter"),
+                                (f"fg_pitching_{season}.csv", "BF", "pitcher")):
+            path = PROCESSED_DIR / fname
+            if not path.exists():
+                continue
+            fg = pd.read_csv(path, low_memory=False)
+            if col not in fg.columns or "key_mlbam" not in fg.columns:
+                continue
+            fg = fg[["key_mlbam", col]].dropna()
+            sc_n = fg["key_mlbam"].astype(int).map(counts[who]).fillna(0)
+            over = fg[fg[col].astype(float) > sc_n + _PA_SLACK]
+            if len(over):
+                worst = over.assign(sc=sc_n[over.index]).sort_values(col).iloc[-1]
+                errors.append(f"{fname}: {len(over)} player(s) with more {col} than "
+                              f"regular-season Statcast (e.g. {int(worst['key_mlbam'])}: "
+                              f"{int(worst[col])} vs {int(worst['sc'])})")
+        checked.append(season)
+
+    passed = not errors
+    detail = (f"seasons checked {checked}" + (f"; no local data {skipped}" if skipped else "")
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1243,6 +1304,7 @@ TESTS = [
     ("V14", "Batted-ball direction",           v14_spray_direction),
     ("V15", "Tag evidence coverage",           v15_tag_evidence),
     ("V16", "Season completeness",             v16_season_completeness),
+    ("V17", "Regular season only",             v17_regular_season_only),
 ]
 
 

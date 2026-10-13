@@ -382,18 +382,33 @@ def pull_statcast_season(season: int, top_up: bool = True) -> pd.DataFrame:
                 seasons only). Set False for reproducible offline runs.
     """
     cache = RAW_DIR / f"statcast_{season}.parquet"
+    df = None
     if cache.exists():
         try:
             log.info("Loading statcast_%d from cache: %s", season, cache)
             df = pd.read_parquet(cache)
-            if top_up:
-                df = _top_up_statcast(df, season, cache)
-            return df
         except Exception as e:
             log.warning(
                 "Cache file %s is corrupt (%s) — deleting and re-pulling", cache, e
             )
             cache.unlink()
+    if df is not None:
+        # Regular season on EVERY load, not just on new pulls. The filter used
+        # to run only when pulling, so whatever a cache already held was
+        # served as-is: 2024's file carried 20,583 spring-training pitches
+        # (88 games) and 2016's 252. A cache holding anything else is
+        # rewritten once, so every direct reader of the file is clean too.
+        # Outside the try above on purpose: that handler deletes the cache.
+        rs = _regular_season(df)
+        if len(rs) < len(df):
+            dropped = df.loc[~df.index.isin(rs.index), "game_type"].value_counts().to_dict()
+            log.warning("statcast_%d: removing %d non-regular-season pitches %s "
+                        "from the cache", season, len(df) - len(rs), dropped)
+            df = rs.reset_index(drop=True)
+            df.to_parquet(cache, index=False)
+        if top_up:
+            df = _top_up_statcast(df, season, cache)
+        return df
 
     if season not in SEASON_DATES:
         raise ValueError(f"Season {season} not in SEASON_DATES — add dates manually.")
@@ -570,6 +585,23 @@ def _sanitize_sprint_speed(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _bref_season_range(season: int) -> tuple[str, str]:
+    """
+    The regular season's dates for BRef's date-range leaderboards.
+
+    pybaseball's batting_stats_bref / pitching_stats_bref request March 1 to
+    November 30, which is the postseason too: Soto 2022 came back with 716 PA
+    and 165 G (MLB: 664, 153), Scherzer 2021 with 761 BF (693). Those totals
+    are joined to regular-season Statcast metrics, so a postseason team's
+    players carried inflated workloads and denominators. Bounded by
+    SEASON_DATES instead — which is why its first date has to be the first
+    game anywhere, international openers included.
+    """
+    if season not in SEASON_DATES:
+        raise ValueError(f"Season {season} not in SEASON_DATES — add dates manually.")
+    return SEASON_DATES[season]
+
+
 def _bref_savant_batting_merge(season: int, min_pa: int = 100,
                                strict: bool = False) -> pd.DataFrame:
     """
@@ -581,7 +613,7 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100,
     k_percent/bb_percent are dropped from Savant because BRef's raw rates are better.
     """
     log.info("Pulling Baseball Reference batting %d", season)
-    bref = pybaseball.batting_stats_bref(season)
+    bref = pybaseball.batting_stats_range(*_bref_season_range(season))
     bref = bref.rename(columns={"mlbID": "key_mlbam", "BA": "AVG"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["PA"] >= min_pa)].copy()
@@ -644,7 +676,7 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30,
     Savant provides fb_velocity, whiff%, hard_hit%, xwOBA_allowed, Barrel_allowed.
     """
     log.info("Pulling Baseball Reference pitching %d", season)
-    bref = pybaseball.pitching_stats_bref(season)
+    bref = pybaseball.pitching_stats_range(*_bref_season_range(season))
     bref = bref.rename(columns={"mlbID": "key_mlbam"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["BF"] >= min_pa)].copy()

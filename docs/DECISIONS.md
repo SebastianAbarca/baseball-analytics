@@ -254,6 +254,21 @@ seasons' copies are committed in `data/era/` (7 MB), refreshed at finalize by
 and the fingerprints agree.
 
 
+### "Season" means the regular season, for every input
+
+Statcast was filtered to `game_type == "R"` only when a season was first
+pulled, so whatever a cache already held was served as-is: 2024's carried
+20,583 spring-training pitches. And the BRef season totals came from
+pybaseball helpers that request March 1 to November 30, postseason included —
+Soto 2022 had 716 PA and 165 G against MLB's 664 and 153, and from 2021 on
+about a hundred hitters and a hundred pitchers per season carried October
+plate appearances into workloads and rate denominators.
+
+Now every Statcast load filters and rewrites a cache that held anything else,
+the BRef pulls are bounded by `SEASON_DATES`, and V17 compares each season's
+totals with the PA/BF regular-season Statcast counts — a leak shows up as
+totals running ahead, without naming any player.
+
 ### Purge every layer or none
 
 Repairing the database is not enough. `team_portrait` ranks players against
