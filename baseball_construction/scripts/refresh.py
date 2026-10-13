@@ -106,7 +106,14 @@ def stage_statcast(seasons: list[int], dry: bool) -> list[int]:
     for s in seasons:
         cache = RAW_DIR / f"statcast_{s}.parquet"
         if not cache.exists():
-            log.info("  %d: no local Statcast cache — will pull in full", s)
+            log.info("  %d: no local Statcast cache — %s in full", s,
+                     "would pull" if dry else "pulling")
+            # Pulled HERE, not left for the portrait build to fetch: the tunnel
+            # stage needs the file, and a tunnel pool first written mid-build
+            # moves the fingerprint under it. On a fresh machine that stamped
+            # all 30 portraits stale and failed the night.
+            if not dry:
+                pull_statcast_season(s)
             moved.append(s)
             continue
         if dry:

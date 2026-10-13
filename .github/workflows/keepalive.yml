@@ -34,7 +34,7 @@ jobs:
         run: |
           for wf in keepalive.yml nightly.yml seed.yml; do
             gh workflow enable "$wf"
-            echo "$wf: $(gh workflow view "$wf" --json state -q .state)"
+            echo "$wf: $(gh api "repos/$GH_REPO/actions/workflows/$wf" -q .state)"
           done
 
       - name: Read one published portrait key

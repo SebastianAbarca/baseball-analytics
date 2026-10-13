@@ -141,7 +141,8 @@ def _prior_statcast(season: int) -> None:
     from ingest import pull_statcast_season
     log.info("  statcast %d: not on this machine — pulling the full season "
              "(once; it is finished)", season - 1)
-    pull_statcast_season(season - 1, top_up=False)
+    df = pull_statcast_season(season - 1, top_up=False)
+    log.info("  statcast %d: %d pitches", season - 1, len(df))
 
 
 def bootstrap(season: int) -> None:
