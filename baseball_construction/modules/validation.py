@@ -19,6 +19,7 @@ Tests:
   V12 Park factors — build_park_profile returns normalized pitcher_friendly
   V13 Metric rank directions — every metric declares one; outcome gates monotonic
   V14 Batted-ball direction — pull/oppo relative to the batter, boundaries
+  V15 Tag evidence coverage — every tag gated or exempt; the gate refuses thin samples
 """
 
 from __future__ import annotations
@@ -1125,6 +1126,43 @@ def v14_spray_direction() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V15 — Tag evidence coverage
+# ---------------------------------------------------------------------------
+
+def v15_tag_evidence() -> Result:
+    """
+    Every tag the portraits can emit is either gated on a metric or exempt
+    for a stated reason (reliability.validate_tag_evidence), and the gate
+    actually bites: a 20-BF pitcher with the worst walk and ground-ball rates
+    in the pool loses `walk prone` and `fly-ball prone`, and keeps them at
+    200 BF.
+    """
+    import team_portrait as tp
+    from pitcher_traits import outcome_traits
+    from reliability import TAG_EVIDENCE, UNGATED_TAGS, filter_traits, validate_tag_evidence
+
+    errors = list(validate_tag_evidence(tp.TAG_KIND))
+
+    raw = outcome_traits({"BB_pct_pct": 2.0, "GB_pct_pct": 2.0})
+    emitted = {t["tag"] for t in raw}
+    want = {"walk prone", "fly-ball prone"}
+    if not want <= emitted:
+        errors.append(f"test pitcher should emit {sorted(want)}, got {sorted(emitted)}")
+    small = {t["tag"] for t in filter_traits(raw, 20)}
+    large = {t["tag"] for t in filter_traits(raw, 200)}
+    if small & want:
+        errors.append(f"20 BF still carries {sorted(small & want)}")
+    if not want <= large:
+        errors.append(f"200 BF lost {sorted(want - large)}")
+
+    passed = not errors
+    detail = (f"{len(tp.TAG_KIND)} tags: {len(TAG_EVIDENCE)} gated, {len(UNGATED_TAGS)} "
+              "exempt with a reason; walk prone / fly-ball prone refused at 20 BF"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1143,6 +1181,7 @@ TESTS = [
     ("V12", "Park factors",                    v12_park_factors),
     ("V13", "Metric rank directions",          v13_metric_directions),
     ("V14", "Batted-ball direction",           v14_spray_direction),
+    ("V15", "Tag evidence coverage",           v15_tag_evidence),
 ]
 
 
