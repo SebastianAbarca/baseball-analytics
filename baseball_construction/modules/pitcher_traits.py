@@ -389,8 +389,9 @@ def deception_traits(
             eff = spin_row.get("spin_efficiency_weighted")
             if float(ep) >= HIGH_SPIN_EFF_PCT:
                 traits.append(_trait("high spin efficiency", "deception", eff, ep,
-                                     f"spin efficiency {ep:.0f}th pct — movement "
-                                     "extracts nearly all of the raw spin"))
+                                     f"spin efficiency {ep:.0f}th pct against the "
+                                     "same pitch types — more of the spin becomes "
+                                     "movement than on comparable pitches"))
             # `gyro-heavy` retired: P(slider out pitch | gyro-heavy) = 0.79 —
             # gyro spin IS slider spin, so the tag mostly restated the pitch.
 

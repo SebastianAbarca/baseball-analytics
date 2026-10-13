@@ -37,7 +37,7 @@ Stages run in dependency order. One is opt-in.
 | `statcast` | tops up the in-progress season; fetches any game MLB's schedule lists that a cache lacks | on |
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
 | `seed` | writes the re-pulled season totals to `player_batting`/`player_pitching`, where the portraits read them — **writes production** | **off** |
-| `league` | rebuilds every league cache (tunnel, pitch mix, spin, plate discipline, mechanics, sequencing) where Statcast moved | on |
+| `league` | rebuilds every league cache (tunnel, pitch mix, spin, plate discipline, mechanics, sequencing) where Statcast moved; spin also when its method changes, re-pulling Savant active spin | on |
 | `portraits` | rebuilds whatever the fingerprint marks stale | on |
 | `tags` | regenerates TAGS.md and tag_reference | on |
 | `publish` | writes portraits, league seasons and Scout to the serving tables | on |
@@ -62,6 +62,10 @@ python baseball_construction/scripts/refresh.py --jobs 3
 # After changing league-cache CODE rather than data (tunnel, pitch mix,
 # spin, discipline, mechanics, sequencing); --force-tunnel still works
 python baseball_construction/scripts/refresh.py --force-league
+
+# Re-pull Savant active spin and rebuild only the spin caches with nothing
+# moved (a spin CODE change bumps SPIN_METHOD_VERSION, which rebuilds on its own)
+python baseball_construction/scripts/refresh.py --force-spin
 ```
 
 `--dry-run` is worth running first on anything unfamiliar. It reports staleness

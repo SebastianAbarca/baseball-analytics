@@ -146,6 +146,36 @@ Getting this backwards put the *least* patient hitters at the top of a search
 for the most patient. It would have been worse in the similarity metric, where
 there is no obviously right answer to check against.
 
+### Spin efficiency was a clipped constant, not a measurement
+
+`theoretical_max = 0.00153 × rpm / mph × 12` left **90% of 2025 pitches at or
+above 1.0** before the clip (median ratio 3.0): the constant had no traceable
+source and was ~4× too small. Every fastball, sinker and changeup read 1.0, so
+the pooled percentile measured one thing — how few sliders a pitcher throws
+(Spearman −0.58 with slider share; half of `high spin efficiency` pitchers
+threw none). Against Savant's measured active spin it ranked four-seamers at
+Spearman 0.20.
+
+Now:
+
+- **2020+ is Savant's measured active spin** (the 3D spin vector, from the
+  active-spin leaderboard). Anything inferred from movement credits
+  seam-shifted wake to spin — changeups and splitters top out near 0.6–0.65
+  for *any* movement method, Savant's own included.
+- **Before 2020, a physics estimate**: Magnus acceleration from the
+  9-parameter fit (gravity and drag removed), air density from park
+  elevation, the Sawicki lift curve inverted. It ranks like Savant measured
+  (FF 0.92, CU 0.93, SL 0.83) and level with Savant's own movement-inferred
+  numbers. One level factor per pitch type, fitted on 2020–2025 and stable
+  ±5% by season, puts its values on Savant's scale. The lift curve is least
+  certain at slider/cutter spin factors, hence their 1.65 / 1.92 factors.
+- **Percentiles are within pitch type.** Gyro spin is what makes a slider;
+  pooling ranks pitch mix. A pitcher's percentile is the pitch-weighted mean
+  of their within-type percentiles, re-ranked across pitchers.
+
+V13 holds the physics estimate to per-type Spearman floors and a ±15% level
+band against Savant, so it cannot drift silently again.
+
 ---
 
 ## The strike zone
@@ -265,7 +295,7 @@ about a hundred hitters and a hundred pitchers per season carried October
 plate appearances into workloads and rate denominators.
 
 Now every Statcast load filters and rewrites a cache that held anything else,
-the BRef pulls are bounded by `SEASON_DATES`, and V17 compares each season's
+the BRef pulls are bounded by `SEASON_DATES`, and V18 compares each season's
 totals with the PA/BF regular-season Statcast counts — a leak shows up as
 totals running ahead, without naming any player.
 

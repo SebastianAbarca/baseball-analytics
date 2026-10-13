@@ -20,7 +20,9 @@ Stages run in dependency order, each feeding the next:
     seed       write the re-pulled season totals to the database the
                portraits read them from                 (opt-in; writes production)
     league     rebuild every league cache (tunnel, pitch mix, spin, plate
-               discipline, mechanics, sequencing) where Statcast moved
+               discipline, mechanics, sequencing) where Statcast moved; spin
+               also when its method changed, re-pulling Savant's measured
+               active spin
     portraits  rebuild whatever the build fingerprint now marks stale,
                and rewrite league_identity_*.json
     tags       regenerate TAGS.md and dashboard/tag_reference.json
@@ -90,8 +92,8 @@ STAGES = ("statcast", "sources", "seed", "league", "portraits", "tags", "publish
 # `sources` is opt-in: it re-pulls every external feed (slow, network-bound,
 # and the least reliable step). `seed` is opt-in because it writes the
 # production player tables; run it with `sources`, since the portraits read
-# season totals from those tables, not from the CSVs `sources` refreshes. `publish` is on: a build nobody can read is
-# not finished.
+# season totals from those tables, not from the CSVs `sources` refreshes.
+# `publish` is on: a build nobody can read is not finished.
 DEFAULT_STAGES = ("statcast", "league", "portraits", "tags", "publish")
 
 log = logging.getLogger("refresh")
@@ -359,9 +361,10 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
 
 # Every per-season cache derived from raw Statcast, with its builder. Each is
 # read by the portraits and NONE checked its input: the loaders return the
-# parquet whenever it exists. Only the tunnel pool was rebuilt when Statcast
-# moved, so by the end of 2026 the other five were 92.8 days older than the
-# raw file — pitch_mix held 191,141 pitches of a season with 713,868. They are
+# parquet whenever it exists. Tunnel and spin had stages of their own; the
+# other four had nothing, and by the end of 2026 all five non-tunnel caches
+# were 92.8 days older than the raw file — pitch_mix held 191,141 pitches of a
+# season with 713,868. One stage now covers all six. They are
 # all in the build fingerprint (team_portrait._FINGERPRINT_EXTRA_POOLS), so a
 # rebuilt cache marks that season's portraits stale.
 def _league_caches():
@@ -381,6 +384,20 @@ def _league_caches():
 
 _TUNNEL_COLS = ["pitcher", "game_pk", "at_bat_number", "pitch_number", "pitch_type",
                 "plate_x", "plate_z", "vx0", "vy0", "vz0", "ax", "ay", "az"]
+# The spin build's input, as its own stage gave it (spin_efficiency, PR #19).
+_SPIN_COLS = ["pitcher", "pitch_type", "game_year", "home_team", "release_speed",
+              "release_spin_rate", "release_pos_y", "release_extension",
+              "vx0", "vy0", "vz0", "ax", "ay", "az", "pfx_x", "pfx_z", "spin_axis"]
+
+
+def _spin_method_stale(cache: Path) -> bool:
+    """A spin cache built by an older SPIN_METHOD_VERSION is stale even when
+    Statcast has not moved — the method, not the data, changed."""
+    import pandas as pd
+    from spin_efficiency import SPIN_METHOD_VERSION
+    cached = pd.read_parquet(cache, columns=None)
+    return ("spin_method_version" not in cached.columns
+            or not (cached["spin_method_version"] == SPIN_METHOD_VERSION).all())
 
 
 def stage_seed(seasons: list[int], dry: bool) -> None:
@@ -400,12 +417,14 @@ def stage_seed(seasons: list[int], dry: bool) -> None:
         log.info("  %d: seeded", s)
 
 
-def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool) -> int:
+def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
+                 force_caches: frozenset[str] = frozenset()) -> int:
     """
     Rebuild every league cache whose raw Statcast is newer than it (or that
     is missing, or whose season the statcast stage just moved), and drop the
     season's cross-team rows so the portraits stage rebuilds them from the
-    same data. Returns the number of caches rebuilt.
+    same data. force_caches names caches to rebuild regardless
+    ("spin_league" for --force-spin). Returns the number of caches rebuilt.
     """
     from ingest import pull_statcast_season
     from team_portrait import cross_team_path
@@ -418,8 +437,10 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool)
         stale = []
         for pat, build in _league_caches():
             cache = LEAGUE_DIR / pat.format(s=s)
-            if (force or s in changed or not cache.exists()
-                    or sc.stat().st_mtime > cache.stat().st_mtime):
+            kind = pat.replace("_{s}.parquet", "")
+            if (force or kind in force_caches or s in changed or not cache.exists()
+                    or sc.stat().st_mtime > cache.stat().st_mtime
+                    or (kind == "spin_league" and _spin_method_stale(cache))):
                 stale.append((cache, build))
         if not stale:
             continue
@@ -438,7 +459,14 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool)
                 # across a dropped pitch is review item 10, separately.
                 data = statcast[_TUNNEL_COLS].dropna(
                     subset=["plate_x", "plate_z", "vy0", "ay"])
-            build(s, statcast=data, force=True)
+            elif cache.name.startswith("spin_league_"):
+                data = statcast[[c for c in _SPIN_COLS if c in statcast.columns]]
+            out = build(s, statcast=data, force=True)
+            if cache.name.startswith("spin_league_") and len(out):
+                share = ((out["spin_savant_share"] * out["total_pitches"]).sum()
+                         / out["total_pitches"].sum())
+                log.info("  %d: spin — %d pitchers, %.0f%% of pitches from Savant's "
+                         "measured active spin", s, len(out), 100 * share)
         ct = cross_team_path(s)
         if ct.exists():
             ct.unlink()
@@ -644,6 +672,9 @@ def main() -> int:
                     help="rebuild the league caches even when Statcast has not "
                          "moved (use after changing tunnel/pitch-mix/spin/"
                          "discipline/mechanics/sequencing code)")
+    ap.add_argument("--force-spin", action="store_true",
+                    help="rebuild only the spin caches, re-pulling Savant's active "
+                         "spin, even when nothing has moved")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what each stage would do, change nothing")
     args = ap.parse_args()
@@ -653,7 +684,7 @@ def main() -> int:
     # order the moment the output is piped anywhere.
     logging.basicConfig(level=logging.INFO, format="%(message)s",
                         stream=sys.stdout)
-    for noisy in ("ingest", "tunneling", "team_portrait", "pitch_aggregates"):
+    for noisy in ("ingest", "tunneling", "spin_efficiency", "team_portrait", "pitch_aggregates"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if "-" in args.seasons:
@@ -662,8 +693,9 @@ def main() -> int:
     else:
         seasons = [int(x) for x in args.seasons.split(",")]
 
-    # `tunnel` was this stage's name when it rebuilt only the tunnel pool.
-    alias = {"tunnel": "league"}
+    # `tunnel` and `spin` were separate stages before `league` rebuilt every
+    # league cache; both still name it.
+    alias = {"tunnel": "league", "spin": "league"}
     skip = {alias.get(s.strip(), s.strip()) for s in args.skip.split(",") if s.strip()}
     stages = [alias.get(s.strip(), s.strip()) for s in args.stages.split(",")
               if s.strip() and alias.get(s.strip(), s.strip()) not in skip]
@@ -695,7 +727,8 @@ def main() -> int:
         elif name == "seed":
             stage_seed(seasons, args.dry_run)
         elif name == "league":
-            n = stage_league(seasons, changed, args.force_league, args.dry_run)
+            n = stage_league(seasons, changed, args.force_league, args.dry_run,
+                             frozenset({"spin_league"}) if args.force_spin else frozenset())
             if not n:
                 log.info("  all league caches current")
         elif name == "portraits":

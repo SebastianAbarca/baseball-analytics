@@ -133,9 +133,9 @@ reads a published row only when `schema_version` and `gate_fingerprint` match
 the code it is running, so tag logic deployed over older portraits shows "being
 replaced" rather than old tags under new rules.
 
-**Two gaps this had, both now closed.** `tunnel_league_*.parquet` lives in
-`modules/processed`, outside the glob, so tunnelling changes could not move the
-fingerprint. And `pitch_aggregates` was absent from the gate digest despite
+**Three gaps this had, all now closed.** `tunnel_league_*.parquet` and
+`spin_league_*.parquet` live in `modules/processed`, outside the glob, so
+tunnelling and spin changes could not move the fingerprint. And `pitch_aggregates` was absent from the gate digest despite
 owning the strike-zone geometry behind zone%, chase%, CSW% and framing — so a
 zone constant could change tag output invisibly.
 
@@ -144,10 +144,12 @@ to hash every pool file of every season, so topping up 2026 marked all 360
 portraits stale — 2015 included. Now each season hashes only what its portraits
 read: the `fg_batting`/`fg_pitching` roots of the seasons in its era pool, and
 its own six league caches — tunnel, pitch mix, spin, plate discipline,
-mechanics, sequencing. Only the tunnel pool used to be hashed, or rebuilt when
-Statcast moved; the other five sat 92.8 days behind the 2026 raw file while
-every portrait read as current. The cross-team rows behind the team
-construction percentiles are hashed per era-pool season, like the fg roots.
+mechanics, sequencing. Tunnel and spin had stages of their own; pitch mix,
+plate discipline, mechanics and sequencing had none and were not hashed, and
+2026's sat 92.8 days behind the raw file while every portrait read as
+current. One `league` stage now rebuilds all six (spin also on a method
+change). The cross-team rows behind the team construction percentiles are
+hashed per era-pool season, like the fg roots.
 
 The era pool is the part that genuinely spans seasons — display percentiles
 and some pitcher gates rank against the whole Statcast era. It is defined as
@@ -177,7 +179,7 @@ network-bound.
 flowchart LR
     S1["<b>statcast</b><br/>top up in-progress season<br/>backfill games MLB lists<br/>that a cache lacks"]
     S2["<b>sources</b><br/>re-pull external feeds<br/><i>opt-in</i>"]
-    S3["<b>league</b><br/>rebuild all six league caches<br/>where Statcast moved"]
+    S3["<b>league</b><br/>rebuild all six league caches<br/>where Statcast (or the spin<br/>method) moved"]
     S4["<b>portraits</b><br/>rebuild what the<br/>fingerprint marks stale"]
     S5["<b>tags</b><br/>TAGS.md · tag_reference"]
     S6["<b>publish</b><br/>portraits · league seasons<br/>Scout → serving tables"]

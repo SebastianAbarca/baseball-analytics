@@ -399,6 +399,35 @@ def _all_team_hitter_ids(statcast: pd.DataFrame) -> dict[str, set[int]]:
     }
 
 
+def _league_team_spin_pct(statcast: pd.DataFrame, league_spin: pd.DataFrame) -> pd.Series:
+    """
+    Percentile (0–100) of each pitching team's spin efficiency across the league.
+
+    Team value = mean of the league pool's spin_efficiency_pct (already ranked
+    within pitch type, then across every pitcher in the season), weighted by
+    pitches. A pitcher who changed teams carries his total_pitches into each
+    club in proportion to the Statcast pitches he threw for it.
+    """
+    sc = statcast[["pitcher", "inning_topbot", "home_team", "away_team"]].copy()
+    sc["pitching_team"] = np.where(
+        sc["inning_topbot"] == "Top", sc["home_team"], sc["away_team"],
+    )
+    counts = (
+        sc.dropna(subset=["pitcher", "pitching_team"])
+        .groupby(["pitcher", "pitching_team"]).size()
+        .rename("n").reset_index()
+    )
+    counts["share"] = counts["n"] / counts.groupby("pitcher")["n"].transform("sum")
+
+    pool = league_spin[["pitcher", "spin_efficiency_pct", "total_pitches"]].dropna()
+    m = counts.merge(pool, on="pitcher", how="inner")
+    m["w"] = m["total_pitches"] * m["share"]
+    m["wx"] = m["w"] * m["spin_efficiency_pct"]
+    g = m.groupby("pitching_team")[["wx", "w"]].sum()
+    team_mean = g["wx"] / g["w"].where(g["w"] > 0)
+    return normalize_percentile(team_mean)
+
+
 def cross_team_path(season: int) -> Path:
     """
     The per-season cross-team rows file. `_v2` because the unversioned files
@@ -2416,15 +2445,15 @@ _FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
 # out, a change to how tunnel_score is computed could not move the fingerprint
 # and every portrait kept a `tunneler` tag cut by the old maths.
 #
-# The other five league caches were missing for the same reason, and they
-# were the stale ones: refreshing Statcast rebuilt only the tunnel pool, and a
-# portrait cut from a 93-day-old pitch mix still matched the fingerprint.
+# Pitch mix, plate discipline, mechanics and sequencing were missing for the
+# same reason, and had no rebuild either: a portrait cut from a 93-day-old
+# pitch mix still matched the fingerprint.
 # refresh.stage_league rebuilds all six when Statcast moves.
 _LEAGUE_DIR = Path(__file__).resolve().parent / "processed"
 _FINGERPRINT_EXTRA_POOLS = tuple((_LEAGUE_DIR, pat) for pat in (
     "tunnel_league_{s}.parquet",
     "pitch_mix_{s}.parquet",
-    "spin_league_{s}.parquet",
+    "spin_league_{s}.parquet",   # `high spin efficiency`, SpinEfficiency_pct
     "plate_discipline_league_{s}.parquet",
     "mechanics_league_{s}.parquet",
     "sequencing_league_{s}.parquet",
@@ -3218,7 +3247,8 @@ def build_team_portrait(
     spin_pitcher_level: Optional[pd.DataFrame] = None
     try:
         if not pitcher_sc.empty:
-            spin_pitch_level, spin_pitcher_level = build_pitcher_spin_profile(pitcher_sc)
+            spin_pitch_level, spin_pitcher_level = build_pitcher_spin_profile(
+                pitcher_sc, season=season)
             log.info("Spin efficiency computed for %d pitchers", len(spin_pitcher_level))
     except Exception as exc:
         log.warning("Spin efficiency failed: %s", exc)
@@ -3250,6 +3280,16 @@ def build_team_portrait(
     team_pitching_agg = _aggregate_team_pitching(team_pit)
 
     # ── 9. Spin efficiency team summary ──────────────────────────────────
+    # League-wide spin pool — percentiles vs ALL pitchers in the season (the
+    # per-team frame above only ranks within this team's arms). Also reused
+    # for the per-pitcher classifier keys below.
+    _league_spin = None
+    try:
+        from spin_efficiency import load_league_spin
+        _league_spin = load_league_spin(season, statcast=statcast)
+    except Exception as _ls_exc:
+        log.warning("League spin pool unavailable: %s", _ls_exc)
+
     spin_team_summary: Optional[dict] = None
     if spin_pitcher_level is not None and not spin_pitcher_level.empty:
         se_col = "spin_efficiency_weighted"
@@ -3258,27 +3298,13 @@ def build_team_portrait(
             if len(valid) > 0:
                 team_mean_se = float(valid.mean())
 
-                # Compute league-wide team spin efficiency to get a proper percentile.
-                # For each pitching team in Statcast, compute mean spin_rate as a proxy
-                # (full spin-efficiency model is too slow for all 30 teams; raw spin_rate
-                # correlates tightly and is available directly in the Statcast parquet).
-                se_rows = []
-                sc_spin = statcast[["pitcher", "release_spin_rate",
-                                    "inning_topbot", "home_team", "away_team"]].copy()
-                sc_spin["pitching_team"] = np.where(
-                    sc_spin["inning_topbot"] == "Top",
-                    sc_spin["home_team"], sc_spin["away_team"],
-                )
-                sc_spin["_spin"] = pd.to_numeric(sc_spin["release_spin_rate"], errors="coerce")
-                league_team_spin = (
-                    sc_spin.dropna(subset=["_spin", "pitching_team"])
-                    .groupby("pitching_team")["_spin"]
-                    .mean()
-                )
-                if team in league_team_spin.index and league_team_spin.notna().sum() > 1:
-                    se_pct = float(normalize_percentile(league_team_spin).loc[team])
-                else:
-                    se_pct = 50.0
+                # Team percentile: pitch-weighted mean of each pitcher's league
+                # spin_efficiency_pct, ranked across the 30 pitching teams.
+                se_pct = 50.0
+                if _league_spin is not None and not _league_spin.empty:
+                    league_team_pct = _league_team_spin_pct(statcast, _league_spin)
+                    if team in league_team_pct.index and league_team_pct.notna().sum() > 1:
+                        se_pct = float(league_team_pct.loc[team])
 
                 spin_team_summary = {
                     "mean_spin_efficiency":         team_mean_se,
@@ -3547,20 +3573,15 @@ def build_team_portrait(
     except Exception as _pm_exc:
         log.warning("Pitch mix unavailable for %s %s: %s", team, season, _pm_exc)
 
-    # League-wide tunnel/spin pools — percentiles vs ALL pitchers in the season
-    # (the per-team frames above only rank within this team's arms).
+    # League-wide tunnel pool — percentiles vs ALL pitchers in the season
+    # (the per-team frames above only rank within this team's arms). The
+    # league spin pool was loaded in step 9.
     _league_tunnel = None
-    _league_spin = None
     try:
         from tunneling import load_league_tunnel
         _league_tunnel = load_league_tunnel(season, statcast=statcast)
     except Exception as _lt_exc:
         log.warning("League tunnel pool unavailable: %s", _lt_exc)
-    try:
-        from spin_efficiency import load_league_spin
-        _league_spin = load_league_spin(season, statcast=statcast)
-    except Exception as _ls_exc:
-        log.warning("League spin pool unavailable: %s", _ls_exc)
     _league_disc = None
     try:
         from pitch_mix import load_league_plate_discipline
