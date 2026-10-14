@@ -1287,6 +1287,12 @@ def v17_season_completeness() -> Result:
 # PAs per player-season and counts the odd non-PA event), so a little slack;
 # a postseason leak is 20-50 PA for a regular, far beyond it.
 _PA_SLACK = 5
+# A leak is systemic: it hits every regular on a playoff roster, about a
+# hundred players a season before the fix. Statcast's own gaps hit one or two
+# (Ellsbury 2016: 626 PA vs 618, two games missing from the feed), and only
+# before 2019. So a season fails when this many players run over the slack;
+# fewer are reported as Statcast gaps and pass.
+_LEAK_MIN_PLAYERS = 5
 
 
 def v18_regular_season_only() -> Result:
@@ -1295,14 +1301,15 @@ def v18_regular_season_only() -> Result:
       1. every raw Statcast cache holds regular-season pitches only
       2. no player's season total in fg_batting / fg_pitching exceeds the PA
          or BF Statcast counts for him in that season's regular-season games
-         by more than _PA_SLACK — the signature of postseason games leaking
-         into the BRef totals (Soto 2022: 716 PA vs 664 regular season)
+         by more than _PA_SLACK for _LEAK_MIN_PLAYERS or more players — the
+         signature of postseason games leaking into the BRef totals (Soto
+         2022: 716 PA vs 664 regular season). Fewer are named as gaps.
     Seasons without local files are skipped and named in the detail.
     """
     import pandas as pd
     from ingest import PROCESSED_DIR, RAW_DIR, SEASON_DATES
 
-    errors, checked, skipped = [], [], []
+    errors, gaps, checked, skipped = [], [], [], []
     for season in sorted(SEASON_DATES):
         raw = RAW_DIR / f"statcast_{season}.parquet"
         if not raw.exists():
@@ -1327,16 +1334,21 @@ def v18_regular_season_only() -> Result:
                 continue
             fg = fg[["key_mlbam", col]].dropna()
             sc_n = fg["key_mlbam"].astype(int).map(counts[who]).fillna(0)
-            over = fg[fg[col].astype(float) > sc_n + _PA_SLACK]
-            if len(over):
-                worst = over.assign(sc=sc_n[over.index]).sort_values(col).iloc[-1]
+            fg = fg.assign(sc=sc_n, gap=fg[col].astype(float) - sc_n)
+            over = fg[fg["gap"] > _PA_SLACK].sort_values("gap")
+            if len(over) >= _LEAK_MIN_PLAYERS:
+                worst = over.iloc[-1]
                 errors.append(f"{fname}: {len(over)} player(s) with more {col} than "
                               f"regular-season Statcast (e.g. {int(worst['key_mlbam'])}: "
                               f"{int(worst[col])} vs {int(worst['sc'])})")
+            else:
+                gaps += [f"{season} {int(r.key_mlbam)} {int(getattr(r, col))} vs "
+                         f"{int(r.sc)} {col}" for r in over.itertuples()]
         checked.append(season)
 
     passed = not errors
     detail = (f"seasons checked {checked}" + (f"; no local data {skipped}" if skipped else "")
+              + (f"; Statcast gaps, not leaks: {', '.join(gaps)}" if gaps else "")
               if passed else "; ".join(errors))
     return passed, detail
 
