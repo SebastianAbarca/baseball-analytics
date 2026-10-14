@@ -148,6 +148,12 @@ publish hit four and lost none.
 **FanGraphs returns 403.** Expected since 2024. `pull_fg_batting` falls through
 to Baseball Reference + Savant, then to Savant alone. Nothing to do.
 
+**Baseball Reference returns 429.** It rate-limits after a burst of pulls, for
+about an hour; pybaseball reports it as `IndexError: list index out of range`.
+`pull_bref_range` retries after 5, 10 and 15 minutes. Its table is cached as
+`bref_{batting,pitching}_range_{season}.csv`, and both the `fg_*` roots and
+`seed` build from that cache, so `seed` makes no BRef request after `sources`.
+
 **`sources` reports success but changes nothing.** pybaseball's own HTTP cache
 served the response. `refresh.py` now disables it for that stage; if you are
 calling a puller directly, disable it yourself or you will get stale numbers

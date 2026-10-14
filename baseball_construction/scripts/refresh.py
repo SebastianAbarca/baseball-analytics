@@ -18,7 +18,9 @@ Stages run in dependency order, each feeding the next:
                fielding OAA, bWAR, defensive runs, IL — and clear the pools
                built from them                          (opt-in)
     seed       write the re-pulled season totals to the database the
-               portraits read them from                 (opt-in; writes production)
+               portraits read them from, built from the BRef tables
+               `sources` cached — no BRef request of its own
+                                                        (opt-in; writes production)
     league     rebuild every league cache (tunnel, pitch mix, spin, plate
                discipline, mechanics, sequencing) where Statcast moved; spin
                also when its method changed, re-pulling Savant's measured
@@ -234,7 +236,13 @@ def _source_specs():
     def one(fn):
         return lambda s: fn(s)
 
+    # bref_range first: the fg_* pulls and the seed build from these tables,
+    # so refreshing them here is the only BRef request either makes.
     return [
+        ("bref_range",   lambda s: [f"bref_batting_range_{s}.csv",
+                                    f"bref_pitching_range_{s}.csv"],
+                         lambda s: [ingest.pull_bref_range(s, k)
+                                    for k in ("batting", "pitching")]),
         ("fg_batting",   lambda s: [f"fg_batting_{s}.csv"],   one(ingest.pull_fg_batting)),
         ("fg_pitching",  lambda s: [f"fg_pitching_{s}.csv"],  one(ingest.pull_fg_pitching)),
         ("fielding_oaa", lambda s: [f"fielding_oaa_{s}.csv"], one(ingest.pull_fielding_oaa)),

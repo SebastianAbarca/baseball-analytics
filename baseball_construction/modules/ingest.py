@@ -602,6 +602,51 @@ def _bref_season_range(season: int) -> tuple[str, str]:
     return SEASON_DATES[season]
 
 
+# BRef rate-limits hard: after the burst of pulls in `refresh --stages sources`
+# it answered 429 for about an hour, and pybaseball surfaces that as an
+# IndexError on a page with no table. Back off rather than give up.
+_BREF_RETRY_WAITS = (300, 600, 900)
+
+
+def bref_range_path(season: int, kind: str) -> Path:
+    return PROCESSED_DIR / f"bref_{kind}_range_{season}.csv"
+
+
+def pull_bref_range(season: int, kind: str) -> pd.DataFrame:
+    """
+    BRef's regular-season leaderboard for `kind` ("batting" or "pitching"),
+    every player, unfiltered — the one BRef request behind both the qualified
+    fg_* roots and the full-league database seed.
+
+    Cached to data/processed/bref_{kind}_range_{season}.csv so the seed reads
+    what `sources` just pulled instead of asking BRef again; `sources` moves
+    the cache aside to refresh it.
+    """
+    cache = bref_range_path(season, kind)
+    if cache.exists():
+        log.info("Loading bref_%s_range_%d from cache", kind, season)
+        return pd.read_csv(cache, low_memory=False)
+
+    fetch = {"batting": pybaseball.batting_stats_range,
+             "pitching": pybaseball.pitching_stats_range}[kind]
+    import time
+    for attempt, wait in enumerate((*_BREF_RETRY_WAITS, None), start=1):
+        try:
+            log.info("Pulling Baseball Reference %s %d", kind, season)
+            df = fetch(*_bref_season_range(season))
+            break
+        except Exception as exc:
+            if wait is None:
+                raise
+            log.warning("BRef %s %d failed (%s) — retry %d in %d min",
+                        kind, season, str(exc)[:60], attempt, wait // 60)
+            time.sleep(wait)
+
+    df.to_csv(cache, index=False)
+    log.info("Saved %d rows to %s", len(df), cache)
+    return df
+
+
 def _bref_savant_batting_merge(season: int, min_pa: int = 100,
                                strict: bool = False) -> pd.DataFrame:
     """
@@ -612,8 +657,7 @@ def _bref_savant_batting_merge(season: int, min_pa: int = 100,
     Savant provides Statcast metrics (xwOBA, Barrel%, Hard Hit%, whiff%, sprint speed).
     k_percent/bb_percent are dropped from Savant because BRef's raw rates are better.
     """
-    log.info("Pulling Baseball Reference batting %d", season)
-    bref = pybaseball.batting_stats_range(*_bref_season_range(season))
+    bref = pull_bref_range(season, "batting")
     bref = bref.rename(columns={"mlbID": "key_mlbam", "BA": "AVG"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["PA"] >= min_pa)].copy()
@@ -675,8 +719,7 @@ def _bref_savant_pitching_merge(season: int, min_pa: int = 30,
     BRef provides GS (crucial for starter identification), BF, K%, BB%, Age.
     Savant provides fb_velocity, whiff%, hard_hit%, xwOBA_allowed, Barrel_allowed.
     """
-    log.info("Pulling Baseball Reference pitching %d", season)
-    bref = pybaseball.pitching_stats_range(*_bref_season_range(season))
+    bref = pull_bref_range(season, "pitching")
     bref = bref.rename(columns={"mlbID": "key_mlbam"})
     bref["key_mlbam"] = pd.to_numeric(bref["key_mlbam"], errors="coerce")
     bref = bref[bref["key_mlbam"].notna() & (bref["BF"] >= min_pa)].copy()
