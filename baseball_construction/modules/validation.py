@@ -26,6 +26,7 @@ Tests:
   V19 Team stints — team PA/BF reconcile; a traded player splits by team
   V20 League caches current — rebuilt and fingerprinted alike, none older than raw
   V21 Sprint speed units — ft/s from Savant's leaderboard, not percentile ranks
+  V22 Complete reads and rosters — every DB row read; every 30+ PA hitter on his portrait
 """
 
 from __future__ import annotations
@@ -1522,6 +1523,70 @@ def v21_sprint_speed_units() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V22 — Complete reads and rosters
+# ---------------------------------------------------------------------------
+
+def v22_complete_rosters() -> Result:
+    """
+    Nothing is lost between the database and a portrait:
+      1. query_batting / query_pitching return every row the table holds for
+         each seeded season — the API caps a request at 1,000 rows, and the
+         unpaged read lost 86-204 regular hitters a season from 2015-2019
+         and 2021 (Votto, Walker, Voit on their 2021 clubs)
+      2. every hitter with MIN_HITTER_PA for a team in regular-season Statcast
+         is on that team's portrait, in hitters or also-appeared
+    Each season's reconciliation runs where both its raw cache and portraits
+    exist; 2025 alone passed both before the fix, since it is under the cap.
+    """
+    import json
+    import pandas as pd
+    import team_portrait as tp
+    sys.path.insert(0, str(_HERE.parent / "scripts"))
+    from build_league_identity import MLB_TEAMS
+    from database import count_rows, query_batting, query_pitching
+    from ingest import PROCESSED_DIR, RAW_DIR, SEASON_DATES
+    from pitch_aggregates import compute_stints
+
+    errors, checked = [], []
+    portraits = PROCESSED_DIR / "portraits"
+    for season in sorted(SEASON_DATES):
+        for table, query in (("player_batting", query_batting),
+                             ("player_pitching", query_pitching)):
+            n = count_rows(table, season)
+            got = len(query(season))
+            if got != n:
+                errors.append(f"{table} {season}: read {got} of {n} rows")
+
+        raw = RAW_DIR / f"statcast_{season}.parquet"
+        if not raw.exists() or not (portraits / f"NYY_{season}.json").exists():
+            continue
+        sc = pd.read_parquet(raw, columns=["game_pk", "at_bat_number", "pitch_number",
+                                           "inning", "inning_topbot", "home_team",
+                                           "away_team", "batter", "pitcher", "events",
+                                           "stand", "p_throws", "delta_home_win_exp"])
+        bat, _ = compute_stints(sc, season)
+        missing = []
+        for team in MLB_TEAMS:
+            f = portraits / f"{team}_{season}.json"
+            if not f.exists():
+                continue
+            p = json.loads(f.read_text())["players"]
+            on = {h.get("player_id") for g in ("hitters", "also_appeared")
+                  for h in p.get(g, [])}
+            need = bat[(bat["team"] == team) & (bat["pa"] >= tp.MIN_HITTER_PA)]
+            missing += [f"{team} {int(b)}" for b in need["batter"] if int(b) not in on]
+        if missing:
+            errors.append(f"{season}: {len(missing)} hitter(s) with {tp.MIN_HITTER_PA}+ "
+                          f"PA missing from their portraits (e.g. {', '.join(missing[:3])})")
+        checked.append(season)
+
+    passed = not errors
+    detail = (f"every row read; rosters complete in {checked}" if passed
+              else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1547,6 +1612,7 @@ TESTS = [
     ("V19", "Team stints",                     v19_team_stints),
     ("V20", "League caches current",           v20_league_caches_current),
     ("V21", "Sprint speed units",              v21_sprint_speed_units),
+    ("V22", "Complete reads and rosters",      v22_complete_rosters),
 ]
 
 
