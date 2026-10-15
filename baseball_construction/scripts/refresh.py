@@ -333,6 +333,13 @@ def stage_sources(seasons: list[int], dry: bool) -> None:
                         baks.append((p, b))
                 try:
                     pull(s)
+                    # pull_bwar, pull_def_runs and pull_fielding_oaa log a failed
+                    # download and return an empty frame without writing; the
+                    # .bak was then deleted and the season lost its cache. A
+                    # file that never existed (OAA 2015: none published) is fine.
+                    missing = [p.name for p, _ in baks if not p.exists()]
+                    if missing:
+                        raise RuntimeError(f"pull wrote nothing to {', '.join(missing)}")
                     for _, b in baks:
                         b.unlink(missing_ok=True)
                     log.info("  %d %-13s refreshed", s, label)

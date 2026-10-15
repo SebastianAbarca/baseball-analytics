@@ -992,6 +992,34 @@ def pull_fielding_oaa(season: int) -> pd.DataFrame:
 # Baseball Reference WAR (bWAR) via pybaseball
 # ---------------------------------------------------------------------------
 
+_WAR_DAILY: dict[str, pd.DataFrame] = {}
+
+
+def _war_daily(kind: str) -> pd.DataFrame:
+    """
+    BRef's whole WAR file for `kind` ("bat" or "pitch"): every player-stint of
+    every season. pull_bwar and pull_def_runs each slice one season from it,
+    and used to download it each time — 36 requests in a 12-season `sources`
+    run for two distinct files, enough to trip BRef's ~20/minute rate limit.
+    Fetched once per process, retried like pull_bref_range; a failure is not
+    remembered, so the next caller tries again.
+    """
+    if kind not in _WAR_DAILY:
+        fetch = {"bat": pybaseball.bwar_bat, "pitch": pybaseball.bwar_pitch}[kind]
+        import time
+        for attempt, wait in enumerate((*_BREF_RETRY_WAITS, None), start=1):
+            try:
+                _WAR_DAILY[kind] = fetch(return_all=False)
+                break
+            except Exception as exc:
+                if wait is None:
+                    raise
+                log.warning("bwar_%s failed (%s) — retry %d in %d min",
+                            kind, str(exc)[:60], attempt, wait // 60)
+                time.sleep(wait)
+    return _WAR_DAILY[kind].copy()
+
+
 def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Return (bat_war, pitch_war) DataFrames for the given season, ONE ROW PER
@@ -1024,7 +1052,7 @@ def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
         return out.groupby(["key_mlbam", "team"], as_index=False)["war"].sum()
 
     try:
-        bat = _stints(pybaseball.bwar_bat(return_all=False))
+        bat = _stints(_war_daily("bat"))
         bat.to_csv(bat_cache, index=False)
         log.info("bWAR batting %d — %d player-team stints", season, len(bat))
     except Exception as exc:
@@ -1032,7 +1060,7 @@ def pull_bwar(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
         bat = pd.DataFrame(columns=["key_mlbam", "team", "war"])
 
     try:
-        pitch = _stints(pybaseball.bwar_pitch(return_all=False))
+        pitch = _stints(_war_daily("pitch"))
         pitch.to_csv(pitch_cache, index=False)
         log.info("bWAR pitching %d — %d player-team stints", season, len(pitch))
     except Exception as exc:
@@ -1070,7 +1098,7 @@ def pull_def_runs(season: int) -> pd.DataFrame:
         return pd.read_csv(cache)
 
     try:
-        raw = pybaseball.bwar_bat(return_all=False)
+        raw = _war_daily("bat")
     except Exception as exc:
         log.warning("bwar_bat (def_runs) failed for season %d: %s", season, exc)
         return pd.DataFrame(columns=["team", "def_runs_total"])

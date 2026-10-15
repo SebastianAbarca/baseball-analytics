@@ -153,6 +153,10 @@ about an hour; pybaseball reports it as `IndexError: list index out of range`.
 `pull_bref_range` retries after 5, 10 and 15 minutes. Its table is cached as
 `bref_{batting,pitching}_range_{season}.csv`, and both the `fg_*` roots and
 `seed` build from that cache, so `seed` makes no BRef request after `sources`.
+BRef's whole-history WAR files are downloaded once per run and sliced per
+season, so a 12-season `sources` run sends about 26 BRef requests, not 60. A
+pull that fails without raising (bWAR, def runs, OAA) still counts as failed
+in `sources`, which then restores the season's previous cache.
 
 **`sources` reports success but changes nothing.** pybaseball's own HTTP cache
 served the response. `refresh.py` now disables it for that stage; if you are
