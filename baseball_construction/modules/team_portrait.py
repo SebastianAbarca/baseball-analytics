@@ -1103,7 +1103,7 @@ def _classify_hitters(
                     metrics[col] = fval                        # also keep ISO_pct, AVG_pct
 
         # Raw sprint speed (ft/sec) for Speed modifier hard threshold.
-        # sprint_speed in DB is stored as raw ft/sec after re-seeding.
+        # sprint_speed is ft/s from Savant's sprint leaderboard, DB or CSV.
         sprint_raw = row.get("sprint_speed") or row.get("Sprint Speed")
         sprint_raw = float(sprint_raw) if sprint_raw is not None and not pd.isna(sprint_raw) else None
 
@@ -2919,12 +2919,10 @@ def _load_season_players(season: int):
         log.info("Loading season %d from Supabase", season)
         batting_full  = query_batting(season)
         pitching_full = query_pitching(season)
-        _sprint_speed_is_raw = True   # DB stores raw ft/sec after re-seeding
     else:
         log.info("Season %d not in Supabase — pulling from BRef/Savant", season)
         batting_full  = pull_fg_batting(season)
         pitching_full = pull_fg_pitching(season)
-        _sprint_speed_is_raw = False  # Savant CSV stores percentile rank (0-100)
 
     # Ensure key_mlbam column exists (Savant fallback uses player_id)
     for df_obj in [batting_full, pitching_full]:
@@ -2933,13 +2931,6 @@ def _load_season_players(season: int):
 
     batting_full["key_mlbam"]  = pd.to_numeric(batting_full.get("key_mlbam"),  errors="coerce")
     pitching_full["key_mlbam"] = pd.to_numeric(pitching_full.get("key_mlbam"), errors="coerce")
-
-    # When batting_full comes from the Savant CSV (non-seeded season), sprint_speed
-    # is a Statcast percentile rank (0-100). compute_speed_tier expects raw ft/sec.
-    # Null it out so _classify_hitters skips speed tier rather than producing garbage.
-    if not _sprint_speed_is_raw and "sprint_speed" in batting_full.columns:
-        log.info("Non-seeded season — nulling sprint_speed (percentile rank, not ft/sec)")
-        batting_full["sprint_speed"] = np.nan
 
     # Merge bWAR season totals into batting_full / pitching_full — overrides
     # the empty DB war column. The per-team stints are returned alongside.

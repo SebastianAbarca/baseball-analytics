@@ -25,6 +25,7 @@ Tests:
   V18 Regular season only — raw caches and BRef totals hold no other games
   V19 Team stints — team PA/BF reconcile; a traded player splits by team
   V20 League caches current — rebuilt and fingerprinted alike, none older than raw
+  V21 Sprint speed units — ft/s from Savant's leaderboard, not percentile ranks
 """
 
 from __future__ import annotations
@@ -1468,6 +1469,59 @@ def v20_league_caches_current() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V21 — Sprint speed units
+# ---------------------------------------------------------------------------
+
+# Savant's sprint-speed leaderboard, ft/s. Soto 2022 is the case the
+# percentile table got wrong: rank 32, which passed as an elite 32.0 ft/s.
+_SPRINT_REFERENCE = {(665742, 2022): 26.6,   # Juan Soto
+                     (677951, 2022): 30.3,   # Bobby Witt Jr.
+                     (621439, 2022): 29.1}   # Byron Buxton
+
+
+def v21_sprint_speed_units() -> Result:
+    """
+    sprint_speed in each fg_batting root is a measurement in ft/s, not a
+    percentile: whole numbers are a minority (a rank is always whole; about
+    9% of real speeds are), the median sits in the 26-28.5 ft/s band, most
+    qualified hitters have one, and the reference players match Savant.
+    """
+    import pandas as pd
+    from ingest import PROCESSED_DIR, SEASON_DATES
+
+    errors, checked = [], []
+    for season in sorted(SEASON_DATES):
+        path = PROCESSED_DIR / f"fg_batting_{season}.csv"
+        if not path.exists():
+            continue
+        fg = pd.read_csv(path, low_memory=False)
+        if "sprint_speed" not in fg.columns:
+            errors.append(f"{season}: no sprint_speed column")
+            continue
+        ss = pd.to_numeric(fg["sprint_speed"], errors="coerce")
+        have = ss.dropna()
+        whole = float((have % 1 == 0).mean()) if len(have) else 1.0
+        if len(have) < 0.5 * len(fg):
+            errors.append(f"{season}: only {len(have)}/{len(fg)} hitters have a speed")
+        if whole > 0.5:
+            errors.append(f"{season}: {whole:.0%} of speeds are whole numbers — a percentile")
+        if len(have) and not 26.0 <= have.median() <= 28.5:
+            errors.append(f"{season}: median {have.median():.1f} ft/s")
+        for (pid, s), ref in _SPRINT_REFERENCE.items():
+            if s != season or "key_mlbam" not in fg.columns:
+                continue
+            got = ss[pd.to_numeric(fg["key_mlbam"], errors="coerce") == pid]
+            if len(got) and abs(float(got.iloc[0]) - ref) > 0.3:
+                errors.append(f"{season} {pid}: {float(got.iloc[0]):.1f} ft/s, Savant {ref}")
+        checked.append(season)
+
+    passed = not errors and bool(checked)
+    detail = (f"ft/s in seasons {checked}; references match Savant" if passed
+              else "; ".join(errors) or "no fg_batting roots on this machine")
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1492,6 +1546,7 @@ TESTS = [
     ("V18", "Regular season only",             v18_regular_season_only),
     ("V19", "Team stints",                     v19_team_stints),
     ("V20", "League caches current",           v20_league_caches_current),
+    ("V21", "Sprint speed units",              v21_sprint_speed_units),
 ]
 
 
