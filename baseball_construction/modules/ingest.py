@@ -468,11 +468,23 @@ def _savant_batting_aggregate(season: int, min_pa: int = 100) -> pd.DataFrame:
             r"^(.*?),\s*(.*)$", r"\2 \1", regex=True
         )
 
+    # The percentile table's sprint_speed is a RANK (Soto 2022: 32), and it was
+    # merged in under the measurement's name: thresholds in ft/s then tagged
+    # slow runners whose rank fell in 20-32 as elite. The measurement comes
+    # from the sprint-speed leaderboard (Soto 2022: 26.6 ft/s).
     df = expected.merge(
-        pct_ranks.drop(columns=["player_name", "year"], errors="ignore"),
+        pct_ranks.drop(columns=["player_name", "year", "sprint_speed"], errors="ignore"),
         on="key_mlbam",
         how="left",
     )
+    try:
+        sprint = pybaseball.statcast_sprint_speed(season, SPRINT_MIN_RUNS)
+        sprint = sprint.rename(columns={"player_id": "key_mlbam"})
+        df = df.merge(sprint[["key_mlbam", "sprint_speed", "competitive_runs"]],
+                      on="key_mlbam", how="left")
+    except Exception as exc:
+        log.warning("Sprint speed leaderboard %d unavailable: %s", season, exc)
+        df["sprint_speed"] = np.nan
     # The join_source is trivially 'savant' for all rows (player_id = MLBAM)
     df["join_source"] = "savant"
     return df
@@ -548,14 +560,14 @@ _SAVANT_PERCENTILE_PITCHING = [
 ]
 
 # Statcast sprint speed is a running metric, not a pitch measurement, so it
-# cannot be re-derived from the pitch-level cache. It is also the one column
-# that is MIXED rather than uniformly converted: ~600 rows (pitchers who
-# batted, 2015–2020) hold a percentile while every other row holds ft/s.
-# Anything outside the physically possible band is therefore unrecoverable and
-# is nulled — those players simply miss the speed tags, which the `speed` tag
-# population already accounts for.
+# cannot be re-derived from the pitch-level cache; it comes from Savant's
+# sprint-speed leaderboard, in ft/s. The band is a sanity check on that
+# measurement, NOT a unit test: a percentile of 20-32 passes it, which is how
+# percentile ranks posed as speeds until 2026-10 (V21 checks the unit).
 SPRINT_SPEED_MIN_FTS = 20.0
 SPRINT_SPEED_MAX_FTS = 32.0
+# Savant's own default floor for its leaderboard: competitive runs.
+SPRINT_MIN_RUNS = 10
 
 
 def _apply_sc_replacements(df: pd.DataFrame, drop: list[str],
