@@ -28,7 +28,26 @@ from database import (
     upsert_batting,
     upsert_pitching,
     get_client,
+    query_batting,
+    query_pitching,
+    delete_absent,
 )
+
+
+def _replace_season(table: str, season: int, df: pd.DataFrame, query, volume: str) -> None:
+    """
+    Drop the season's rows this seed did not write, so the table holds exactly
+    this seed. Refused when the seed is missing players the table has with a
+    real workload — a partial pull must never thin the table out.
+    """
+    keep = set(df["key_mlbam"].astype(int))
+    have = query(season)
+    real = set(have.loc[have[volume].notna(), "key_mlbam"].astype(int)) if len(have) else set()
+    lost = real - keep
+    if len(lost) > 0.05 * max(len(real), 1):
+        raise RuntimeError(f"{table} {season}: this seed lacks {len(lost)} of "
+                           f"{len(real)} players with {volume} — not deleting")
+    delete_absent(table, season, keep)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -155,6 +174,7 @@ def seed_batting(season: int) -> None:
 
     log.info("Upserting %d batting rows for %d...", len(df), season)
     upsert_batting(df)
+    _replace_season("player_batting", season, df, query_batting, "pa")
     log.info("Batting seed complete for %d", season)
 
 
@@ -181,6 +201,7 @@ def seed_pitching(season: int) -> None:
 
     log.info("Upserting %d pitching rows for %d...", len(df), season)
     upsert_pitching(df)
+    _replace_season("player_pitching", season, df, query_pitching, "bf")
     log.info("Pitching seed complete for %d", season)
 
 

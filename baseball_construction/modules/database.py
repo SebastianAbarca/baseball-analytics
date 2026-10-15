@@ -51,7 +51,26 @@ SUPABASE_KEY = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
 
 _CLIENT: Optional[Client] = None
 
-MAX_ROWS = 2000  # safe ceiling above any single season's player pool
+# The API returns at most this many rows per request, whatever .limit() asks
+# for. query_batting asked for 2,000 and got 1,000, so every season holding
+# more batting rows (2015-2019, 2021: 1,229-1,373) silently lost 86-204
+# regular hitters from its portraits. Read seasons a page at a time.
+PAGE_ROWS = 1000
+
+
+def _all_rows(table: str, season: int, team: Optional[str] = None) -> list[dict]:
+    """Every row of `table` for `season` (and `team`), paging past the cap."""
+    client = get_client()
+    out: list[dict] = []
+    while True:
+        # A fresh builder per page: postgrest builders accumulate parameters.
+        q = client.table(table).select("*").eq("season", season)
+        if team:
+            q = q.eq("team", team)
+        page = q.order("key_mlbam").range(len(out), len(out) + PAGE_ROWS - 1).execute().data
+        out.extend(page)
+        if len(page) < PAGE_ROWS:
+            return out
 
 
 # ---------------------------------------------------------------------------
@@ -165,21 +184,37 @@ def upsert_park_factors(team: str, season: int, pitcher_friendly: float) -> None
 # ---------------------------------------------------------------------------
 
 def query_batting(season: int, team: Optional[str] = None) -> pd.DataFrame:
-    client = get_client()
-    q = client.table("player_batting").select("*").eq("season", season).limit(MAX_ROWS)
-    if team:
-        q = q.eq("team", team)
-    result = q.execute()
-    return pd.DataFrame(result.data)
+    return pd.DataFrame(_all_rows("player_batting", season, team))
 
 
 def query_pitching(season: int, team: Optional[str] = None) -> pd.DataFrame:
+    return pd.DataFrame(_all_rows("player_pitching", season, team))
+
+
+def count_rows(table: str, season: int) -> int:
+    """The table's row count for `season`, from the server, not a page."""
+    return (get_client().table(table).select("key_mlbam", count="exact")
+            .eq("season", season).limit(1).execute().count)
+
+
+def delete_absent(table: str, season: int, keep: set[int]) -> int:
+    """
+    Delete `season`'s rows whose key_mlbam is not in `keep` — what makes a
+    seed replace a season rather than add to it. Upserts alone left every
+    player an earlier seed wrote and this one did not: 270-320 rows per
+    pre-2022 season with no name and no PA, crowding real hitters out of the
+    capped read above. Returns the number deleted.
+    """
+    have = {r["key_mlbam"] for r in _all_rows(table, season)}
+    gone = sorted(have - keep)
     client = get_client()
-    q = client.table("player_pitching").select("*").eq("season", season).limit(MAX_ROWS)
-    if team:
-        q = q.eq("team", team)
-    result = q.execute()
-    return pd.DataFrame(result.data)
+    for i in range(0, len(gone), 200):
+        (client.table(table).delete().eq("season", season)
+         .in_("key_mlbam", gone[i:i + 200]).execute())
+    if gone:
+        log.info("Deleted %d %s row(s) for %d that this seed did not write",
+                 len(gone), table, season)
+    return len(gone)
 
 
 def query_philosophy(team: str, season: int) -> Optional[dict]:
