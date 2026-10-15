@@ -129,8 +129,14 @@ python baseball_construction/scripts/publish.py --dry-run
 python baseball_construction/scripts/publish.py
 ```
 
-It refuses any portrait that is not current for this machine's pools and gates
-— rebuild or re-derive it first — and exits 1 if it refused anything. After
+Before writing anything it checks the whole build for the requested seasons:
+all 30 portraits of each, every one carrying a build fingerprint and current
+for this machine's pools and gates, plus each season's league identity file.
+One problem and nothing is written — no portraits, league or Scout — and it
+exits 1; rebuild or re-derive first. Every artefact follows `--seasons`: Scout
+runs whole (and deletes published rows its input lacks) only when the scope
+is every season. `refresh.py` publishes the same way, and skips publish
+entirely when its portrait stage failed. After
 `rederive_traits.py`, run it too: a re-derive changes portraits on disk, and
 nobody sees them until they are published.
 
@@ -211,7 +217,8 @@ day from March to October. With a season in progress it:
 - re-pulls its season totals and re-seeds them into the database (strict: it
   refuses to write rows without the pitch aggregates);
 - force-rebuilds its 30 portraits and league identity;
-- publishes that season's portraits, league data and Scout rows.
+- publishes that season's portraits, league data and Scout rows — only if
+  every step before succeeded; a failed build leaves production as it was.
 
 Finished seasons are never touched. With no season in progress it exits in
 seconds. It fails the run, and GitHub emails, unless all 30 portraits are

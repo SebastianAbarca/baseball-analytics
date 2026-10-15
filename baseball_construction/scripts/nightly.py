@@ -221,14 +221,14 @@ def main() -> int:
     elsewhere = _stale_elsewhere(season)
 
     refused = 0
-    if not args.no_publish:
+    if problems or elsewhere:
+        # Act on a failed build BEFORE writing, not after: last night's
+        # published season is better than tonight's partial one.
+        log.error("[publish] skipped: the build failed — production unchanged")
+    elif not args.no_publish:
         def publish():
             import publish as P
-            client = P._write_client()
-            n = P.publish_portraits(ROOT, {season}, client, False, False)
-            P.publish_league(ROOT, {season}, client, False, False)
-            P.publish_scout(ROOT, client, False, seasons={season})
-            return n
+            return P.publish_all(ROOT, {season}, P._write_client(), False)
         refused = step("publish", publish)
 
     log.info("\nnightly %d: %s — %.0fs (%s)", season,

@@ -399,6 +399,75 @@ def publish_scout(root: Path, client, dry: bool,
 
 # ---------------------------------------------------------------------------
 
+def preflight(root: Path, seasons: set[int]) -> list[str]:
+    """
+    Everything a publish of `seasons` writes from, checked before the first
+    write: all 30 portraits of every season, each readable, carrying a build
+    fingerprint and current for this machine, and each season's league
+    identity file.
+
+    Portraits used to be checked one at a time while publishing, so a refused
+    one still let league and Scout publish after it — and Scout deletes every
+    published row its local input lacks, so a missing portrait became a
+    deleted season. Returns the problems; empty means publish.
+    """
+    import team_portrait as tp
+    from build_league_identity import MLB_TEAMS
+
+    problems = []
+    for s in sorted(seasons):
+        for team in MLB_TEAMS:
+            f = root / "data/processed/portraits" / f"{team}_{s}.json"
+            if not f.exists():
+                problems.append(f"{team} {s}: no portrait")
+                continue
+            try:
+                p = json.loads(f.read_text())
+            except ValueError:
+                problems.append(f"{team} {s}: unreadable portrait")
+                continue
+            # portrait_is_current accepts a portrait with no fingerprint
+            # (pre-fingerprint builds); nothing published should lack one.
+            if p.get("build_fingerprint") is None:
+                problems.append(f"{team} {s}: no build fingerprint")
+            elif not tp.portrait_is_current(p):
+                problems.append(f"{team} {s}: not current (schema "
+                                f"{p.get('schema_version')}) — rebuild it first")
+        if not (root / f"data/processed/league_identity_{s}.json").exists():
+            problems.append(f"{s}: no league_identity_{s}.json")
+    return problems
+
+
+def publish_all(root: Path, seasons: set[int], client, dry: bool, force: bool = False,
+                parts: frozenset = frozenset({"portraits", "league", "scout"})) -> int:
+    """
+    The one way to publish: preflight, then portraits, league and Scout, all
+    scoped to `seasons`. Returns the number of problems; nothing is written
+    unless it is 0. Scout runs whole only when `seasons` covers every season,
+    since whole mode deletes published rows absent locally.
+    """
+    from ingest import SEASON_DATES
+
+    problems = preflight(root, seasons)
+    if problems:
+        log.error("  publish refused before any write — %d problem(s):", len(problems))
+        for p in problems[:20]:
+            log.error("    %s", p)
+        if len(problems) > 20:
+            log.error("    … +%d more", len(problems) - 20)
+        return len(problems)
+
+    refused = 0
+    if "portraits" in parts:
+        refused = publish_portraits(root, seasons, client, dry, force)
+    if "league" in parts:
+        publish_league(root, seasons, client, dry, force)
+    if "scout" in parts:
+        whole = seasons >= set(SEASON_DATES)
+        publish_scout(root, client, dry, seasons=None if whole else seasons)
+    return refused
+
+
 def _point_at(root: Path) -> None:
     """
     Make the build fingerprint read `root`'s pools, for publishing from a
@@ -432,15 +501,8 @@ def main() -> int:
     root = args.data_root.resolve()
     _point_at(root)
     client = _write_client()
-
-    refused = 0
-    if "portraits" in parts:
-        refused = publish_portraits(root, seasons, client, args.dry_run, args.force)
-    if "league" in parts:
-        publish_league(root, seasons, client, args.dry_run, args.force)
-    if "scout" in parts:
-        publish_scout(root, client, args.dry_run)
-    return 1 if refused else 0
+    return 1 if publish_all(root, seasons, client, args.dry_run, args.force,
+                            frozenset(parts)) else 0
 
 
 if __name__ == "__main__":

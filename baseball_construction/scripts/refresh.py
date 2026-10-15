@@ -655,19 +655,15 @@ def stage_tags(dry: bool) -> None:
     tag_reference.build(False)
 
 
-def stage_publish(seasons: list[int], dry: bool) -> None:
+def stage_publish(seasons: list[int], dry: bool) -> int:
     """
     Write the built artefacts to the serving tables. Must run AFTER portraits
-    and tags; refuses any portrait that is not current for this machine.
+    and tags. publish.publish_all checks the whole build first and writes
+    nothing unless every portrait of `seasons` is present and current.
+    Returns the number of problems.
     """
     import publish
-    client = publish._write_client()
-    root = _HERE.parent
-    refused = publish.publish_portraits(root, set(seasons), client, dry, False)
-    publish.publish_league(root, set(seasons), client, dry, False)
-    publish.publish_scout(root, client, dry)
-    if refused:
-        log.warning("  %d portrait(s) refused as not current — see above", refused)
+    return publish.publish_all(_HERE.parent, set(seasons), publish._write_client(), dry)
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +720,7 @@ def main() -> int:
     print(f"{head}  seasons {seasons[0]}–{seasons[-1]}  stages: {', '.join(stages)}\n")
 
     changed: list[int] = []
+    failures = 0
     for name in STAGES:
         if name not in stages:
             continue
@@ -747,15 +744,21 @@ def main() -> int:
             if not n:
                 log.info("  all league caches current")
         elif name == "portraits":
-            stage_portraits(seasons, max(1, args.jobs), args.dry_run)
+            failures += stage_portraits(seasons, max(1, args.jobs), args.dry_run)
         elif name == "tags":
             stage_tags(args.dry_run)
         elif name == "publish":
-            stage_publish(seasons, args.dry_run)
+            if failures:
+                # The build this run made failed; publishing its survivors
+                # beside last night's files would mix generations.
+                log.error("  skipped: %d portrait(s) failed or are stale — "
+                          "nothing published", failures)
+            else:
+                failures += stage_publish(seasons, args.dry_run)
         print(f"  ({time.time() - ts:.0f}s)\n")
 
-    print(f"done in {time.time() - t0:.0f}s")
-    return 0
+    print(f"done in {time.time() - t0:.0f}s" + (f" — {failures} FAILED" if failures else ""))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
