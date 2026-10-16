@@ -17,7 +17,7 @@
      "tag": "left-handed hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 2170,
+     "fires": 2480,
      "population": "splits",
      "floor": "\u2014",
      "earned": "bats left-handed"
@@ -44,7 +44,7 @@
      "tag": "right-handed hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 3699,
+     "fires": 4240,
      "population": "splits",
      "floor": "\u2014",
      "earned": "bats right-handed"
@@ -89,7 +89,7 @@
      "tag": "switch hitter",
      "side": "H",
      "family": "handedness",
-     "fires": 703,
+     "fires": 809,
      "population": "splits",
      "floor": "\u2014",
      "earned": "takes PAs from both sides of the plate"
@@ -113,7 +113,7 @@
      "tag": "cannon arm",
      "side": "H",
      "family": "fielding",
-     "fires": 257,
+     "fires": 270,
      "population": "fielders_arm",
      "floor": "\u2014",
      "earned": "arm strength 100th pct"
@@ -122,10 +122,10 @@
      "tag": "elite speed",
      "side": "H",
      "family": "athleticism",
-     "fires": 268,
+     "fires": 635,
      "population": "speed",
      "floor": "\u2014",
-     "earned": "32.0 ft/s sprint speed (top ~10%)"
+     "earned": "29.5 ft/s sprint speed (top ~10%)"
     },
     {
      "tag": "elite velo",
@@ -140,10 +140,10 @@
      "tag": "fast",
      "side": "H",
      "family": "athleticism",
-     "fires": 67,
+     "fires": 1568,
      "population": "speed",
      "floor": "\u2014",
-     "earned": "28.0 ft/s sprint speed (top ~35%)"
+     "earned": "28.9 ft/s sprint speed (top ~35%)"
     },
     {
      "tag": "high spin efficiency",
@@ -167,7 +167,7 @@
      "tag": "quick pop",
      "side": "H",
      "family": "catcher",
-     "fires": 119,
+     "fires": 135,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "1.88s pop to second \u2014 among the fastest exchanges in the league"
@@ -194,10 +194,10 @@
      "tag": "station-to-station",
      "side": "H",
      "family": "athleticism",
-     "fires": 72,
+     "fires": 722,
      "population": "speed",
      "floor": "\u2014",
-     "earned": "20.0 ft/s \u2014 bottom decile of the season's runners"
+     "earned": "23.6 ft/s \u2014 bottom decile of the season's runners"
     }
    ]
   },
@@ -209,7 +209,7 @@
      "tag": "aggressive",
      "side": "H",
      "family": "approach",
-     "fires": 1153,
+     "fires": 1285,
      "population": "chase",
      "floor": "75 (FPS_pct)",
      "earned": "attacks first pitches and expands the zone (high FPS% + high chase%)"
@@ -218,7 +218,7 @@
      "tag": "air-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 499,
+     "fires": 571,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -272,7 +272,7 @@
      "tag": "extra base taker",
      "side": "H",
      "family": "running-game",
-     "fires": 714,
+     "fires": 803,
      "population": "xbt",
      "floor": "\u2014",
      "earned": "37 extra bases on 47 chances (100th pct) \u2014 took 3rd on 18/27 singles"
@@ -299,7 +299,7 @@
      "tag": "free swinger",
      "side": "H",
      "family": "approach",
-     "fires": 906,
+     "fires": 1030,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
      "earned": "chase rate 100th pct \u2014 expands the zone"
@@ -308,7 +308,7 @@
      "tag": "ground-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 317,
+     "fires": 332,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 100th pct \u2014 hits it into the ground"
@@ -317,7 +317,7 @@
      "tag": "high steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 763,
+     "fires": 822,
      "population": "steal_opps",
      "floor": "\u2014",
      "earned": "34 attempts on 185 times aboard (100th pct) \u2014 runs often"
@@ -344,7 +344,7 @@
      "tag": "low steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 403,
+     "fires": 462,
      "population": "steal_opps",
      "floor": "\u2014",
      "earned": "10 attempts on 190 times aboard (14th pct) \u2014 stays put"
@@ -353,7 +353,7 @@
      "tag": "oppo bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 504,
+     "fires": 554,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "opposite-field BIP rate 100th pct"
@@ -362,10 +362,10 @@
      "tag": "patient",
      "side": "H",
      "family": "approach",
-     "fires": 906,
+     "fires": 1035,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
-     "earned": "chase rate 11th pct \u2014 lays off pitches outside the zone"
+     "earned": "chase rate 10th pct \u2014 lays off pitches outside the zone"
     },
     {
      "tag": "patterned",
@@ -380,7 +380,7 @@
      "tag": "pull-heavy",
      "side": "H",
      "family": "batted-ball",
-     "fires": 713,
+     "fires": 812,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "pull-side BIP rate 100th pct"
@@ -488,7 +488,7 @@
      "tag": "zone hunter",
      "side": "H",
      "family": "approach",
-     "fires": 893,
+     "fires": 1026,
      "population": "all",
      "floor": "50 (OSwing_pct)",
      "earned": "swing discrimination 100th pct \u2014 attacks strikes and lays off balls"
@@ -503,10 +503,10 @@
      "tag": "bad blocker",
      "side": "H",
      "family": "catcher",
-     "fires": 78,
+     "fires": 88,
      "population": "catchers",
      "floor": "\u2014",
-     "earned": "blocking 11th pct among catchers (-10 blocks above average, 30 PB+WP allowed)"
+     "earned": "blocking 10th pct among catchers (-11 blocks above average, 68 PB+WP allowed)"
     },
     {
      "tag": "bat-misser",
@@ -539,7 +539,7 @@
      "tag": "defensive liability",
      "side": "H",
      "family": "fielding",
-     "fires": 272,
+     "fires": 304,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 10th pct"
@@ -557,7 +557,7 @@
      "tag": "elite defender",
      "side": "H",
      "family": "fielding",
-     "fires": 143,
+     "fires": 159,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 100th pct"
@@ -566,7 +566,7 @@
      "tag": "elite framer",
      "side": "H",
      "family": "catcher",
-     "fires": 123,
+     "fires": 134,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "shadow-zone strike-stealing 100th pct among catchers (+7.4 pp vs league on edge pitches)"
@@ -584,16 +584,16 @@
      "tag": "gap hitter",
      "side": "H",
      "family": "bat",
-     "fires": 462,
+     "fires": 533,
      "population": "spray",
      "floor": "150 (ISO)",
-     "earned": "spray-confirmed extra-base production into the gaps, without home-run power (HR/FB 44th pct)"
+     "earned": "spray-confirmed extra-base production into the gaps, without home-run power (HR/FB 45th pct)"
     },
     {
      "tag": "good blocker",
      "side": "H",
      "family": "catcher",
-     "fires": 91,
+     "fires": 97,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "blocking 100th pct among catchers (+16 blocks above average, 31 PB+WP allowed)"
@@ -611,7 +611,7 @@
      "tag": "high steal rate",
      "side": "H",
      "family": "running-game",
-     "fires": 650,
+     "fires": 722,
      "population": "steal_attempts",
      "floor": "\u2014",
      "earned": "18 of 18 (100%) \u2014 safe when he goes"
@@ -620,10 +620,10 @@
      "tag": "high-K",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 639,
+     "fires": 708,
      "population": "all",
      "floor": "30 (K_pct)",
-     "earned": "strikeout rate 89th pct (more Ks than 89% of this season's hitters)"
+     "earned": "strikeout rate 90th pct (more Ks than 90% of this season's hitters)"
     },
     {
      "tag": "invisible ball",
@@ -638,7 +638,7 @@
      "tag": "low steal rate",
      "side": "H",
      "family": "running-game",
-     "fires": 168,
+     "fires": 192,
      "population": "steal_attempts",
      "floor": "\u2014",
      "earned": "11 of 17 (65%) \u2014 caught often"
@@ -656,10 +656,10 @@
      "tag": "platoon liability",
      "side": "H",
      "family": "platoon",
-     "fires": 1035,
+     "fires": 1200,
      "population": "splits_qual",
      "floor": "\u2014",
-     "earned": "wOBA 0.283 vs same-hand, 0.374 vs opposite \u2014 a 0.091 gap the opponent can exploit"
+     "earned": "wOBA 0.284 vs same-hand, 0.352 vs opposite \u2014 a 0.068 gap the opponent can exploit"
     },
     {
      "tag": "platoon-vulnerable",
@@ -683,7 +683,7 @@
      "tag": "plus defender",
      "side": "H",
      "family": "fielding",
-     "fires": 244,
+     "fires": 272,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 90th pct"
@@ -692,16 +692,16 @@
      "tag": "plus power",
      "side": "H",
      "family": "bat",
-     "fires": 1512,
+     "fires": 1734,
      "population": "all",
      "floor": "150 (ISO)",
-     "earned": "ISO 68th pct \u2014 real thump"
+     "earned": "ISO 71th pct \u2014 real thump"
     },
     {
      "tag": "poor framer",
      "side": "H",
      "family": "catcher",
-     "fires": 104,
+     "fires": 124,
      "population": "catchers",
      "floor": "\u2014",
      "earned": "shadow-zone strike rate 14th pct among catchers (-3.0 pp vs league on edge pitches)"
@@ -710,7 +710,7 @@
      "tag": "power bat",
      "side": "H",
      "family": "bat",
-     "fires": 957,
+     "fires": 1097,
      "population": "all",
      "floor": "150 (ISO)",
      "earned": "ISO 100th pct \u2014 elite raw power (barrel + hard-hit composite 100th pct)"
@@ -719,7 +719,7 @@
      "tag": "rarely strikes out",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 278,
+     "fires": 348,
      "population": "pa200",
      "floor": "\u2014",
      "earned": "strikeout rate 10th pct of the season \u2014 elite bat-to-ball"
@@ -728,7 +728,7 @@
      "tag": "reverse split",
      "side": "HP",
      "family": "platoon",
-     "fires": 1446,
+     "fires": 1505,
      "population": "splits_qual",
      "floor": "\u2014",
      "earned": "wOBA 0.350 vs same-hand, 0.260 vs opposite \u2014 matchup-proof the wrong way around"
@@ -737,7 +737,7 @@
      "tag": "walk machine",
      "side": "H",
      "family": "approach",
-     "fires": 1322,
+     "fires": 1522,
      "population": "all",
      "floor": "60 (BB_pct)",
      "earned": "walk rate 88th pct"
@@ -755,10 +755,10 @@
      "tag": "weak contact",
      "side": "H",
      "family": "bat",
-     "fires": 944,
+     "fires": 1063,
      "population": "all",
      "floor": "150 (Barrel_pct)",
-     "earned": "barrel + hard-hit composite 18th pct"
+     "earned": "barrel + hard-hit composite 10th pct"
     }
    ]
   },
@@ -770,7 +770,7 @@
      "tag": "everyday player",
      "side": "H",
      "family": "role",
-     "fires": 1378,
+     "fires": 1602,
      "population": "all",
      "floor": "\u2014",
      "earned": "747 PA with the team \u2014 100th pct of the season (in the lineup daily)"
@@ -833,7 +833,7 @@
      "tag": "super-utility",
      "side": "H",
      "family": "fielding",
-     "fires": 498,
+     "fires": 561,
      "population": "positions",
      "floor": "\u2014",
      "earned": "6 positions with real innings \u2014 2B 45% / 1B 17% / SS 14% / LF 12% / 3B 10%"
@@ -866,7 +866,7 @@
      "tag": "lucky",
      "side": "H",
      "family": "luck",
-     "fires": 516,
+     "fires": 571,
      "population": "all",
      "floor": "100 (xwOBA)",
      "earned": "wOBA far above xwOBA (top decile of luck delta) \u2014 results outran the contact"
@@ -875,7 +875,7 @@
      "tag": "unlucky",
      "side": "H",
      "family": "luck",
-     "fires": 499,
+     "fires": 580,
      "population": "all",
      "floor": "100 (xwOBA)",
      "earned": "xwOBA far above wOBA (bottom decile of luck delta) \u2014 contact deserved better"
