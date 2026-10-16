@@ -109,14 +109,22 @@ pre-repair units, and were served as valid cache hits.
 ```mermaid
 flowchart TD
     P1["_pool_digest(season)<br/>sha256 of the files that season reads<br/>fg roots + cross-team rows of its era pool<br/>its six league caches"]
+    P3["_db_digest(season)<br/>player_batting / player_pitching rows<br/>for the season and the one before"]
+    P4["_code_digest(feature code)<br/>every modules/*.py but the tag modules<br/>+ build_league_identity.py"]
+    DF["<b>data_fingerprint(season)</b><br/>stored on the portrait"]
     P2["_gate_digest()<br/>every UPPERCASE constant in<br/>hitter_traits · pitcher_traits<br/>pitch_aggregates · reliability<br/>plus TAG_KIND · TAG_POPULATION"]
-    FP["<b>build_fingerprint(season)</b><br/>sha256(pools + gates) first 16"]
+    P5["_code_digest(tag code)<br/>hitter_traits · pitcher_traits · reliability"]
+    FP["<b>build_fingerprint(season)</b><br/>sha256(data + gates + tag code) first 16"]
     Q{"portrait_is_current()"}
     SERVE["serve it"]
     BUILD["rebuild it"]
 
-    P1 --> FP
+    P1 --> DF
+    P3 --> DF
+    P4 --> DF
+    DF --> FP
     P2 --> FP
+    P5 --> FP
     FP --> Q
     Q -->|"schema matches AND<br/>fingerprint matches"| SERVE
     Q -->|"either differs"| BUILD
@@ -133,7 +141,23 @@ reads a published row only when `schema_version` and `gate_fingerprint` match
 the code it is running, so tag logic deployed over older portraits shows "being
 replaced" rather than old tags under new rules.
 
-**Three gaps this had, all now closed.** `tunnel_league_*.parquet` and
+**The database and the code are inputs too.** Until October 2026 only files
+were hashed. A seed rewrote the season totals portraits read, and a code change
+(paging past the API's 1,000-row cap) changed what they read; both times every
+portrait still matched, and a plain rebuild built nothing. Code is hashed as
+tokens with comments and docstrings dropped, so rewording a comment moves
+nothing. It sits in `build_fingerprint` only, not in `gate_fingerprint`, so the
+dashboard's check does not depend on its Python version matching the builder's.
+
+**Feature and tag halves, for re-derives.** `data_fingerprint` covers what the
+gate inputs were computed from. `rederive_traits.py` replays tags only on a
+portrait whose stored `data_fingerprint` matches today's — a tag-code or
+threshold change — and refuses the rest, which need
+`refresh.py --stages portraits --force-portraits`. It used to re-stamp any
+portrait current, making stale features look fresh. A portrait with no
+fingerprint is not current.
+
+**Three earlier gaps, all now closed.** `tunnel_league_*.parquet` and
 `spin_league_*.parquet` live in `modules/processed`, outside the glob, so
 tunnelling and spin changes could not move the fingerprint. And `pitch_aggregates` was absent from the gate digest despite
 owning the strike-zone geometry behind zone%, chase%, CSW% and framing — so a

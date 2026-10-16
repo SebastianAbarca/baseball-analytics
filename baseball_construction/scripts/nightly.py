@@ -213,7 +213,9 @@ def main() -> int:
 
         def seed():
             from seed import seed_season
+            from team_portrait import clear_fingerprint_cache
             seed_season(season, force=True)
+            clear_fingerprint_cache()          # the fingerprint hashes these rows
         step("seed", seed)
     step("league", lambda: R.stage_league([season], moved, force=False, dry=False))
     problems = step("portraits", lambda: R.stage_portraits([season], jobs=1, dry=False,

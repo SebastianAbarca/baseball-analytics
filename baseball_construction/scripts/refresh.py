@@ -427,9 +427,12 @@ def stage_seed(seasons: list[int], dry: bool) -> None:
                  ", ".join(map(str, seasons)))
         return
     from seed import seed_season
+    from team_portrait import clear_fingerprint_cache
     for s in seasons:
         seed_season(s, force=True)
         log.info("  %d: seeded", s)
+    # The fingerprint hashes these rows; forget any digest taken before.
+    clear_fingerprint_cache()
 
 
 def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
@@ -686,6 +689,9 @@ def main() -> int:
     ap.add_argument("--force-spin", action="store_true",
                     help="rebuild only the spin caches, re-pulling Savant's active "
                          "spin, even when nothing has moved")
+    ap.add_argument("--force-portraits", action="store_true",
+                    help="rebuild every portrait of --seasons even when all "
+                         "look current")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what each stage would do, change nothing")
     args = ap.parse_args()
@@ -744,7 +750,8 @@ def main() -> int:
             if not n:
                 log.info("  all league caches current")
         elif name == "portraits":
-            failures += stage_portraits(seasons, max(1, args.jobs), args.dry_run)
+            failures += stage_portraits(seasons, max(1, args.jobs), args.dry_run,
+                                        force=args.force_portraits)
         elif name == "tags":
             stage_tags(args.dry_run)
         elif name == "publish":

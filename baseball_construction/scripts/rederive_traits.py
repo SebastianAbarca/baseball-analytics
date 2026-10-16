@@ -202,10 +202,17 @@ def main(season: int, dry_run: bool) -> None:
     t0 = time.time()
     frames = _load_league_frames(season)
     total: collections.Counter = collections.Counter()
-    touched = skipped = 0
+    touched = skipped = refused = 0
+    current_data = tp.data_fingerprint(season)
 
     for f in files:
         portrait = json.loads(f.read_text())
+        # Replaying tags re-stamps the portrait current. That is only true if
+        # its FEATURES are: stamping current provenance on gate inputs computed
+        # from older data or code turned stale portraits "current" untouched.
+        if portrait.get("data_fingerprint") != current_data:
+            refused += 1
+            continue
         players = portrait.get("players") or {}
         if not any((p.get("gate_inputs") for grp in
                     ("hitters", "starters", "bullpen_arms")
@@ -223,6 +230,12 @@ def main(season: int, dry_run: bool) -> None:
     verb = "would change" if dry_run else "rewrote"
     log.info("Season %d — %s %d portraits in %.1fs (%d skipped: no gate_inputs)",
              season, verb, touched, time.time() - t0, skipped)
+    if refused:
+        log.warning("Season %d — %d portrait(s) refused: their data, database "
+                    "rows or feature code changed since the build (or they "
+                    "predate data_fingerprint), so their gate inputs are stale. "
+                    "Rebuild: refresh.py --stages portraits --force-portraits",
+                    season, refused)
     if total:
         print(f"\n  tag changes, season {season}:")
         for tag, n in total.most_common(14):

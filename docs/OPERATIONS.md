@@ -38,7 +38,7 @@ Stages run in dependency order. One is opt-in.
 | `sources` | re-pulls FanGraphs/BRef/Savant, OAA, bWAR, def runs, IL | **off** |
 | `seed` | writes the re-pulled season totals to `player_batting`/`player_pitching`, where the portraits read them — **writes production** | **off** |
 | `league` | rebuilds every league cache (tunnel, pitch mix, spin, plate discipline, mechanics, sequencing) where Statcast moved; spin also when its method changes, re-pulling Savant active spin | on |
-| `portraits` | rebuilds whatever the fingerprint marks stale | on |
+| `portraits` | rebuilds whatever the fingerprint (files, database rows, code, gates) marks stale; `--force-portraits` rebuilds all | on |
 | `tags` | regenerates TAGS.md and tag_reference | on |
 | `publish` | writes portraits, league seasons and Scout to the serving tables | on |
 
