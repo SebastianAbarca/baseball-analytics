@@ -2572,23 +2572,113 @@ def _gate_digest() -> str:
     return "|".join(items)
 
 
+# The pool files were never the whole input. Two rebuilds in October 2026
+# reported every portrait current when none was: the seed had rewritten the
+# season totals portraits read from the database, and a code change (paging
+# past the API's row cap) had changed what they read — neither is a file here.
+# So the fingerprint also hashes the database rows and the code.
+#
+# Code is split the way rederive_traits needs it: the TAG modules turn stored
+# gate inputs into tags, so a change there can be replayed; every other module
+# computes the inputs themselves, so a change there means rebuild.
+_MODULES_DIR = Path(__file__).resolve().parent
+_GATE_CODE_MODULES = ("hitter_traits", "pitcher_traits", "reliability")
+_DB_DIGEST_CACHE: dict[int, str] = {}
+_DATA_FINGERPRINT_CACHE: dict[int, str] = {}
+
+
+def _build_code_files() -> list[Path]:
+    files = [p for p in sorted(_MODULES_DIR.glob("*.py"))
+             if p.stem not in _GATE_CODE_MODULES and p.stem != "validation"]
+    return files + [_MODULES_DIR.parent / "scripts" / "build_league_identity.py"]
+
+
+def _code_digest(paths: list[Path]) -> str:
+    """
+    Hash of these files' code: comments, blank lines and docstrings dropped,
+    so rewording a comment does not mark 360 portraits stale. Tokens rather
+    than ast.dump, whose output changes between Python versions.
+    """
+    import io
+    import tokenize
+    skip = (tokenize.COMMENT, tokenize.NL, tokenize.ENCODING)
+    stmt_start = (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
+    parts = []
+    for path in paths:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(path.read_text()).readline)
+                if t.type not in skip]
+        kept, prev = [], tokenize.NEWLINE
+        for i, t in enumerate(toks):
+            nxt = toks[i + 1].type if i + 1 < len(toks) else tokenize.ENDMARKER
+            # A string that is a whole statement is a docstring (or inert).
+            if t.type == tokenize.STRING and prev in stmt_start and nxt == tokenize.NEWLINE:
+                continue
+            kept.append(f"{t.type}:{t.string}")
+            prev = t.type
+        parts.append(f"{path.name}:{hashlib.sha256(chr(31).join(kept).encode()).hexdigest()[:16]}")
+    return "|".join(parts)
+
+
+def _db_digest(season: int) -> str:
+    """
+    Content hash of the database rows a season's portraits read: its own
+    season totals and the prior season's (the projection). An unseeded season
+    reads the fg_* CSV instead, which _pool_digest already covers.
+    """
+    from database import query_batting, query_pitching
+    parts = []
+    for s in (season - 1, season):
+        if s not in _DB_DIGEST_CACHE:
+            sub = []
+            for name, query in (("batting", query_batting), ("pitching", query_pitching)):
+                df = query(s)
+                if df.empty:
+                    sub.append(f"{name}:none")
+                    continue
+                df = df.sort_values("key_mlbam")[sorted(df.columns)]
+                sub.append(f"{name}:{len(df)}:"
+                           f"{hashlib.sha256(df.to_csv(index=False).encode()).hexdigest()[:16]}")
+            _DB_DIGEST_CACHE[s] = ",".join(sub)
+        parts.append(f"db{s}:{_DB_DIGEST_CACHE[s]}")
+    return "|".join(parts)
+
+
+def data_fingerprint(season: int, refresh: bool = False) -> str:
+    """
+    Hash of what a season's portrait FEATURES were computed from: its pool
+    files, its database rows, and the code that computes them — everything
+    but the tag logic. Stored on each portrait, so rederive_traits can refuse
+    to replay tags over features that have since changed.
+    """
+    season = int(season)
+    if refresh or season not in _DATA_FINGERPRINT_CACHE:
+        blob = "||".join((_pool_digest(season), _db_digest(season),
+                          _code_digest(_build_code_files())))
+        _DATA_FINGERPRINT_CACHE[season] = hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return _DATA_FINGERPRINT_CACHE[season]
+
+
 def build_fingerprint(season: int, refresh: bool = False) -> str:
     """
     Short hash of everything one season's portraits depend on beyond their own
-    team-season: the pool files that season reads, and the gate constants and
-    vocabulary the tags were cut with. Memoised per process and season — the
-    pools do not change mid-run; pass refresh=True after changing them.
+    team-season: data_fingerprint (pools, database rows, feature code) plus
+    the gate constants, vocabulary and tag code the tags were cut with.
+    Memoised per process and season — inputs do not change mid-run; pass
+    refresh=True after changing them.
     """
     season = int(season)
     if refresh or season not in _FINGERPRINT_CACHE:
-        blob = _pool_digest(season) + "||" + _gate_digest()
+        gate_code = _code_digest([_MODULES_DIR / f"{m}.py" for m in _GATE_CODE_MODULES])
+        blob = "||".join((data_fingerprint(season, refresh), _gate_digest(), gate_code))
         _FINGERPRINT_CACHE[season] = hashlib.sha256(blob.encode()).hexdigest()[:16]
     return _FINGERPRINT_CACHE[season]
 
 
 def clear_fingerprint_cache() -> None:
-    """Forget every memoised fingerprint (after pools were rewritten)."""
+    """Forget every memoised fingerprint (after pools or the database changed)."""
     _FINGERPRINT_CACHE.clear()
+    _DATA_FINGERPRINT_CACHE.clear()
+    _DB_DIGEST_CACHE.clear()
 
 
 def gate_fingerprint(refresh: bool = False) -> str:
@@ -2611,10 +2701,9 @@ def portrait_is_current(portrait: Optional[dict]) -> bool:
     """
     Is this stored portrait current, for the machine that builds them?
 
-    Schema must match, and so must its season's build fingerprint (that
-    season's pools + gates) when the portrait carries one. Portraits predating the fingerprint are
-    accepted on schema alone — they cannot be checked, and refusing them would
-    force a rebuild of everything already known to be good.
+    Schema must match, and so must its season's build fingerprint (pools,
+    database rows, code, gates). A portrait with no fingerprint is not
+    current: it cannot be checked, and every schema-22 build carries one.
 
     The dashboard never calls this: it cannot see the pools. It filters
     published portraits on schema_version and gate_fingerprint instead
@@ -2626,7 +2715,7 @@ def portrait_is_current(portrait: Optional[dict]) -> bool:
         return False
     stamped = portrait.get("build_fingerprint")
     if stamped is None:
-        return True
+        return False
     season = portrait.get("season")
     return season is not None and stamped == build_fingerprint(int(season))
 
@@ -3779,7 +3868,9 @@ def build_team_portrait(
         # build_fingerprint: the schema catches a change of shape, this
         # catches a change of inputs.
         "build_fingerprint": build_fingerprint(season),
-        # Its code half alone, for readers without the pools.
+        # Its feature half: what rederive_traits must find unchanged.
+        "data_fingerprint":  data_fingerprint(season),
+        # Its gate-constant half alone, for readers without the pools.
         "gate_fingerprint":  gate_fingerprint(),
         "team":   team,
         "season": season,
