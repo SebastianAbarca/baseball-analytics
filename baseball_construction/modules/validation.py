@@ -27,6 +27,7 @@ Tests:
   V20 League caches current — rebuilt and fingerprinted alike, none older than raw
   V21 Sprint speed units — ft/s from Savant's leaderboard, not percentile ranks
   V22 Complete reads and rosters — every DB row read; every 30+ PA hitter on his portrait
+  V24 Steal-attempt ranks league-wide — one rank per player-season; non-runners rank low
 """
 
 from __future__ import annotations
@@ -1587,6 +1588,60 @@ def v22_complete_rosters() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V24 — Steal-attempt ranks league-wide
+# ---------------------------------------------------------------------------
+
+def v24_league_steal_ranks() -> Result:
+    """
+    1. synthetic league: a hitter with 0 attempts and plenty of times on base
+       ranks in the bottom 15% (low steal attempts); a hitter under
+       STEAL_RANK_MIN_ON_BASE times on base gets no rank; the busiest runner
+       ranks top
+    2. saved portraits: each player-season carries ONE attempt rank on every
+       team it appears for — it was ranked within each roster, so 27 traded
+       2025 hitters had a different rank on each club
+    """
+    import json
+    import pandas as pd
+    import team_portrait as tp
+    from ingest import PROCESSED_DIR
+
+    errors = []
+    n = 100
+    league = pd.DataFrame({
+        "key_mlbam": range(1, n + 1),
+        "pa": [500] * n, "obp": [0.320] * n,                  # 160 times on base
+        "sb": [0] * 20 + list(range(1, n - 19)), "cs": [0] * n,
+    })
+    league.loc[league.key_mlbam == 100, ["pa", "obp"]] = [60, 0.300]   # 18 on base
+    pcts = tp._league_attempt_pcts(league)
+    if not pcts.get(1, 100) <= 15:
+        errors.append(f"0 attempts on 160 times on base ranks {pcts.get(1)}, not bottom 15%")
+    if 100 in pcts.index:
+        errors.append("hitter under the times-on-base floor was ranked")
+    if pcts.idxmax() != 99:
+        errors.append(f"busiest runner is not the top rank ({pcts.idxmax()})")
+
+    split, checked = [], 0
+    for season in range(2015, 2027):
+        ranks: dict = {}
+        for f in sorted((PROCESSED_DIR / "portraits").glob(f"*_{season}.json")):
+            for h in json.loads(f.read_text())["players"].get("hitters", []):
+                pct = (h.get("gate_inputs") or {}).get("attempt_rate_pct")
+                ranks.setdefault(h["player_id"], set()).add(
+                    None if pct is None else round(float(pct), 6))
+        split += [f"{season} {pid}" for pid, v in ranks.items() if len(v) > 1]
+        checked += bool(ranks)
+    if split:
+        errors.append(f"{len(split)} player-season(s) ranked differently on different "
+                      f"teams (e.g. {', '.join(split[:3])})")
+
+    passed = not errors
+    return passed, (f"league-wide ranks; one per player-season across {checked} seasons"
+                    if passed else "; ".join(errors))
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1613,6 +1668,7 @@ TESTS = [
     ("V20", "League caches current",           v20_league_caches_current),
     ("V21", "Sprint speed units",              v21_sprint_speed_units),
     ("V22", "Complete reads and rosters",      v22_complete_rosters),
+    ("V24", "Steal-attempt ranks league-wide", v24_league_steal_ranks),
 ]
 
 
