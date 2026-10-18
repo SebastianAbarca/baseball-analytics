@@ -1029,12 +1029,39 @@ def _aggregate_team_pitching(team_pit: pd.DataFrame) -> dict[str, Optional[float
 # Step 5 — Hitter archetype classification
 # ---------------------------------------------------------------------------
 
+# Steal attempts are ranked ONCE per season, league-wide, over every hitter
+# with this many times on base — zero-attempt players included, so `low steal
+# attempts` reaches the players who never run. It was ranked within each
+# team's hitters, among those with 2+ attempts: identical seasons got
+# different ranks on different clubs (Zobrist 2015: 33.3 on ATH, 20.0 on KC),
+# and a player who never ran could not be "low".
+STEAL_RANK_MIN_ON_BASE = 50
+
+
+def _league_attempt_pcts(batting_full: pd.DataFrame) -> pd.Series:
+    """
+    Attempt-rate percentile per player for the season, indexed by key_mlbam:
+    (SB + CS) / times on base (OBP x PA), ranked among hitters with
+    STEAL_RANK_MIN_ON_BASE times on base. Ties share their average rank, so
+    the zero-attempt group sits together near the bottom.
+    """
+    full = batting_full.rename(columns=BATTING_COL_MAP)
+    full = full.drop_duplicates("key_mlbam")
+    num = lambda c: pd.to_numeric(full.get(c), errors="coerce")
+    tob = num("OBP").fillna(0) * num("PA").fillna(0)
+    rate = (num("SB").fillna(0) + num("CS").fillna(0)) / tob.where(tob > 0)
+    elig = tob >= STEAL_RANK_MIN_ON_BASE
+    pct = rate[elig].rank(pct=True, method="average") * 100.0
+    return pd.Series(pct.values, index=pd.to_numeric(full.loc[elig, "key_mlbam"]).astype(int))
+
+
 def _classify_hitters(
     team_bat: pd.DataFrame,
     split_map: Optional[dict[int, dict]] = None,
     catcher_map: Optional[dict[int, dict]] = None,
     advancement_map: Optional[dict[int, dict]] = None,
     positions_map: Optional[dict[int, dict]] = None,
+    attempt_pcts: Optional[pd.Series] = None,
 ) -> list[dict]:
     """
     Build hitter profile for each player in team_bat.
@@ -1053,34 +1080,12 @@ def _classify_hitters(
         except (TypeError, ValueError):
             return default
 
-    # Pre-compute cross-player attempt_rate percentile for Disruptive/Chaotic gate.
-    # opportunities ≈ OBP * PA (times on base proxy — avoids needing raw H/BB/HBP counts).
-    def _attempt_rate(row_) -> Optional[float]:
-        sb_ = _nz(row_.get("SB", 0))
-        cs_ = _nz(row_.get("CS", 0))
-        obp_= _nz(row_.get("OBP")) or _nz(row_.get("obp"))
-        # Season PA: SB/CS and OBP are season totals, so is the denominator.
-        pa_ = _nz(row_.get("pa_total")) or _nz(row_.get("PA")) or _nz(row_.get("pa"), 1)
-        tob = obp_ * pa_
-        if tob <= 0:
-            return None
-        return (sb_ + cs_) / tob
-
-    attempt_rates = pd.Series(
-        [_attempt_rate(r) for _, r in team_bat.iterrows()],
-        index=team_bat.index,
-    )
-    # Only normalize among players who have at least minimum attempts
-    min_att = 2
-    has_attempts = attempt_rates.notna() & (
-        (team_bat.get("SB", pd.Series(0, index=team_bat.index)).fillna(0)
-         + team_bat.get("CS", pd.Series(0, index=team_bat.index)).fillna(0)) >= min_att
-    )
-    att_pct_series = pd.Series(np.nan, index=team_bat.index)
-    if has_attempts.sum() > 1:
-        att_pct_series[has_attempts] = normalize_percentile(
-            attempt_rates[has_attempts]
-        ).values
+    # Season attempt-rate rank, league-wide (_league_attempt_pcts), the same
+    # number on every team the player appeared for.
+    def _att_pct(pid) -> float:
+        if attempt_pcts is None or pd.isna(pid):
+            return np.nan
+        return float(attempt_pcts.get(int(pid), np.nan))
 
     profiles = []
     for idx, row in team_bat.iterrows():
@@ -1114,8 +1119,8 @@ def _classify_hitters(
             metrics["k_rate_raw"] = float(k_raw)
 
         # Attempt rate percentile (cross-player, pre-computed above)
-        att_pct = att_pct_series.get(idx)
-        att_pct = float(att_pct) if att_pct is not None and not np.isnan(att_pct) else None
+        att_pct = _att_pct(player_id)
+        att_pct = None if np.isnan(att_pct) else att_pct
 
         # SB/CS — available from BRef merge; Savant-only falls back to 0
         obp_val = _nz(row.get("OBP")) or _nz(row.get("obp"))
@@ -3636,7 +3641,8 @@ def build_team_portrait(
     hitter_profiles = _classify_hitters(team_bat, split_map=_split_map,
                                         catcher_map=_catcher_map,
                                         advancement_map=_advancement_map,
-                                        positions_map=_positions_map)
+                                        positions_map=_positions_map,
+                                        attempt_pcts=_league_attempt_pcts(batting_full))
 
     # ── 13. Pitcher archetypes ────────────────────────────────────────────
     # Load pitch-mix table once here so every starter in the loop shares it
