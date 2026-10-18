@@ -209,7 +209,7 @@
      "tag": "aggressive",
      "side": "H",
      "family": "approach",
-     "fires": 1285,
+     "fires": 1286,
      "population": "chase",
      "floor": "75 (FPS_pct)",
      "earned": "attacks first pitches and expands the zone (high FPS% + high chase%)"
@@ -227,7 +227,7 @@
      "tag": "changeup out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 503,
+     "fires": 508,
      "population": "all",
      "floor": "\u2014",
      "earned": "Changeup put-away pitch \u2014 24% whiffs per pitch (top 20% for a changeup is 20%+)"
@@ -245,7 +245,7 @@
      "tag": "curveball out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 318,
+     "fires": 321,
      "population": "all",
      "floor": "\u2014",
      "earned": "Curveball put-away pitch \u2014 19% whiffs per pitch (top 20% for a curveball is 16%+)"
@@ -317,16 +317,16 @@
      "tag": "high steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 822,
+     "fires": 728,
      "population": "steal_opps",
      "floor": "\u2014",
-     "earned": "34 attempts on 185 times aboard (100th pct) \u2014 runs often"
+     "earned": "52 attempts on 201 times aboard (100th pct) \u2014 runs often"
     },
     {
      "tag": "knuckle-curve out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 100,
+     "fires": 102,
      "population": "all",
      "floor": "\u2014",
      "earned": "Knuckle-Curve put-away pitch \u2014 18% whiffs per pitch (top 20% for a knuckle-curve is 18%+)"
@@ -344,10 +344,10 @@
      "tag": "low steal attempts",
      "side": "H",
      "family": "running-game",
-     "fires": 462,
+     "fires": 770,
      "population": "steal_opps",
      "floor": "\u2014",
-     "earned": "10 attempts on 190 times aboard (14th pct) \u2014 stays put"
+     "earned": "1 attempts on 232 times aboard (13th pct) \u2014 stays put"
     },
     {
      "tag": "oppo bat",
@@ -371,10 +371,10 @@
      "tag": "patterned",
      "side": "P",
      "family": "sequencing",
-     "fires": 745,
+     "fires": 757,
      "population": "all",
      "floor": "\u2014",
-     "earned": "pitch-to-pitch entropy ratio 0.92 (10th pct) \u2014 strong repeatable sequences"
+     "earned": "pitch-to-pitch entropy ratio 0.94 (10th pct) \u2014 strong repeatable sequences"
     },
     {
      "tag": "pull-heavy",
@@ -407,7 +407,7 @@
      "tag": "slider out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 738,
+     "fires": 748,
      "population": "all",
      "floor": "\u2014",
      "earned": "Slider put-away pitch \u2014 25% whiffs per pitch (top 20% for a slider is 21%+)"
@@ -434,7 +434,7 @@
      "tag": "splitter out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 88,
+     "fires": 91,
      "population": "all",
      "floor": "\u2014",
      "earned": "Splitter put-away pitch \u2014 26% whiffs per pitch (top 20% for a splitter is 23%+)"
@@ -452,7 +452,7 @@
      "tag": "sweeper out pitch",
      "side": "P",
      "family": "arsenal",
-     "fires": 151,
+     "fires": 153,
      "population": "all",
      "floor": "\u2014",
      "earned": "Sweeper put-away pitch \u2014 20% whiffs per pitch (top 20% for a sweeper is 19%+)"
@@ -479,16 +479,16 @@
      "tag": "unpredictable",
      "side": "P",
      "family": "sequencing",
-     "fires": 739,
+     "fires": 738,
      "population": "all",
      "floor": "\u2014",
-     "earned": "pitch-to-pitch entropy ratio 1.04 (100th pct) \u2014 the current pitch tells you almost nothing about the next"
+     "earned": "pitch-to-pitch entropy ratio 1.00 (100th pct) \u2014 the current pitch tells you almost nothing about the next"
     },
     {
      "tag": "zone hunter",
      "side": "H",
      "family": "approach",
-     "fires": 1026,
+     "fires": 1028,
      "population": "all",
      "floor": "50 (OSwing_pct)",
      "earned": "swing discrimination 100th pct \u2014 attacks strikes and lays off balls"
@@ -629,10 +629,10 @@
      "tag": "invisible ball",
      "side": "P",
      "family": "deception",
-     "fires": 741,
+     "fires": 740,
      "population": "all",
      "floor": "75 (SwStr_pct)",
-     "earned": "whiff rate +11.2% above what velocity predicts (100th pct) \u2014 misses bats the radar gun can't explain"
+     "earned": "whiff rate +11.1% above what velocity predicts (100th pct) \u2014 misses bats the radar gun can't explain"
     },
     {
      "tag": "low steal rate",
