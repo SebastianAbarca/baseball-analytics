@@ -39,7 +39,7 @@ ERA_DIR = _HERE.parent / "data" / "era"
 # the team-construction percentiles (team_portrait.cross_team_path) — both
 # ranked against the era pool, and neither rebuildable on the runner without
 # a full season of Statcast per season.
-ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v2_{s}.csv")
+ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v3_{s}.csv")
 
 
 def main() -> int:

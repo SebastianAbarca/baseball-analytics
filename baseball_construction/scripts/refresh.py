@@ -274,7 +274,7 @@ def _derived_globs(seasons: list[int]) -> list[Path]:
     for s in seasons:
         out += [PROCESSED / f"team_turnover_{s}.csv",
                 PROCESSED / f"est_service_time_{s}.csv",
-                PROCESSED / f"cross_team_metrics_v2_{s}.csv"]
+                PROCESSED / f"cross_team_metrics_v3_{s}.csv"]
         out += sorted(PROCESSED.glob(f"*_prior_{s}.parquet"))
     for p in sorted(PROCESSED.glob("*_history_*_*.csv")):
         m = re.search(r"_history_(\d{4})_(\d{4})\.csv$", p.name)

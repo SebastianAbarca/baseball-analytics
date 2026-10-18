@@ -90,7 +90,7 @@ from reliability import (
 )
 from database import (
     query_batting, query_pitching,
-    season_batting_seeded, query_debut_seasons, query_estimated_service_time,
+    season_batting_seeded, query_debut_seasons,
 )
 from spin_efficiency import build_pitcher_spin_profile
 from tunneling import build_tunnel_profile
@@ -435,10 +435,11 @@ def cross_team_path(season: int) -> Path:
     """
     The per-season cross-team rows file. `_v2` because the unversioned files
     summed season-wide PA and WAR into every team a player joined and counted
-    a traded hitter's batted balls for both clubs; reading one of those into a
-    pool would mix the two definitions.
+    a traded hitter's batted balls for both clubs; `_v3` because the tenure
+    columns now come from MLB service time (service_time.py), not a calendar
+    estimate. Reading an older file into a pool would mix two definitions.
     """
-    return PROCESSED_DIR / f"cross_team_metrics_v2_{season}.csv"
+    return PROCESSED_DIR / f"cross_team_metrics_v3_{season}.csv"
 
 
 def cross_team_rows(
@@ -491,8 +492,9 @@ def cross_team_rows(
 
         war_variance = float(war.std()) if war.notna().sum() > 1 else np.nan
 
-        # Estimated Service Time (EST) per player — years.days float (e.g. 5.143).
-        # Falls back to calendar-year tenure when EST is unavailable.
+        # MLB service time per player (service_time.py) — years.days float
+        # (5.143 = 5 years 143 days), from the official lists and the roster
+        # ledger. Falls back to calendar-year tenure only without a source.
         # CBA thresholds: <3.0 pre-arb · 3.0-5.999 arb-eligible · ≥6.0 free agent.
         service_vals, pa_vals = [], []
         for pid, player_pa in zip(tb["key_mlbam"].astype(int), pa):
@@ -592,9 +594,10 @@ def ensure_cross_team_rows(season: int, force: bool = False) -> bool:
     batting_full, _, bwar_bat, _ = _load_season_players(season)
     bat_stints, _ = compute_stints(statcast, season)
     hitter_ids = [int(p) for p in bat_stints["batter"].unique()]
+    from service_time import service_years_days
     cross_team_rows(statcast, batting_full, season, bat_stints, bwar_bat,
                     query_debut_seasons(),
-                    query_estimated_service_time(hitter_ids, season))
+                    service_years_days(hitter_ids, season))
     return True
 
 
@@ -2441,7 +2444,7 @@ _GATE_FINGERPRINT_CACHE: Optional[str] = None
 # The cross-team rows of every era-pool season are what the team-construction
 # percentiles rank against, so they are pool files exactly like the fg roots.
 _FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
-                           "cross_team_metrics_v2_{s}.csv")
+                           "cross_team_metrics_v3_{s}.csv")
 
 # Pools that live outside PROCESSED_DIR, hashed for the portrait's own season.
 # tunneling.py writes tunnel_league_{s}.parquet into modules/processed; left
@@ -2533,6 +2536,11 @@ def _pool_digest(season: int) -> str:
              for s in era_pool_seasons(season) for pat in _FINGERPRINT_POOL_FILES]
     paths += [directory / pat.format(s=season)
               for directory, pat in _FINGERPRINT_EXTRA_POOLS]
+    # Service time (roster control): every published MLS list, and the roster
+    # ledger for each season through this one.
+    from service_time import MLS_DIR, ROSTER_DIR
+    paths += sorted(MLS_DIR.glob("mls_thru_*.csv"))
+    paths += [ROSTER_DIR / f"rosters_{s}.parquet" for s in range(2009, season + 1)]
     parts = []
     for path in paths:
         h = hashlib.sha256()
@@ -3404,7 +3412,8 @@ def build_team_portrait(
         if not cross_team_path(season).exists():
             debut_seasons    = query_debut_seasons()
             all_hitter_ids   = [int(p) for p in bat_stints["batter"].unique()]
-            est_service_time = query_estimated_service_time(all_hitter_ids, season)
+            from service_time import service_years_days
+            est_service_time = service_years_days(all_hitter_ids, season)
         cross_team, _row = _compute_cross_team_metrics(
             statcast, batting_full, team, season, debut_seasons, est_service_time,
             bat_stints, bwar_bat)

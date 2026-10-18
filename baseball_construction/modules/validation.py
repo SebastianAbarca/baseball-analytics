@@ -751,74 +751,69 @@ def v9_arsenal_profile() -> Result:
 
 def v10_service_time() -> Result:
     """
-    Verify query_estimated_service_time:
-      1. Returns a dict keyed by MLBAM ID
-      2. Values are floats (years.fraction)
-      3. A player who debuted in 2015 has at least ~8 years EST by 2023
-      4. A 2022 debut player has < 3 years EST by 2023 (pre-arb)
-      5. CBA tier logic: <3 pre-arb, 3-5.999 arb, >=6 FA-eligible
+    MLB service time (service_time.py):
+      1. years.days arithmetic: '5.143' is 5*172 + 143 days and 5 whole years;
+         the list's position codes read as pitcher / non-pitcher / two-way
+      2. same-named players separate by continuity: a veteran's chain and a
+         rookie whose total exceeds what his seasons could hold
+      3. on the real lists (where present): Verlander 20 and Kershaw 17 years
+         through 2025; no matched player's total falls, or grows past a season
+         plus CHAIN_SLACK, between consecutive lists
+      4. each season with a list pair and a roster ledger: a player's list
+         increase matches his ledger days within 10 for 95%+ of players
+    The calendar estimate this replaced asserted that anyone who debuted by
+    2015 had 6+ years by 2023 — false for every player who went up and down.
     """
-    from database import query_estimated_service_time, query_debut_seasons
+    import pandas as pd
+    import service_time as st
 
     errors = []
+    if st.mls_days("5.143") != 5 * 172 + 143 or st.service_years(5 * 172 + 143) != 5:
+        errors.append("years.days arithmetic")
+    want = {"rhp": True, "rhp-s": True, "rhp-c": True, "c": False, "c-1b": False,
+            "ss-2b": False, "dh-rhp": None}
+    got = {k: st.is_pitcher_pos(k) for k in want}
+    if got != want:
+        errors.append(f"position codes {got}")
 
-    # Pull a small sample of known MLBAM IDs from the Chadwick people files
-    # (IDs we know exist — use Statcast-verified players)
-    # Fallback: load a handful from cached people CSVs
-    try:
-        debut_map = query_debut_seasons()
-    except Exception as exc:
-        return False, f"query_debut_seasons raised: {exc}"
+    # 2. two pitchers named alike: 1 debuted 2010, 2 debuted 2018
+    info = pd.DataFrame({"mlb_played_first": [2010, 2018], "mlb_played_last": [2020, 2025],
+                         "mlb_pitcher": [True, True]}, index=[1, 2])
+    res = pd.DataFrame({
+        "season": [2015, 2019, 2019], "days": [900, 1500, 200], "pitcher": [True] * 3,
+        "key_mlbam": [None] * 3, "method": ["ambiguous"] * 3, "candidates": [[1, 2]] * 3,
+        "name_key": [("smith", "joe")] * 3, "all_cands": [(1, 2)] * 3})
+    st._resolve_by_continuity(res, info, set())
+    if list(res["key_mlbam"]) != [1, 1, 2]:
+        errors.append(f"continuity split same-named players as {list(res['key_mlbam'])}")
 
-    if not debut_map:
-        return False, "No debut seasons available — seeded data may be missing"
+    detail_real = "no MLS lists on this machine"
+    if any(st.MLS_DIR.glob("mls_thru_*.csv")):
+        m = st.match_mls_ids()
+        through = st.service_days_through(2025, m)
+        for pid, name, years in ((434378, "Verlander", 20), (477132, "Kershaw", 17)):
+            got_y = st.service_years(through.get(pid, 0))
+            if got_y != years:
+                errors.append(f"{name} through 2025: {got_y} years, list says {years}")
+        ok = m.dropna(subset=["key_mlbam", "days"])
+        w = ok.pivot(index="key_mlbam", columns="season", values="days")
+        breaks = sum(int((((w[a + 1] - w[a]).dropna() < 0)
+                          | ((w[a + 1] - w[a]).dropna() > 172 + st.CHAIN_SLACK)).sum())
+                     for a in w.columns if a + 1 in w.columns)
+        if breaks:
+            errors.append(f"{breaks} consecutive-list chain breaks")
+        r = st.reconcile(m)
+        seasons = []
+        for season, g in r.groupby("season"):
+            share = float((g["diff"].abs() <= 10).mean())
+            seasons.append(f"{season} {share:.0%}")
+            if share < 0.95:
+                errors.append(f"{season}: only {share:.1%} within 10 days of the ledger")
+        resolved = float(m.loc[m["days"].fillna(0) > 0, "key_mlbam"].notna().mean())
+        detail_real = f"{resolved:.1%} of list rows matched; ledger agreement {', '.join(seasons)}"
 
-    # Sample: 10 players with known debut years
-    sample_ids = list(debut_map.keys())[:10]
-    try:
-        est = query_estimated_service_time(sample_ids, 2023)
-    except Exception as exc:
-        return False, f"query_estimated_service_time raised: {exc}"
-
-    if not est:
-        return False, "Empty EST result for sample players"
-
-    # All values should be non-negative floats
-    for pid, val in est.items():
-        if not isinstance(val, (int, float)):
-            errors.append(f"EST for {pid} is not numeric: {val!r}")
-        elif val < 0:
-            errors.append(f"EST for {pid} is negative: {val}")
-
-    # Veterans (debut <= 2015) should have >=6 EST by 2023 (FA-eligible)
-    vets = [p for p in sample_ids if debut_map.get(p, 9999) <= 2015 and p in est]
-    for pid in vets:
-        if est[pid] < 6.0:
-            errors.append(
-                f"Vet {pid} (debut {debut_map[pid]}) has EST={est[pid]:.2f} < 6.0 by 2023"
-            )
-
-    # Rookies (debut >= 2022) should have <3 EST by 2023 (pre-arb)
-    rookies = [p for p in sample_ids if debut_map.get(p, 0) >= 2022 and p in est]
-    for pid in rookies:
-        if est[pid] >= 3.0:
-            errors.append(
-                f"Rookie {pid} (debut {debut_map[pid]}) has EST={est[pid]:.2f} >= 3.0 by 2023"
-            )
-
-    # CBA tier logic verification on the full sample
-    for pid, val in est.items():
-        tier = "pre-arb" if val < 3.0 else ("arb" if val < 6.0 else "fa")
-        if tier not in ("pre-arb", "arb", "fa"):
-            errors.append(f"Unexpected tier '{tier}' for {pid} EST={val:.2f}")
-
-    passed = len(errors) == 0
-    detail = (
-        f"Tested {len(est)} players — vets={len(vets)} rookies={len(rookies)}, all tiers valid"
-        if passed else "; ".join(errors)
-    )
-    return passed, detail
-
+    passed = not errors
+    return passed, (detail_real if passed else "; ".join(errors))
 
 # ---------------------------------------------------------------------------
 # V11 — Spin efficiency pipeline
