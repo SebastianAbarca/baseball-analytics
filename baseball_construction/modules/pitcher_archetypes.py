@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 P1_MIN = {"avg_velo_pct": 60.0}
 
 # P2 — Craft Strikeout: min thresholds + velocity CEILING
-# SwStr_pct is scored but NOT a hard gate (it can be missing from DB).
+# Whiff_pct is scored but NOT a hard gate (it can be missing from DB).
 # K_pct is the primary gate; if K% is very high (>=65) SwStr absence is excused.
 P2_MIN          = {"K_pct_pct": 55.0}   # SwStr removed from hard gate
 P2_SWSTR_MIN    = 55.0                   # soft floor: if present, must be >= this OR K% >= 65
@@ -110,7 +110,7 @@ PITCHER_CONFIDENCE_CEILING = 0.35
 ACE_SCORE_THRESHOLD     = 78.0   # winning archetype's composite score floor
 ACE_DOMINANCE_KEYS      = [
     "K_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
-    "SwStr_pct_pct", "GB_pct_pct", "CSW_pct_pct",
+    "Whiff_pct_pct", "GB_pct_pct", "CSW_pct_pct",
 ]
 ACE_ELITE_TRAIT_PCT     = 80.0   # a trait counts as "elite" at/above this percentile
 ACE_MIN_ELITE_TRAITS    = 2      # need 2+ elite traits — guards against one big number
@@ -204,7 +204,7 @@ def _score_p1(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "stuff_composite_pct":  0.30,  # pre-computed: (velo + spin + spin_eff) blend
         "K_pct_pct":            0.25,
-        "SwStr_pct_pct":        0.20,
+        "Whiff_pct_pct":        0.20,
         "CSW_pct_pct":          0.15,
         "HardHit_allowed_pct":  0.10,  # inverted rank: higher = better at preventing hard contact
     }
@@ -269,7 +269,7 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
         return None
 
     # Soft SwStr check: if present, must be >= 55 unless K% >= 65
-    swstr_val = metrics.get("SwStr_pct_pct")
+    swstr_val = metrics.get("Whiff_pct_pct")
     if swstr_val is not None and not (isinstance(swstr_val, float) and np.isnan(swstr_val)):
         if swstr_val < P2_SWSTR_MIN and metrics.get("K_pct_pct", 0) < 65.0:
             return None  # Both SwStr and K% are below threshold

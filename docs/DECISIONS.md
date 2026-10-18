@@ -490,3 +490,25 @@ honest about why nothing fired.
 About 45% of hitter-seasons fall under 100 PA. That is not an error: a lot of
 players get a cup of coffee. The marker sits on the player, not on the team, so
 it does not imply the team's data is thin.
+
+### A foul tip is a whiff, and each rate says what it divides by
+
+`pitch_aggregates` counted a foul tip as contact; `pitch_mix` counted it as a
+whiff, and called its per-PITCH rate `whiff_pct` — the name the other module
+gave the per-SWING rate, which `team_portrait` then renamed `SwStr_pct`. Three
+names, two rates, two definitions. Savant settles the definition: with foul
+tips as whiffs, whiffs per swing match its arsenal whiff% within 0.04 points on
+1,228 pitcher x pitch-type rows (2025); as contact, 2.1 points low on every row.
+
+`pitch_aggregates.WHIFF_EVENTS / SWING_EVENTS / CSW_EVENTS` are now the only
+definitions. A per-swing rate is `whiff_per_swing` / `Whiff_pct`; a per-pitch
+rate is `swstr_pct`. The out-pitch floors stay on the per-pitch scale they were
+fitted on, so they did not move.
+
+### A league cache knows which method built it
+
+Each league cache only knew whether it existed: a change to how pitch mix,
+plate discipline, sequencing or tunneling is computed kept serving the old
+numbers until someone remembered `--force-league`. Each now stamps
+`method_version`; bump the module's constant and every older cache rebuilds —
+on its next load and in refresh's `league` stage. Spin already worked this way.

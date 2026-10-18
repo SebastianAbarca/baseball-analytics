@@ -53,6 +53,10 @@ _HERE = Path(__file__).parent
 PROCESSED_DIR = _HERE / "processed"
 PROCESSED_DIR.mkdir(exist_ok=True)
 
+# Bump when the computation changes; older caches rebuild (cached_if_current).
+# 2: pairs need back-to-back pitch numbers.
+TUNNEL_METHOD_VERSION = 2
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -205,11 +209,15 @@ def build_pitch_pairs(df: pd.DataFrame) -> pd.DataFrame:
     # Vectorised lag-1 shift — much faster than groupby.apply
     prev = valid.shift(1)
 
-    # Consecutive pair is valid only when both rows share the same at-bat
+    # Consecutive pair is valid only when both rows share the same at-bat AND
+    # are back-to-back pitches. The untracked rows were dropped above, so
+    # without the pitch-number check pitch 1 paired with pitch 3 across an
+    # untracked pitch 2 — a pair the hitter never saw (216 of 526,962 in 2025).
     same_ab = (
         (valid["pitcher"]       == prev["pitcher"])
         & (valid["game_pk"]     == prev["game_pk"])
         & (valid["at_bat_number"] == prev["at_bat_number"])
+        & (valid["pitch_number"] - prev["pitch_number"] == 1)
     )
 
     pairs = pd.DataFrame({
@@ -421,9 +429,11 @@ def load_league_tunnel(
         force:    rebuild even when the cache exists
     """
     cache = PROCESSED_DIR / f"tunnel_league_{season}.parquet"
-    if cache.exists() and not force:
+    from pitch_aggregates import cached_if_current
+    hit = None if force else cached_if_current(cache, TUNNEL_METHOD_VERSION)
+    if hit is not None:
         log.info("tunnel_league %d: loading from cache", season)
-        return pd.read_parquet(cache)
+        return hit
 
     if statcast is None:
         from ingest import pull_statcast_season
@@ -433,6 +443,7 @@ def load_league_tunnel(
              season, len(statcast))
     agg = build_tunnel_profile(statcast)
     if not agg.empty:
+        agg["method_version"] = TUNNEL_METHOD_VERSION
         agg.to_parquet(cache, index=False)
         log.info("tunnel_league %d: saved %d pitchers to cache", season, len(agg))
     return agg

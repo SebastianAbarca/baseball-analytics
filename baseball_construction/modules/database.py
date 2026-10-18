@@ -57,17 +57,42 @@ _CLIENT: Optional[Client] = None
 # regular hitters from its portraits. Read seasons a page at a time.
 PAGE_ROWS = 1000
 
+# Supabase drops the odd connection mid-request (SSLV3_ALERT_BAD_RECORD_MAC,
+# "EOF occurred in violation of protocol"): a seed died at 2016 and again at
+# 2018 on 2026-10-17. Every write and read here is idempotent, so retry it,
+# as publish.py already did for its own calls.
+ATTEMPTS = 4
+
+
+def _retry(what: str, fn):
+    """Run fn, retrying transient failures with backoff; raise after the last."""
+    import time
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt == ATTEMPTS:
+                raise
+            wait = 2 ** (attempt - 1)
+            log.warning("  … %s failed (%s) — retrying in %ds", what, str(exc)[:80], wait)
+            time.sleep(wait)
+
 
 def _all_rows(table: str, season: int, team: Optional[str] = None) -> list[dict]:
     """Every row of `table` for `season` (and `team`), paging past the cap."""
     client = get_client()
     out: list[dict] = []
-    while True:
-        # A fresh builder per page: postgrest builders accumulate parameters.
+    def page_at(start: int) -> list[dict]:
+        # A fresh builder per request — per page AND per retry: postgrest
+        # builders accumulate parameters, so a reused one stacks its ranges.
         q = client.table(table).select("*").eq("season", season)
         if team:
             q = q.eq("team", team)
-        page = q.order("key_mlbam").range(len(out), len(out) + PAGE_ROWS - 1).execute().data
+        return q.order("key_mlbam").range(start, start + PAGE_ROWS - 1).execute().data
+
+    while True:
+        start = len(out)
+        page = _retry(f"read {table} {season}", lambda: page_at(start))
         out.extend(page)
         if len(page) < PAGE_ROWS:
             return out
@@ -132,7 +157,7 @@ def _upsert(table: str, records: list[dict]) -> None:
     # Batch in chunks of 500 to stay within Supabase request limits
     for i in range(0, len(clean_records), 500):
         chunk = clean_records[i : i + 500]
-        client.table(table).upsert(chunk).execute()
+        _retry(f"upsert {table} rows {i}", lambda: client.table(table).upsert(chunk).execute())
     log.info("Upserted %d rows into %s", len(records), table)
 
 
@@ -209,8 +234,9 @@ def delete_absent(table: str, season: int, keep: set[int]) -> int:
     gone = sorted(have - keep)
     client = get_client()
     for i in range(0, len(gone), 200):
-        (client.table(table).delete().eq("season", season)
-         .in_("key_mlbam", gone[i:i + 200]).execute())
+        batch = gone[i:i + 200]
+        _retry(f"delete {table} {season}", lambda: client.table(table).delete()
+               .eq("season", season).in_("key_mlbam", batch).execute())
     if gone:
         log.info("Deleted %d %s row(s) for %d that this seed did not write",
                  len(gone), table, season)

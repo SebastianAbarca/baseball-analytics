@@ -97,7 +97,7 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "weights": {
             "TeamK_pct_pct":    0.30,
             "AvgVelo_pct":      0.25,
-            "SwStr_pct_pct":    0.25,
+            "Whiff_pct_pct":    0.25,
             "AvgSpinRate_pct":  0.20,
         },
     },
@@ -510,7 +510,7 @@ def aggregate_team_offensive_metrics(
         out["Sprint_inv_pct"]  = normalize_percentile(out["team_SprintSpeed"], invert=True)
     if "team_Whiff_pct" in out.columns:
         out["Contact_pct_pct"] = normalize_percentile(out["team_Whiff_pct"], invert=True)
-        out["SwStr_pct_pct"]   = normalize_percentile(out["team_Whiff_pct"])
+        out["Whiff_pct_pct"]   = normalize_percentile(out["team_Whiff_pct"])
     if "team_xwOBA" in out.columns:
         out["xwOBA_pct"] = normalize_percentile(out["team_xwOBA"])
 

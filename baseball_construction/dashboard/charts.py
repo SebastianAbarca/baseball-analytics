@@ -607,7 +607,7 @@ def _strike_zone_table() -> dict:
 
 def compute_pitch_mix(df) -> dict[int, list[dict]]:
     """
-    {pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage, from a
+    {pitcher_id: [{pitch, usage, velo, swstr}, ...]} sorted by usage, from a
     pitch_mix_{season}.parquet frame. Run by scripts/publish.py; the
     dashboard reads the result from league_seasons.
     """
@@ -619,13 +619,13 @@ def compute_pitch_mix(df) -> dict[int, list[dict]]:
             "pitch": r.pitch_type,
             "usage": float(r.usage_pct or 0),
             "velo":  float(r.avg_velo) if _pd.notna(r.avg_velo) else None,
-            "whiff": float(r.whiff_pct) if _pd.notna(r.whiff_pct) else None,
+            "swstr": float(r.swstr_pct) if _pd.notna(r.swstr_pct) else None,
         } for r in rows.itertuples()]
     return out
 
 
 def _pitch_mix(season: int) -> dict[int, list[dict]]:
-    """{pitcher_id: [{pitch, usage, velo, whiff}, ...]} sorted by usage."""
+    """{pitcher_id: [{pitch, usage, velo, swstr}, ...]} sorted by usage."""
     if season in _PITCH_MIX_CACHE:
         return _PITCH_MIX_CACHE[season]
     import store
@@ -692,8 +692,9 @@ def _arsenal_cell(player: dict, season: int):
         tip = f"{m['pitch']} — {m['usage']:.0%} of pitches"
         if m["velo"] is not None:
             tip += f", {m['velo']:.1f} mph"
-        if m["whiff"] is not None:
-            tip += f", {m['whiff']:.0%} whiff"
+        swstr = m.get("swstr", m.get("whiff"))   # "whiff" until republished
+        if swstr is not None:
+            tip += f", {swstr:.0%} swinging strikes"
         chips.append(html.Span(
             f"{m['pitch']} {m['usage']*100:.0f}", title=tip,
             style={
@@ -1625,7 +1626,7 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         wars.append(_fmt(arm.get("war"), 1))
         velos.append(_fmt(m.get("avg_velo_pct")))
         ks.append(_fmt(m.get("K_pct_pct")))
-        whiffs.append(_fmt(m.get("SwStr_pct_pct")))
+        whiffs.append(_fmt(m.get("Whiff_pct_pct")))
         gbs.append(_fmt(m.get("GB_pct_pct")))
         hcs.append(_fmt(m.get("HardHit_allowed_pct")))
 
@@ -2225,7 +2226,7 @@ def team_batting_bars(portrait: dict) -> go.Figure:
         ("HardHit_pct_pct", "Hard Hit%"),
         ("xwOBA_pct",       "xwOBA"),
         ("Barrel_pct_pct",  "Barrel%"),
-        ("SwStr_pct_pct",   "SwStr%"),
+        ("Whiff_pct_pct",   "Whiff%"),
         ("FPS_pct_pct",     "FPS%"),
         ("OSwing_pct_pct",  "O-Swing%"),
         ("Contact_pct_pct", "Contact%"),
@@ -2364,7 +2365,7 @@ METRIC_LABELS: dict[str, str] = {
     # B1
     "TeamK_pct_pct":         "Team Strikeout Rate",
     "AvgVelo_pct":           "Avg Fastball Velocity",
-    "SwStr_pct_pct":         "Swinging Strike Rate",
+    "Whiff_pct_pct":         "Whiff Rate (per swing)",
     "AvgSpinRate_pct":       "Avg Spin Rate",
     # B2
     "BB_pitch_inv_pct":      "Walk Rate (inv.)",
@@ -3378,7 +3379,7 @@ def compare_batting_bars(portrait_a: dict | None, portrait_b: dict | None) -> go
         ("Contact_pct_pct",   "Contact%"),
         ("OSwing_pct_pct",    "O-Swing%"),
         ("FPS_pct_pct",       "FPS%"),
-        ("SwStr_pct_pct",     "SwStr%"),
+        ("Whiff_pct_pct",     "Whiff%"),
         ("Barrel_pct_pct",    "Barrel%"),
         ("xwOBA_pct",         "xwOBA"),
         ("HardHit_pct_pct",   "Hard Hit%"),
@@ -4777,12 +4778,12 @@ def compare_tag_matrix(rows: list[dict]):
 _CMP_AXES_H = ["Power", "Hard Hit", "Barrel Rate", "Contact", "Contact Rate",
                "Walk Rate", "Zone Swing", "Aggression", "Speed", "Quality",
                "Contact-First"]
-_CMP_AXES_P = ["avg_velo_pct", "K_pct_pct", "SwStr_pct_pct", "CSW_pct_pct",
+_CMP_AXES_P = ["avg_velo_pct", "K_pct_pct", "Whiff_pct_pct", "CSW_pct_pct",
                "GB_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
                "Barrel_allowed_pct"]
 _CMP_AXIS_LABEL = {
     "avg_velo_pct": "Velocity", "K_pct_pct": "Strikeouts",
-    "SwStr_pct_pct": "Swing & miss", "CSW_pct_pct": "CSW",
+    "Whiff_pct_pct": "Swing & miss", "CSW_pct_pct": "CSW",
     "GB_pct_pct": "Ground balls", "BB_pct_pct": "Walks allowed",
     "HardHit_allowed_pct": "Hard hit allowed",
     "Barrel_allowed_pct": "Barrels allowed",

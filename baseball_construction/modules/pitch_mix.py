@@ -8,7 +8,7 @@ Two outputs:
   1. pitch_mix_{season}.parquet  — long format, one row per pitcher × pitch_type
      Columns: pitcher, season, p_throws, pitch_type, n, usage_pct,
               avg_velo, avg_ivb (pfx_z), avg_hb (pfx_x),
-              avg_spin, avg_spin_axis, whiff_pct, gb_pct, csw_pct
+              avg_spin, avg_spin_axis, swstr_pct, whiff_per_swing, gb_pct, csw_pct
 
   2. build_arsenal_profile(pitcher_id, season) → structured dict
      Used by build_starter_profile as the new primary classification.
@@ -39,6 +39,11 @@ MIN_PITCH_TYPE_N   = 50
 MIN_USAGE_PCT      = 0.05   # 5%
 # Minimum total pitches for a qualifying pitcher-season
 MIN_PITCHER_PITCHES = 150
+
+# Bump when the computation changes; older caches rebuild (cached_if_current).
+# 2: shared outcome sets (foul tip = whiff); whiff_pct -> swstr_pct + whiff_per_swing.
+PITCH_MIX_METHOD_VERSION = 2
+PLATE_DISCIPLINE_METHOD_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # Pitch family taxonomy
@@ -126,12 +131,14 @@ def build_pitch_mix(season: int, force: bool = False,
         pitch_type, n, usage_pct,
         avg_velo, avg_ivb, avg_hb,
         avg_spin, avg_spin_axis,
-        whiff_pct, gb_pct, csw_pct, swing_pct
+        swstr_pct, whiff_per_swing, gb_pct, csw_pct, swing_pct
     """
     cache = _cache_path(season)
-    if cache.exists() and not force:
+    from pitch_aggregates import cached_if_current
+    hit = None if force else cached_if_current(cache, PITCH_MIX_METHOD_VERSION)
+    if hit is not None:
         log.info("pitch_mix %d: loading from cache", season)
-        return pd.read_parquet(cache)
+        return hit
 
     log.info("pitch_mix %d: building from Statcast…", season)
     sc = statcast if statcast is not None else _load_statcast(season)
@@ -140,16 +147,11 @@ def build_pitch_mix(season: int, force: bool = False,
     sc = sc[~sc["pitch_type"].isin({"PO", "EP", "SC"})].copy()
     sc = sc[sc["pitch_type"].notna() & (sc["pitch_type"] != "")]
 
-    # Swing / whiff / CSW flags per pitch
-    sc["is_swing"]          = sc["description"].isin({
-        "swinging_strike", "swinging_strike_blocked",
-        "foul", "foul_tip", "hit_into_play",
-    })
-    sc["is_whiff"]          = sc["description"].isin({
-        "swinging_strike", "swinging_strike_blocked", "foul_tip",
-    })
-    sc["is_called_strike"]  = sc["description"] == "called_strike"
-    sc["is_csw"]            = sc["is_whiff"] | sc["is_called_strike"]
+    # Swing / whiff / CSW flags per pitch, from the shared definitions.
+    from pitch_aggregates import CSW_EVENTS, SWING_EVENTS, WHIFF_EVENTS
+    sc["is_swing"]          = sc["description"].isin(SWING_EVENTS)
+    sc["is_whiff"]          = sc["description"].isin(WHIFF_EVENTS)
+    sc["is_csw"]            = sc["description"].isin(CSW_EVENTS)
     sc["is_gb"]             = sc["bb_type"] == "ground_ball"
     sc["is_bip"]            = sc["bb_type"].isin(
         {"ground_ball", "fly_ball", "line_drive", "popup"}
@@ -181,7 +183,10 @@ def build_pitch_mix(season: int, force: bool = False,
     )
 
     agg["usage_pct"]  = agg["n"] / agg["total_n"]
-    agg["whiff_pct"]  = np.where(agg["n"] > 0, agg["n_whiff"] / agg["n"], np.nan)
+    # Per PITCH (SwStr%): what the out-pitch floors were fitted on. It used to
+    # be called whiff_pct, the name pitch_aggregates gives the per-SWING rate.
+    agg["swstr_pct"]  = np.where(agg["n"] > 0, agg["n_whiff"] / agg["n"], np.nan)
+    agg["whiff_per_swing"] = np.where(agg["n_swing"] > 0, agg["n_whiff"] / agg["n_swing"], np.nan)
     agg["csw_pct"]    = np.where(agg["n"] > 0, agg["n_csw"]   / agg["n"], np.nan)
     agg["swing_pct"]  = np.where(agg["n"] > 0, agg["n_swing"] / agg["n"], np.nan)
     agg["gb_pct"]     = np.where(agg["n_bip"] > 0, agg["n_gb"] / agg["n_bip"], np.nan)
@@ -200,14 +205,15 @@ def build_pitch_mix(season: int, force: bool = False,
         "n", "usage_pct",
         "avg_velo", "avg_ivb", "avg_hb",
         "avg_spin", "avg_spin_axis",
-        "whiff_pct", "gb_pct", "csw_pct", "swing_pct",
+        "swstr_pct", "whiff_per_swing", "gb_pct", "csw_pct", "swing_pct",
     ]
     result = agg[keep_cols].round(
         {"usage_pct": 4, "avg_velo": 2, "avg_ivb": 3, "avg_hb": 3,
          "avg_spin": 1, "avg_spin_axis": 1,
-         "whiff_pct": 4, "gb_pct": 4, "csw_pct": 4, "swing_pct": 4}
+         "swstr_pct": 4, "whiff_per_swing": 4, "gb_pct": 4, "csw_pct": 4, "swing_pct": 4}
     )
 
+    result["method_version"] = PITCH_MIX_METHOD_VERSION
     result.to_parquet(cache, index=False)
     log.info("pitch_mix %d: saved %d rows to cache", season, len(result))
     return result
@@ -223,11 +229,12 @@ def load_pitch_mix(season: int) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 # First-pitch outcomes that count as a strike (called, swung at, or in play)
-_FPS_STRIKE_DESCRIPTIONS = {
-    "called_strike", "swinging_strike", "swinging_strike_blocked",
-    "foul", "foul_tip", "foul_bunt", "bunt_foul_tip", "missed_bunt",
-    "hit_into_play",
-}
+def _fps_strike_descriptions() -> frozenset[str]:
+    from pitch_aggregates import CSW_EVENTS, SWING_EVENTS
+    return CSW_EVENTS | SWING_EVENTS
+
+
+_FPS_STRIKE_DESCRIPTIONS = _fps_strike_descriptions()
 
 # Minimum first pitches (≈ PAs) for a stable first-pitch-strike rate
 _MIN_FIRST_PITCHES = 50
@@ -256,9 +263,11 @@ def load_league_plate_discipline(
     metrics (TunnelScore_pct, …).
     """
     cache = PROCESSED_DIR / f"plate_discipline_league_{season}.parquet"
-    if cache.exists() and not force:
+    from pitch_aggregates import cached_if_current
+    hit = None if force else cached_if_current(cache, PLATE_DISCIPLINE_METHOD_VERSION)
+    if hit is not None:
         log.info("plate_discipline_league %d: loading from cache", season)
-        return pd.read_parquet(cache)
+        return hit
 
     if statcast is None:
         statcast = _load_statcast(season)
@@ -268,9 +277,8 @@ def load_league_plate_discipline(
                    "release_speed", "pitch_type"]].copy()
 
     # ── SwStr% over all pitches ────────────────────────────────────────────
-    sc["_is_whiff"] = sc["description"].isin(
-        {"swinging_strike", "swinging_strike_blocked", "foul_tip"}
-    )
+    from pitch_aggregates import WHIFF_EVENTS
+    sc["_is_whiff"] = sc["description"].isin(WHIFF_EVENTS)
     per = sc.groupby("pitcher").agg(
         n_pitches  = ("description", "count"),
         swstr_rate = ("_is_whiff",   "mean"),
@@ -306,6 +314,7 @@ def load_league_plate_discipline(
     per["first_pitch_strike_pct"] = per["fps_rate"].rank(pct=True) * 100.0
 
     out = per.reset_index()
+    out["method_version"] = PLATE_DISCIPLINE_METHOD_VERSION
     out.to_parquet(cache, index=False)
     log.info("plate_discipline_league %d: saved %d pitchers "
              "(swstr~velo slope=%.4f/mph)", season, len(out), slope)
@@ -374,7 +383,7 @@ def classify_out_pitch(non_fb_rows: pd.DataFrame) -> dict:
     """
     Identify the primary out pitch (secondary weapon) from non-fastball pitches.
 
-    Ranks by whiff_pct × usage_pct to reward pitches that miss bats AND are
+    Ranks by swstr_pct × usage_pct to reward pitches that miss bats AND are
     thrown enough to matter — avoids elevating a 5% dart with a high whiff rate.
 
     Returns:
@@ -382,19 +391,19 @@ def classify_out_pitch(non_fb_rows: pd.DataFrame) -> dict:
         family:      'slider' | 'sweeper' | 'curveball' | 'changeup' |
                      'splitter' | 'knuckle-curve' | 'slurve' | None
         avg_velo, avg_ivb, avg_hb, avg_spin_axis
-        usage_pct, whiff_pct
+        usage_pct, swstr_pct
         shape:       'lateral' | 'drop' | 'drop-sweep' | 'fade' | 'rise-drop'
     """
     if non_fb_rows.empty:
         return {"pitch_type": None, "family": None, "usage_pct": 0.0,
-                "whiff_pct": None, "shape": None,
+                "swstr_pct": None, "shape": None,
                 "avg_velo": None, "avg_ivb": None, "avg_hb": None, "avg_spin_axis": None}
 
     rows = non_fb_rows[non_fb_rows["usage_pct"] >= MIN_USAGE_PCT].copy()
     if rows.empty:
         rows = non_fb_rows.copy()
 
-    rows["leverage"] = rows["whiff_pct"].fillna(0) * rows["usage_pct"]
+    rows["leverage"] = rows["swstr_pct"].fillna(0) * rows["usage_pct"]
     top = rows.sort_values("leverage", ascending=False).iloc[0]
     code = top["pitch_type"]
 
@@ -426,7 +435,7 @@ def classify_out_pitch(non_fb_rows: pd.DataFrame) -> dict:
         "pitch_type":    code,
         "family":        family,
         "usage_pct":     round(float(top["usage_pct"]), 3),
-        "whiff_pct":     round(float(top["whiff_pct"]), 3) if pd.notna(top["whiff_pct"]) else None,
+        "swstr_pct":     round(float(top["swstr_pct"]), 3) if pd.notna(top["swstr_pct"]) else None,
         "shape":         shape,
         "avg_velo":      round(float(top["avg_velo"]), 1) if pd.notna(top["avg_velo"]) else None,
         "avg_ivb":       round(float(top["avg_ivb"]), 2) if pd.notna(top["avg_ivb"]) else None,
@@ -467,9 +476,9 @@ def _approach(
     # Check if a non-FB pitch has the highest leverage
     non_fb = all_rows[~all_rows["pitch_type"].isin(FASTBALL_CODES)]
     if not non_fb.empty:
-        top_non_fb_lev = (non_fb["whiff_pct"].fillna(0) * non_fb["usage_pct"]).max()
+        top_non_fb_lev = (non_fb["swstr_pct"].fillna(0) * non_fb["usage_pct"]).max()
         all_fb_lev     = (
-            all_rows[all_rows["pitch_type"].isin(FASTBALL_CODES)]["whiff_pct"].fillna(0)
+            all_rows[all_rows["pitch_type"].isin(FASTBALL_CODES)]["swstr_pct"].fillna(0)
             * all_rows[all_rows["pitch_type"].isin(FASTBALL_CODES)]["usage_pct"]
         ).max() if not all_rows[all_rows["pitch_type"].isin(FASTBALL_CODES)].empty else 0.0
         if top_non_fb_lev > all_fb_lev * 1.1:
@@ -497,7 +506,7 @@ def build_arsenal_profile(
     Returns structured dict:
     {
         "fastball":   { family, primary_pitch, avg_velo, avg_ivb, avg_hb, usage_pct }
-        "out_pitch":  { pitch_type, family, usage_pct, whiff_pct, shape,
+        "out_pitch":  { pitch_type, family, usage_pct, swstr_pct, shape,
                         avg_velo, avg_ivb, avg_hb, avg_spin_axis }
         "supporting": ["CH", "CU"]   # pitches > MIN_USAGE_PCT, not primary FB or out_pitch
         "approach":   "fastball-first" | "secondary-led" | "balanced" | "tunnel-dependent"
@@ -528,7 +537,7 @@ def build_arsenal_profile(
                             "avg_ivb": None, "avg_hb": None, "usage_pct": 0.0},
             "out_pitch":   {"pitch_type": "KN", "family": "knuckleball",
                             "usage_pct": float(kn_row.iloc[0]["usage_pct"]),
-                            "whiff_pct": float(kn_row.iloc[0]["whiff_pct"]) if pd.notna(kn_row.iloc[0]["whiff_pct"]) else None,
+                            "swstr_pct": float(kn_row.iloc[0]["swstr_pct"]) if pd.notna(kn_row.iloc[0]["swstr_pct"]) else None,
                             "shape": "knuckleball", "avg_velo": None,
                             "avg_ivb": None, "avg_hb": None, "avg_spin_axis": None},
             "supporting":  [],
