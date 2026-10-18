@@ -261,21 +261,30 @@ RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
      LIMIT p_limit
 $$;
 
--- Full rows for "player_id|team|season" keys, in the order given. Where one
--- key matches two rows (a two-way player listed as hitter and pitcher), the
--- later one in flattening order wins, as it did in the in-memory index.
+-- Full rows for "player_id|team|season|side" keys, in the order given.
+-- The side is part of the key: without it a player listed as both hitter and
+-- pitcher for one team-season (348 such keys, mostly pitchers who batted)
+-- resolved to whichever row flattened later, so picking the hitter could
+-- open the pitcher. A legacy three-part key still resolves, as before.
 CREATE OR REPLACE FUNCTION scout_rows(p_keys TEXT[])
 RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
     SELECT DISTINCT ON (k.pos) scout_row(p)
       FROM unnest(p_keys) WITH ORDINALITY k(key, pos)
       JOIN scout_players p
-        ON p.player_id::text || '|' || p.team || '|' || p.season::text = k.key
-     ORDER BY k.pos, p.ord DESC
+        ON k.key IN (p.player_id::text || '|' || p.team || '|' || p.season::text || '|' || p.side,
+                     p.player_id::text || '|' || p.team || '|' || p.season::text)
+     ORDER BY k.pos, ((k.key LIKE '%|%|%|%') AND p.side = split_part(k.key, '|', 4)) DESC,
+              p.ord DESC
 $$;
 
 -- Nearest player-seasons by tag profile. Mirrors charts.player_comps:
 -- cosine similarity over the precomputed comp vectors, same side, volume
--- floor, optional required tags (applied to candidates only), target excluded.
+-- floor, optional required tags (applied to candidates only).
+-- The target's whole player-season is excluded, not just its team row: a
+-- traded player's other stint carries the same season-wide tags and came
+-- back as a near-perfect comp of himself. Candidates are one per
+-- player-season too — a traded comp's stints would otherwise fill two slots
+-- with one season. Other seasons of the same player stay (the face check).
 CREATE OR REPLACE FUNCTION scout_comps(
     p_key        TEXT,
     p_limit      INT     DEFAULT 8,
@@ -286,28 +295,36 @@ CREATE OR REPLACE FUNCTION scout_comps(
 RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
 WITH tgt AS (
     SELECT * FROM scout_players
-     WHERE player_id::text || '|' || team || '|' || season::text = p_key
-     ORDER BY ord DESC LIMIT 1
+     WHERE p_key IN (player_id::text || '|' || team || '|' || season::text || '|' || side,
+                     player_id::text || '|' || team || '|' || season::text)
+     ORDER BY ((p_key LIKE '%|%|%|%') AND side = split_part(p_key, '|', 4)) DESC, ord DESC
+     LIMIT 1
 ),
 cand AS (
     -- `p AS rw` keeps the whole row as a scout_players value for scout_row;
     -- `p.*` plus a sim column would no longer be one.
-    SELECT p AS rw, p.ord,
+    SELECT p AS rw, p.ord, p.player_id, p.season,
         (SELECT COALESCE(sum((t.vec ->> k)::DOUBLE PRECISION * (p.vec ->> k)::DOUBLE PRECISION), 0)
            FROM jsonb_object_keys(t.vec) k WHERE p.vec ? k)
         / NULLIF(t.vec_norm * p.vec_norm, 0) AS sim
       FROM scout_players p, tgt t
      WHERE p.side = t.side
-       AND NOT (p.player_id = t.player_id AND p.team = t.team AND p.season = t.season)
+       AND NOT (p.player_id = t.player_id AND p.season = t.season)
        AND COALESCE(p.volume, 0) >= COALESCE(p_min_vol, 0)
        AND (COALESCE(cardinality(p_require), 0) = 0 OR p.tags @> p_require)
        AND (NOT p_same_season OR p.season = t.season)
        AND t.vec <> '{}'::jsonb
+),
+best AS (
+    -- One row per player-season: its most similar stint.
+    SELECT DISTINCT ON (c.player_id, c.season) c.rw, c.ord, c.sim
+      FROM cand c
+     WHERE c.sim > 0
+     ORDER BY c.player_id, c.season, c.sim DESC, c.ord
 )
-SELECT scout_row(c.rw, c.sim)
-  FROM cand c
- WHERE c.sim > 0
- ORDER BY c.sim DESC, c.ord
+SELECT scout_row(b.rw, b.sim)
+  FROM best b
+ ORDER BY b.sim DESC, b.ord
  LIMIT p_limit
 $$;
 

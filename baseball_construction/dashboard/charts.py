@@ -4661,8 +4661,12 @@ COMPARE_MAX = 6
 
 
 def compare_key(row: dict) -> str:
-    """Stable id for a player-season: the index has no primary key of its own."""
-    return f"{row.get('i')}|{row.get('t')}|{row.get('s')}"
+    """
+    Stable id for a player-team-season-side. The side matters: a pitcher who
+    batted has a hitter row under the same player, team and season, and
+    without it the lookup could open the wrong one.
+    """
+    return f"{row.get('i')}|{row.get('t')}|{row.get('s')}|{row.get('d')}"
 
 
 def compare_player_options(query: str | None, side: str = "H",
