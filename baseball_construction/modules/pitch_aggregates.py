@@ -32,20 +32,54 @@ log = logging.getLogger(__name__)
 # Event-type sets
 # ---------------------------------------------------------------------------
 
-_SWUNG: frozenset[str] = frozenset({
+# THE pitch-outcome definitions; pitch_mix and its loaders import these.
+# They follow Baseball Savant, where a foul tip is a whiff: counted that way,
+# whiffs per swing match Savant's arsenal whiff% within 0.04 points on 1,228
+# pitcher x pitch-type rows (2025); counted as contact they ran 2.1 points
+# low on every row. The two modules used to disagree, so a player's whiff%
+# and a pitch's whiff rate measured different things.
+#
+# Two rates come from them, and their names say which:
+#   whiff per swing  = WHIFF_EVENTS / SWING_EVENTS   (Savant's Whiff%)
+#   swstr per pitch  = WHIFF_EVENTS / all pitches    (SwStr%)
+SWING_EVENTS: frozenset[str] = frozenset({
     "swinging_strike", "swinging_strike_blocked",
     "foul", "foul_tip",
     "hit_into_play", "hit_into_play_no_out", "hit_into_play_score",
-    "foul_bunt", "missed_bunt",
+    "foul_bunt", "bunt_foul_tip", "missed_bunt",
 })
 
-_CSW: frozenset[str] = frozenset({
-    "called_strike", "swinging_strike", "swinging_strike_blocked",
+WHIFF_EVENTS: frozenset[str] = frozenset({
+    "swinging_strike", "swinging_strike_blocked", "foul_tip",
+    "bunt_foul_tip", "missed_bunt",
 })
 
-_SWING_MISS: frozenset[str] = frozenset({
-    "swinging_strike", "swinging_strike_blocked", "missed_bunt",
-})
+# Called strikes plus whiffs.
+CSW_EVENTS: frozenset[str] = WHIFF_EVENTS | {"called_strike"}
+
+def cached_if_current(cache, version: int):
+    """
+    The league cache at `cache` if the current method built it, else None.
+
+    A cache only knew whether it EXISTED, so a change to how one is computed
+    kept serving the old numbers until someone remembered --force-league.
+    Each builder stamps `method_version`; bump its constant when the method
+    changes and every older cache rebuilds on next use (spin's
+    SPIN_METHOD_VERSION, generalised).
+    """
+    import pandas as _pd
+    if not cache.exists():
+        return None
+    df = _pd.read_parquet(cache)
+    if "method_version" in df.columns and (df["method_version"] == version).all():
+        return df
+    log.info("%s was built by an older method — rebuilding", cache.name)
+    return None
+
+
+_SWUNG = SWING_EVENTS
+_CSW = CSW_EVENTS
+_SWING_MISS = WHIFF_EVENTS
 
 # PA-ending events that are NOT at-bats — the xBA denominator excludes them.
 _NON_AB: frozenset[str] = frozenset({

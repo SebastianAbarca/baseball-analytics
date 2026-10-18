@@ -415,6 +415,25 @@ def _spin_method_stale(cache: Path) -> bool:
             or not (cached["spin_method_version"] == SPIN_METHOD_VERSION).all())
 
 
+def _method_stale(cache: Path, kind: str) -> bool:
+    """A league cache built by an older method version is stale even when
+    Statcast has not moved. Spin keeps its own column; the rest stamp
+    method_version (pitch_aggregates.cached_if_current)."""
+    if kind == "spin_league":
+        return _spin_method_stale(cache)
+    import pandas as pd
+    import pitch_mix, pitcher_traits, tunneling
+    version = {"pitch_mix": pitch_mix.PITCH_MIX_METHOD_VERSION,
+               "plate_discipline_league": pitch_mix.PLATE_DISCIPLINE_METHOD_VERSION,
+               "sequencing_league": pitcher_traits.SEQUENCING_METHOD_VERSION,
+               "tunnel_league": tunneling.TUNNEL_METHOD_VERSION}.get(kind)
+    if version is None:
+        return False
+    cached = pd.read_parquet(cache)
+    return ("method_version" not in cached.columns
+            or not (cached["method_version"] == version).all())
+
+
 def stage_seed(seasons: list[int], dry: bool) -> None:
     """
     Re-seed player_batting / player_pitching from the sources just pulled.
@@ -458,7 +477,7 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
             kind = pat.replace("_{s}.parquet", "")
             if (force or kind in force_caches or s in changed or not cache.exists()
                     or sc.stat().st_mtime > cache.stat().st_mtime
-                    or (kind == "spin_league" and _spin_method_stale(cache))):
+                    or _method_stale(cache, kind)):
                 stale.append((cache, build))
         if not stale:
             continue

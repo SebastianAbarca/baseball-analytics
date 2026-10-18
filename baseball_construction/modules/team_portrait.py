@@ -63,7 +63,10 @@ sys.path.insert(0, str(_HERE))
 # players carry their TEAM stint (pa/bf/g/gs/war) beside *_total season
 # fields and season_teams; players under the minimum are in
 # players.also_appeared.
-PORTRAIT_SCHEMA_VERSION = 22
+# 23: the per-swing whiff rate is Whiff_pct (was SwStr_pct, a different rate's
+# name), and an arsenal's out_pitch carries swstr_pct (was whiff_pct). Whiffs
+# include foul tips, as Savant counts them.
+PORTRAIT_SCHEMA_VERSION = 23
 
 from ingest import (
     pull_statcast_range,
@@ -181,7 +184,7 @@ BATTING_COL_MAP: dict[str, str] = {
     "bb_percent":       "BB_pct",
     "hard_hit_percent": "HardHit_pct",
     "sprint_speed":     "sprint_speed",
-    "whiff_percent":    "SwStr_pct",
+    "whiff_percent":    "Whiff_pct",
     "chase_percent":    "OSwing_pct",
     "xwoba":            "xwOBA",
     "brl_percent":      "Barrel_pct",
@@ -207,7 +210,7 @@ BATTING_COL_MAP: dict[str, str] = {
     "bb_rate":          "BB_pct",
     "hard_hit_pct":     "HardHit_pct",
     "barrel_pct":       "Barrel_pct",
-    "whiff_pct":        "SwStr_pct",
+    "whiff_pct":        "Whiff_pct",
     "chase_pct":        "OSwing_pct",
     "avg":              "AVG",
     "obp":              "OBP",
@@ -240,7 +243,7 @@ PITCHING_COL_MAP: dict[str, str] = {
     "hard_hit_percent": "HardHit_allowed",
     "xwoba":            "xwOBA_allowed",
     "pa":               "BF",
-    "whiff_percent":    "SwStr_pct_pitch",
+    "whiff_percent":    "Whiff_pct_pitch",
     "brl_percent":      "Barrel_allowed",
     "fb_velocity":      "avg_velo",
     # BRef-computed raw rates
@@ -253,7 +256,7 @@ PITCHING_COL_MAP: dict[str, str] = {
     "bb_rate":          "BB_pct_pitch",
     "hard_hit_pct":     "HardHit_allowed",
     "barrel_pct":       "Barrel_allowed",
-    "whiff_pct":        "SwStr_pct_pitch",
+    "whiff_pct":        "Whiff_pct_pitch",
     "xwoba_allowed":    "xwOBA_allowed",
     "fb_velocity":      "avg_velo",
     "gs":               "GS",
@@ -286,7 +289,7 @@ PITCHING_COL_MAP: dict[str, str] = {
 BATTING_RANK_INVERT: dict[str, bool] = {
     "K_pct": True,          # higher pct = fewer strikeouts
     "BB_pct": False, "HardHit_pct": False, "sprint_speed": False,
-    "SwStr_pct": False, "OSwing_pct": False, "xwOBA": False,
+    "Whiff_pct": False, "OSwing_pct": False, "xwOBA": False,
     "Barrel_pct": False, "xBA": False, "xSLG": False, "ISO": False,
     "OBP": False, "AVG": False, "PA": False, "EV_avg": False, "SB": False,
     "CS": False, "SLG": False, "BatGB_pct": False, "FPS_pct": False,
@@ -303,7 +306,7 @@ PITCHING_RANK_INVERT: dict[str, bool] = {
     "Barrel_allowed": True,    # higher pct = fewer barrels allowed
     "xwOBA_allowed": True,
     "FIP": True,
-    "BF": False, "SwStr_pct_pitch": False, "avg_velo": False, "GS": False,
+    "BF": False, "Whiff_pct_pitch": False, "avg_velo": False, "GS": False,
     "GB_pct_pitch": False, "Zone_pct": False, "CSW_pct": False,
     "PitchesPerBF": False, "WAR_pitch": False, "AvgSpinRate": False,
     "ArsenalDiversity": False,
@@ -312,7 +315,7 @@ PITCHING_RANK_INVERT: dict[str, bool] = {
 # Curated percentile keys shown on pitcher cards (starters AND relievers —
 # the two carry an identical schema)
 _PITCHER_DISPLAY_KEYS = [
-    "avg_velo_pct", "K_pct_pct", "SwStr_pct_pct",
+    "avg_velo_pct", "K_pct_pct", "Whiff_pct_pct",
     "GB_pct_pct", "HardHit_allowed_pct",
     "Barrel_allowed_pct", "CSW_pct_pct", "BB_pct_pct",
 ]
@@ -320,7 +323,7 @@ _PITCHER_DISPLAY_KEYS = [
 # Internal normalized key → pitcher_archetypes.py expected key
 _PITCHER_KEY_REMAP: dict[str, str] = {
     "K_pct_pitch_pct":     "K_pct_pct",
-    "SwStr_pct_pitch_pct": "SwStr_pct_pct",
+    "Whiff_pct_pitch_pct": "Whiff_pct_pct",
     "BB_pct_pitch_pct":    "BB_pct_pct",
     "GB_pct_pitch_pct":    "GB_pct_pct",   # P3 / P4 threshold
     "CSW_pct_pct":         "CSW_pct_pct",  # identity — already correct name
@@ -1651,7 +1654,7 @@ def _build_philosophy_metrics(
     # Rename for philosophy dimension B (team-level pitching keys)
     for raw, phil in [
         ("K_pct_pitch_pct",    "TeamK_pct_pct"),
-        ("SwStr_pct_pitch_pct","SwStr_pct_pct"),
+        ("Whiff_pct_pitch_pct","Whiff_pct_pct"),
         ("HardHit_allowed_pct","HardHit_allowed_pct"),
     ]:
         if raw in metrics and phil not in metrics:
@@ -1675,8 +1678,8 @@ def _build_philosophy_metrics(
         metrics["TunnelScore_pct"] = tunneling_team["tunnel_score_team_pct"]
 
     # ── CSW% — prefer Statcast-derived; fall back to SwStr approximation ──
-    if "CSW_pct_pct" not in metrics and "SwStr_pct_pct" in metrics:
-        metrics["CSW_pct_pct"] = metrics["SwStr_pct_pct"]
+    if "CSW_pct_pct" not in metrics and "Whiff_pct_pct" in metrics:
+        metrics["CSW_pct_pct"] = metrics["Whiff_pct_pct"]
 
     # ── Cross-team spread/concentration metrics ───────────────────────────
     if cross_team_metrics:
@@ -2087,7 +2090,7 @@ def _compute_pitching_projection(
     NORM_SPECS = [
         ("k_rate",        "TeamK_pct_pct",      False),
         ("fb_velocity",   "AvgVelo_pct",        False),
-        ("whiff_pct",     "SwStr_pct_pct",      False),
+        ("whiff_pct",     "Whiff_pct_pct",      False),
         ("avg_spin_rate", "AvgSpinRate_pct",    False),
         ("bb_rate",       "BB_pct_pitch_pct",   True),   # inverted directly → BB_pitch_inv_pct
         ("zone_pct",      "Zone_pct_pct",       False),
@@ -2117,7 +2120,7 @@ def _compute_pitching_projection(
     covered_bf = 0.0
     proj_metrics: dict[str, list[tuple[float, float]]] = {}
 
-    PCT_KEYS = ["TeamK_pct_pct", "AvgVelo_pct", "SwStr_pct_pct", "AvgSpinRate_pct",
+    PCT_KEYS = ["TeamK_pct_pct", "AvgVelo_pct", "Whiff_pct_pct", "AvgSpinRate_pct",
                 "Zone_pct_pct", "GB_pct_pct"]
 
     for pid in pitcher_ids:

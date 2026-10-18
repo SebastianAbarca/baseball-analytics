@@ -391,7 +391,7 @@ def v6_pitcher_archetypes() -> Result:
     p1_metrics = {
         "avg_velo_pct":    70.0,   # >= 60
         "K_pct_pct":       72.0,   # >= 65
-        "SwStr_pct_pct":   68.0,   # >= 65
+        "Whiff_pct_pct":   68.0,   # >= 65
         "stuff_composite_pct": 75.0,
         "CSW_pct_pct":     65.0,
         "HardHit_inv_pct": 60.0,
@@ -426,7 +426,7 @@ def v6_pitcher_archetypes() -> Result:
     p2_highvelo = {
         "avg_velo_pct":  70.0,   # above P2_VELO_CEILING (65)
         "K_pct_pct":     60.0,   # >= 55
-        "SwStr_pct_pct": 58.0,   # >= 55
+        "Whiff_pct_pct": 58.0,   # >= 55
     }
     result = classify_p2(p2_highvelo)
     if result is not None:
@@ -464,7 +464,7 @@ def v6_pitcher_archetypes() -> Result:
     both_p1_p3 = {
         "avg_velo_pct":        70.0,
         "K_pct_pct":           72.0,
-        "SwStr_pct_pct":       68.0,
+        "Whiff_pct_pct":       68.0,
         "stuff_composite_pct": 75.0,
         "CSW_pct_pct":         65.0,
         "HardHit_inv_pct":     60.0,
@@ -600,9 +600,8 @@ def v8_pitch_mix_schema() -> Result:
     Verify the pitch mix aggregation logic produces the expected
     per-pitcher×pitch_type schema using the cached 2023 test Statcast slice.
 
-    Runs the core aggregation steps directly (without the full build_pitch_mix
-    pipeline which requires a full-season Statcast pull), then validates column
-    schema, sensible value ranges, and PITCH_FAMILY mapping.
+    Runs build_pitch_mix itself on the cached week (into a temp cache), then
+    validates column schema, sensible value ranges, and PITCH_FAMILY mapping.
     """
     import pandas as pd
     import numpy as _np
@@ -616,42 +615,25 @@ def v8_pitch_mix_schema() -> Result:
     except Exception as exc:
         return False, f"Failed to load cached statcast: {exc}"
 
-    # Replicate the core aggregation steps from build_pitch_mix
-    sc = sc[sc["pitch_type"].notna() & (sc["pitch_type"] != "")].copy()
-    sc = sc[~sc["pitch_type"].isin({"PO", "EP", "SC"})].copy()
-
-    sc["is_swing"] = sc["description"].isin({
-        "swinging_strike", "swinging_strike_blocked",
-        "foul", "foul_tip", "hit_into_play",
-    })
-    sc["is_whiff"] = sc["description"].isin({
-        "swinging_strike", "swinging_strike_blocked", "foul_tip",
-    })
-    sc["is_csw"]  = sc["is_whiff"] | (sc["description"] == "called_strike")
-    sc["is_gb"]   = sc["bb_type"] == "ground_ball"
-    sc["is_bip"]  = sc["bb_type"].isin({"ground_ball", "fly_ball", "line_drive", "popup"})
-
-    totals = sc.groupby(["pitcher", "game_year"])["pitch_type"].count().rename("total_n")
-    grp = sc.groupby(["pitcher", "game_year", "pitch_type"])
-    agg = grp.agg(
-        n             = ("pitch_type",       "count"),
-        avg_velo      = ("release_speed",    "mean"),
-        avg_ivb       = ("pfx_z",            "mean"),
-        avg_hb        = ("pfx_x",            "mean"),
-        n_whiff       = ("is_whiff",         "sum"),
-        n_bip         = ("is_bip",           "sum"),
-        n_gb          = ("is_gb",            "sum"),
-    ).reset_index()
-    agg = agg.merge(totals.reset_index(), on=["pitcher", "game_year"])
-    agg["usage_pct"] = agg["n"] / agg["total_n"]
-    agg["whiff_pct"] = _np.where(agg["n"] > 0, agg["n_whiff"] / agg["n"], _np.nan)
-    agg["gb_pct"]    = _np.where(agg["n_bip"] > 0, agg["n_gb"] / agg["n_bip"], _np.nan)
+    # The real build_pitch_mix, not a copy of its steps: a copy re-states the
+    # classification it was meant to check. Cached to a temp file, so no
+    # season's pitch-mix cache is touched.
+    import tempfile
+    from pathlib import Path as _Path
+    import pitch_mix as _pm
+    tmp = _Path(tempfile.mkdtemp()) / "pitch_mix_test.parquet"
+    real_path, _pm._cache_path = _pm._cache_path, (lambda season: tmp)
+    try:
+        agg = _pm.build_pitch_mix(-2023, force=True, statcast=sc)
+    finally:
+        _pm._cache_path = real_path
 
     if agg.empty:
         return False, "No pitch-type rows aggregated from test data"
 
     # Column presence
-    required = {"pitcher", "pitch_type", "n", "usage_pct", "avg_velo", "avg_ivb", "avg_hb", "whiff_pct"}
+    required = {"pitcher", "pitch_type", "n", "usage_pct", "avg_velo", "avg_ivb", "avg_hb",
+                "swstr_pct", "whiff_per_swing", "csw_pct"}
     missing = required - set(agg.columns)
     if missing:
         errors.append(f"Missing columns: {missing}")
@@ -664,9 +646,14 @@ def v8_pitch_mix_schema() -> Result:
     # Floor of 40 accommodates position players pitching in blowouts
     if len(velo) > 0 and not (velo.between(40, 115).all()):
         errors.append(f"avg_velo outside [40,115]: {velo.min():.1f}–{velo.max():.1f}")
-    wp = agg["whiff_pct"].dropna()
-    if len(wp) > 0 and not wp.between(0, 1).all():
-        errors.append("whiff_pct outside [0,1]")
+    for col in ("swstr_pct", "whiff_per_swing", "csw_pct"):
+        v = agg[col].dropna()
+        if len(v) > 0 and not v.between(0, 1).all():
+            errors.append(f"{col} outside [0,1]")
+    # A whiff is a subset of swings and of pitches, so per swing >= per pitch.
+    both = agg[["swstr_pct", "whiff_per_swing"]].dropna()
+    if (both["whiff_per_swing"] < both["swstr_pct"] - 1e-9).any():
+        errors.append("whiff_per_swing below swstr_pct")
 
     # PITCH_FAMILY mapping for fastball codes
     for code in FASTBALL_CODES:
@@ -1587,6 +1574,93 @@ def v22_complete_rosters() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V23 — Pitch outcomes and pairing
+# ---------------------------------------------------------------------------
+
+def v23_pitch_outcomes_pairing() -> Result:
+    """
+    Offline, on synthetic pitches:
+      1. a foul tip is a whiff (Savant's definition) in the shared sets, and
+         build_pitch_mix gives 150 foul tips + 150 balls swstr 0.5 and whiffs
+         per swing 1.0 — the review's case read csw 1.0 off an all-pitches
+         denominator under the name whiff_pct
+      2. a tunnel pair needs back-to-back pitches: pitches 1 and 3 around an
+         untracked pitch 2 make no pair
+      3. the sequencing ratio uses one transition sample: a pitcher who opens
+         every PA with FF and follows 50/50 FF/SL scores 1.0 (was 1.23), and
+         no ratio exceeds 1 on random sequences
+    """
+    import tempfile
+    from pathlib import Path as _Path
+    import pandas as pd
+    import pitch_mix as pm
+    from pitch_aggregates import CSW_EVENTS, SWING_EVENTS, WHIFF_EVENTS
+    from pitcher_traits import _pitcher_sequencing
+    from tunneling import build_pitch_pairs
+
+    errors = []
+
+    # 1. outcomes
+    if not ("foul_tip" in WHIFF_EVENTS and "foul_tip" in SWING_EVENTS
+            and "foul_tip" in CSW_EVENTS):
+        errors.append("foul_tip is not a whiff, swing and CSW event")
+    n = 300
+    sc = pd.DataFrame({
+        "pitcher": 1, "game_year": 2099, "p_throws": "R", "pitch_type": "SL",
+        "release_speed": 85.0, "pfx_z": 0.1, "pfx_x": 0.3, "release_spin_rate": 2400.0,
+        "spin_axis": 90.0, "bb_type": None,
+        "description": ["foul_tip"] * (n // 2) + ["ball"] * (n // 2),
+    })
+    tmp = _Path(tempfile.mkdtemp()) / "pm.parquet"
+    real, pm._cache_path = pm._cache_path, (lambda season: tmp)
+    try:
+        row = pm.build_pitch_mix(2099, force=True, statcast=sc).iloc[0]
+    finally:
+        pm._cache_path = real
+    if abs(row["swstr_pct"] - 0.5) > 1e-9 or abs(row["whiff_per_swing"] - 1.0) > 1e-9:
+        errors.append(f"150 foul tips + 150 balls: swstr {row['swstr_pct']}, "
+                      f"whiff/swing {row['whiff_per_swing']} (want 0.5, 1.0)")
+
+    # 2. adjacency
+    three = pd.DataFrame({
+        "pitcher": 1, "game_pk": 1, "at_bat_number": 1, "pitch_number": [1, 2, 3],
+        "pitch_type": ["FF", "SL", "CH"], "tunnel_x": [0.0, None, 0.1],
+        "tunnel_z": [5.0, None, 5.1], "plate_x": [0.0, None, 0.5],
+        "plate_z": [2.5, None, 2.0],
+    })
+    if len(build_pitch_pairs(three)):
+        errors.append("tunnel pair made across an untracked pitch")
+
+    # 3. sequencing
+    def _seq(seconds):
+        rows = []
+        for ab, second in enumerate(seconds):
+            rows += [(1, ab, 1, "FF", 0, 0), (1, ab, 2, second, 0, 1)]
+        return pd.DataFrame(rows, columns=["game_pk", "at_bat_number", "pitch_number",
+                                           "pitch_type", "balls", "strikes"])
+    m = _pitcher_sequencing(_seq(["FF", "SL"] * 100))
+    if m is None or abs(m["entropy_ratio"] - 1.0) > 1e-9:
+        errors.append(f"FF-then-FF/SL ratio {m and m['entropy_ratio']} (want 1.0)")
+    rng = np.random.default_rng(23)
+    seq = pd.DataFrame({"game_pk": 1, "at_bat_number": np.repeat(np.arange(200), 4),
+                        "pitch_number": np.tile(np.arange(1, 5), 200),
+                        "pitch_type": rng.choice(["FF", "SL", "CH", "CU"], 800,
+                                                 p=[.5, .25, .15, .1]),
+                        "balls": 0, "strikes": 0})
+    r = _pitcher_sequencing(seq)
+    if r is None or r["entropy_ratio"] > 1 + 1e-9:
+        errors.append(f"random-sequence ratio {r and r['entropy_ratio']} above 1")
+    gap = _seq(["SL"] * 200)
+    gap.loc[gap["pitch_number"] == 2, "pitch_number"] = 3      # pitch 2 untyped
+    if _pitcher_sequencing(gap) is not None:
+        errors.append("sequencing paired pitches 1 and 3")
+
+    passed = not errors
+    return passed, ("foul tip = whiff; pairs need adjacent pitches; ratio <= 1"
+                    if passed else "; ".join(errors))
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1613,6 +1687,7 @@ TESTS = [
     ("V20", "League caches current",           v20_league_caches_current),
     ("V21", "Sprint speed units",              v21_sprint_speed_units),
     ("V22", "Complete reads and rosters",      v22_complete_rosters),
+    ("V23", "Pitch outcomes and pairing",      v23_pitch_outcomes_pairing),
 ]
 
 

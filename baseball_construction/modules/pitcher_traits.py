@@ -180,6 +180,8 @@ def mechanics_traits(row: pd.Series) -> list[dict]:
 
 # Minimum pitches for stable transition statistics
 MIN_SEQUENCING_PITCHES = 300
+# 2: entropy ratio over one transition sample (never above 1); adjacent pitches.
+SEQUENCING_METHOD_VERSION = 2
 
 # Behavioral tags gate at the distribution tails (top/bottom decile)
 UNPREDICTABLE_PCT   = 90.0   # entropy ratio ≥ → "unpredictable"
@@ -202,11 +204,16 @@ def _pitcher_sequencing(g: pd.DataFrame) -> Optional[dict]:
     """
     Sequencing metrics for one pitcher's season of pitches (pre-sorted).
 
-    entropy_ratio — H(next pitch | current pitch) / H(pitch mix overall).
-        1.0 = knowing the current pitch tells you nothing (unpredictable);
-        low = strong pitch-to-pitch patterns. The ratio (not raw entropy)
-        controls for arsenal size, so a two-pitch closer isn't automatically
-        "patterned" just for having two pitches.
+    entropy_ratio — H(next | previous) / H(next), both over the same
+        within-PA transitions: the share of the next pitch's uncertainty
+        left after you know the previous one. 1.0 = the previous pitch tells
+        you nothing (unpredictable); low = strong pitch-to-pitch patterns;
+        never above 1. The ratio (not raw entropy) controls for arsenal size,
+        so a two-pitch closer isn't automatically "patterned".
+        The denominator used to be the mix of ALL pitches, first pitches
+        included, which the transitions do not contain: 75 of 573 pitchers
+        came out above 1 in 2025, and a pitcher who always opens FF and then
+        splits FF/SL scored 1.23. None when the next pitch never varies.
     count_shift — total-variation distance between the pitch mix when ahead
         (0-1, 0-2, 1-2) vs behind (1-0, 2-0, 3-0, 2-1, 3-1).
         0 = identical mix in any count; 1 = completely different arsenal.
@@ -217,9 +224,11 @@ def _pitcher_sequencing(g: pd.DataFrame) -> Optional[dict]:
     if h_mix <= 0:
         return None  # single-pitch season — sequencing undefined
 
-    # Conditional entropy over within-AB transitions
+    # Conditional entropy over within-AB transitions between back-to-back
+    # pitches (an untyped pitch between two typed ones breaks the pair).
     same_ab = (g["game_pk"] == g["game_pk"].shift()) & \
-              (g["at_bat_number"] == g["at_bat_number"].shift())
+              (g["at_bat_number"] == g["at_bat_number"].shift()) & \
+              (g["pitch_number"] - g["pitch_number"].shift() == 1)
     pairs = pd.DataFrame({"prev": types.shift(), "cur": types})[same_ab].dropna()
     if len(pairs) < MIN_SEQUENCING_PITCHES // 2:
         return None
@@ -227,7 +236,8 @@ def _pitcher_sequencing(g: pd.DataFrame) -> Optional[dict]:
     for _, sub in pairs.groupby("prev")["cur"]:
         w = len(sub) / len(pairs)
         h_cond += w * _entropy(sub.value_counts(normalize=True).to_numpy())
-    entropy_ratio = h_cond / h_mix
+    h_next = _entropy(pairs["cur"].value_counts(normalize=True).to_numpy())
+    entropy_ratio = h_cond / h_next if h_next > 0 else None
 
     # Ahead-vs-behind mix distance
     counts = list(zip(g["balls"], g["strikes"]))
@@ -259,9 +269,11 @@ def load_league_sequencing(
              entropy_ratio_pct, count_shift_pct
     """
     cache = PROCESSED_DIR / f"sequencing_league_{season}.parquet"
-    if cache.exists() and not force:
+    from pitch_aggregates import cached_if_current
+    hit = None if force else cached_if_current(cache, SEQUENCING_METHOD_VERSION)
+    if hit is not None:
         log.info("sequencing_league %d: loading from cache", season)
-        return pd.read_parquet(cache)
+        return hit
 
     if statcast is None:
         from ingest import pull_statcast_season
@@ -289,6 +301,7 @@ def load_league_sequencing(
     pool["entropy_ratio_pct"] = pool["entropy_ratio"].rank(pct=True) * 100.0
     pool["count_shift_pct"]   = pool["count_shift"].rank(pct=True) * 100.0
 
+    pool["method_version"] = SEQUENCING_METHOD_VERSION
     pool.to_parquet(cache, index=False)
     log.info("sequencing_league %d: saved %d pitchers", season, len(pool))
     return pool
@@ -459,7 +472,7 @@ def arsenal_traits(
                              f"cutter-led fastball family ({fb_usage:.0%} usage)"))
 
     out = ap.get("out_pitch") or {}
-    whiff = out.get("whiff_pct")
+    whiff = out.get("swstr_pct")     # per pitch: the floors' scale
     floor = OUT_PITCH_WHIFF_FLOOR.get(out.get("pitch_type"), OUT_PITCH_WHIFF_FLOOR_OTHER)
     if out.get("pitch_type") and whiff is not None and float(whiff) >= floor:
         try:
@@ -527,7 +540,7 @@ WALK_PRONE_PCT        = 15.0
 # elite traits — same spirit as pitcher_archetypes.compute_ace_tier but
 # computed directly from metrics (no archetype score needed).
 ACE_KEYS            = ["K_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
-                       "SwStr_pct_pct", "GB_pct_pct", "CSW_pct_pct"]
+                       "Whiff_pct_pct", "GB_pct_pct", "CSW_pct_pct"]
 ACE_COMPOSITE_MIN   = 70.0
 ACE_ELITE_TRAIT_PCT = 80.0
 ACE_MIN_ELITE       = 2
