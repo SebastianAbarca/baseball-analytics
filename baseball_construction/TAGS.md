@@ -49,15 +49,15 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `soft tosser` | P | arsenal | 870 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, plus velo |
 | `station-to-station` | H | athleticism | 722 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, fast |
 
-## behavior  ·  32 tags, 21,793 firings
+## behavior  ·  32 tags, 22,046 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `aggressive` | H | approach | 1,285 | chase | 75 (FPS_pct) | — |
+| `aggressive` | H | approach | 1,286 | chase | 75 (FPS_pct) | — |
 | `air-ball bat` | H | batted-ball | 571 | all | 100 (BatGB_pct) | ground-ball bat |
-| `changeup out pitch` | P | arsenal | 503 | all | — | — |
+| `changeup out pitch` | P | arsenal | 508 | all | — | — |
 | `count-shifter` | P | sequencing | 730 | all | — (the sequencing pool requires 300 pitches) | — |
-| `curveball out pitch` | P | arsenal | 318 | all | — | — |
+| `curveball out pitch` | P | arsenal | 321 | all | — | — |
 | `cutter-primary` | P | arsenal | 499 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `deep arsenal` | P | arsenal | 1,436 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | two-pitch |
 | `extra base taker` | H | running-game | 803 | xbt | — (its gate carries a purpose-built floor: 10 advancement chances) | — |
@@ -65,28 +65,28 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `forkball out pitch` | P | arsenal | 8 | all | — | — |
 | `free swinger` | H | approach | 1,030 | chase | 50 (OSwing_pct) | patient |
 | `ground-ball bat` | H | batted-ball | 332 | all | 100 (BatGB_pct) | air-ball bat |
-| `high steal attempts` | H | running-game | 822 | steal_opps | — (its gate carries a purpose-built floor: ranked among runners with 2+ attempts) | low steal attempts |
-| `knuckle-curve out pitch` | P | arsenal | 100 | all | — | — |
+| `high steal attempts` | H | running-game | 728 | steal_opps | — (its gate carries a purpose-built floor: ranked league-wide among hitters with 50+ times on base) | low steal attempts |
+| `knuckle-curve out pitch` | P | arsenal | 102 | all | — | — |
 | `knuckleballer` | P | arsenal | 12 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
-| `low steal attempts` | H | running-game | 462 | steal_opps | — (its gate carries a purpose-built floor: ranked among runners with 2+ attempts) | high steal attempts |
+| `low steal attempts` | H | running-game | 770 | steal_opps | — (its gate carries a purpose-built floor: ranked league-wide among hitters with 50+ times on base) | high steal attempts |
 | `oppo bat` | H | batted-ball | 554 | all | 100 (BatGB_pct) | pull-heavy |
 | `patient` | H | approach | 1,035 | chase | 50 (OSwing_pct) | free swinger |
-| `patterned` | P | sequencing | 745 | all | — (the sequencing pool requires 300 pitches) | — |
+| `patterned` | P | sequencing | 757 | all | — (the sequencing pool requires 300 pitches) | — |
 | `pull-heavy` | H | batted-ball | 812 | all | 100 (BatGB_pct) | oppo bat |
 | `quick pitcher` | P | sequencing | 386 | tempo | — (the tempo pool requires 300 bases-empty pitches) | slow pitcher |
 | `sinker-baller` | P | arsenal | 2,240 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
-| `slider out pitch` | P | arsenal | 738 | all | — | — |
+| `slider out pitch` | P | arsenal | 748 | all | — | — |
 | `slow pitcher` | P | sequencing | 421 | tempo | — (the tempo pool requires 300 bases-empty pitches) | quick pitcher |
 | `slurve out pitch` | P | arsenal | 2 | all | — | — |
-| `splitter out pitch` | P | arsenal | 88 | all | — | — |
+| `splitter out pitch` | P | arsenal | 91 | all | — | — |
 | `steady mix` | P | sequencing | 736 | all | — (the sequencing pool requires 300 pitches) | — |
-| `sweeper out pitch` | P | arsenal | 151 | all | — | — |
+| `sweeper out pitch` | P | arsenal | 153 | all | — | — |
 | `tunneler` | P | deception | 2,280 | all | 75 (tunnel_score) | — |
 | `two-pitch` | P | arsenal | 206 | starters | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | deep arsenal |
-| `unpredictable` | P | sequencing | 739 | all | — (the sequencing pool requires 300 pitches) | — |
-| `zone hunter` | H | approach | 1,026 | all | 50 (OSwing_pct) | — |
+| `unpredictable` | P | sequencing | 738 | all | — (the sequencing pool requires 300 pitches) | — |
+| `zone hunter` | H | approach | 1,028 | all | 50 (OSwing_pct) | — |
 
-## result  ·  29 tags, 23,336 firings
+## result  ·  29 tags, 23,335 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
@@ -104,7 +104,7 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `ground-baller` | P | outcome | 1,620 | all | 100 (GB_pct_pitch) | — |
 | `high steal rate` | H | running-game | 722 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | low steal rate |
 | `high-K` | H | bat-to-ball | 708 | all | 30 (K_pct) | rarely strikes out |
-| `invisible ball` | P | deception | 741 | all | 75 (SwStr_pct) | — |
+| `invisible ball` | P | deception | 740 | all | 75 (SwStr_pct) | — |
 | `low steal rate` | H | running-game | 192 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | high steal rate |
 | `pitch-to-contact` | P | outcome | 1,174 | all | 75 (K_pct_pitch) | bat-misser |
 | `platoon liability` | H | platoon | 1,200 | splits_qual | — (its gate carries a purpose-built floor: 50 PA on each side) | — |
