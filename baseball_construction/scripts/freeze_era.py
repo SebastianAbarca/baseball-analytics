@@ -38,8 +38,11 @@ ERA_DIR = _HERE.parent / "data" / "era"
 # The fg roots behind the player percentiles, and the cross-team rows behind
 # the team-construction percentiles (team_portrait.cross_team_path) — both
 # ranked against the era pool, and neither rebuildable on the runner without
-# a full season of Statcast per season.
-ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v3_{s}.csv")
+# a full season of Statcast per season. And each season's service-time totals
+# (service_time.service_through): the MLS lists they come from are kept out
+# of git, and the runner adds only the season in progress to the last of them.
+ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v3_{s}.csv",
+         "service_through_{s}.csv")
 
 
 def main() -> int:

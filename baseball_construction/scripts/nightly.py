@@ -121,7 +121,7 @@ def _era(season: int) -> None:
     copied = 0
     for s in era_pool_seasons(season):
         for pat in ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
-                    "cross_team_metrics_v3_{s}.csv"):
+                    "cross_team_metrics_v3_{s}.csv", "service_through_{s}.csv"):
             src, dst = ERA_DIR / pat.format(s=s), PROCESSED_DIR / pat.format(s=s)
             if not src.exists():
                 if s == season:
@@ -218,6 +218,15 @@ def main() -> int:
             clear_fingerprint_cache()          # the fingerprint hashes these rows
         step("seed", seed)
     step("league", lambda: R.stage_league([season], moved, force=False, dry=False))
+
+    # Service time for the season in progress: last season's frozen totals
+    # plus this season's 40-man ledger, a day at a time (30 requests a night;
+    # the whole season to date if the cache was lost).
+    def rosters():
+        import pull_rosters
+        pull_rosters.pull_season(season, through=dt.date.today() - dt.timedelta(days=1))
+    if season not in finished:
+        step("rosters", rosters)
     problems = step("portraits", lambda: R.stage_portraits([season], jobs=1, dry=False,
                                                           force=True))
     elsewhere = _stale_elsewhere(season)

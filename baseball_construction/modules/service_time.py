@@ -34,6 +34,7 @@ MLS_DIR = ROOT / "data" / "raw" / "mls"
 ROSTER_DIR = ROOT / "data" / "raw" / "rosters"
 REFERENCE_DIR = ROOT / "data" / "reference"
 POSITIONS_CACHE = ROOT / "data" / "processed" / "mlb_primary_positions.csv"
+PROCESSED_DIR = ROOT / "data" / "processed"
 
 DAYS_PER_YEAR = 172
 # 40-man statuses that earn service: active, MLB injured list, bereavement,
@@ -513,6 +514,80 @@ def service_days_through(season: int, matched: Optional[pd.DataFrame] = None) ->
     return pd.Series(out, name="service_days")
 
 
+# ---------------------------------------------------------------------------
+# Frozen totals — what the nightly runner reads
+# ---------------------------------------------------------------------------
+#
+# The lists are third-party data kept out of git, and the ledger is 18
+# seasons of rosters: neither is on the GitHub runner. So each finished
+# season's result is frozen like the other era roots — service_through_{s}.csv,
+# one row per player, committed to data/era by freeze_era.py — and the runner
+# builds the season in progress as last season's frozen totals plus this
+# season's ledger, which it pulls a day at a time.
+
+def frozen_path(season: int) -> Path:
+    return PROCESSED_DIR / f"service_through_{season}.csv"
+
+
+_MATCHED: Optional[pd.DataFrame] = None
+_THROUGH_MEMO: dict[int, pd.Series] = {}
+
+
+def _finished(season: int) -> bool:
+    from ingest import season_state
+    finished, _ = season_state()
+    return season in finished
+
+
+def service_through(season: int) -> pd.Series:
+    """
+    Career service days through `season`, per key_mlbam.
+
+    Where the lists are present (the build machine) it is computed from
+    lists + ledger, and a finished season is written to frozen_path for
+    freeze_era. Without them (the runner) a finished season reads its frozen
+    file, and the season in progress is the previous season's frozen totals
+    plus this season's ledger days.
+    """
+    global _MATCHED
+    if season in _THROUGH_MEMO:
+        return _THROUGH_MEMO[season]
+    path = frozen_path(season)
+    if any(MLS_DIR.glob("mls_thru_*.csv")):
+        if _MATCHED is None:
+            _MATCHED = match_mls_ids()
+        out = service_days_through(season, _MATCHED)
+        if _finished(season):
+            text = out.rename_axis("key_mlbam").reset_index().sort_values("key_mlbam").to_csv(index=False)
+            if not path.exists() or path.read_text() != text:
+                path.write_text(text)
+    elif path.exists():
+        f = pd.read_csv(path)
+        out = pd.Series(f["service_days"].to_numpy(), index=f["key_mlbam"].astype(int), name="service_days")
+    else:
+        prev = frozen_path(season - 1)
+        if not prev.exists():
+            raise FileNotFoundError(f"no service lists, no {path.name}, no {prev.name}: "
+                                    "run scripts/pull_mls.py, or freeze_era.py where they are")
+        f = pd.read_csv(prev)
+        base = pd.Series(f["service_days"].to_numpy(), index=f["key_mlbam"].astype(int))
+        led = ledger_days(season)
+        led = pd.Series(dtype=int) if led is None else led
+        out = base.add(led, fill_value=0).astype(int).rename("service_days")
+    _THROUGH_MEMO[season] = out
+    return out
+
+
+def fingerprint_inputs(season: int) -> list[Path]:
+    """The files a season's service time rests on, for the build fingerprint —
+    the same bytes on the build machine and the runner."""
+    if _finished(season):
+        service_through(season)               # writes the frozen file where lists exist
+        return [frozen_path(season)]
+    service_through(season - 1)
+    return [frozen_path(season - 1), ROSTER_DIR / f"rosters_{season}.parquet"]
+
+
 _YEARS_MEMO: dict[int, dict[int, float]] = {}
 
 
@@ -524,7 +599,7 @@ def service_years_days(player_ids, season: int) -> dict[int, float]:
     Players with no service source are left out. Memoised per season.
     """
     if season not in _YEARS_MEMO:
-        days = service_days_through(season)
+        days = service_through(season)
         _YEARS_MEMO[season] = {pid: d // DAYS_PER_YEAR + (d % DAYS_PER_YEAR) / 1000
                                for pid, d in days.items()}
     memo = _YEARS_MEMO[season]

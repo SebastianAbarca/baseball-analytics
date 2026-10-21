@@ -2536,11 +2536,11 @@ def _pool_digest(season: int) -> str:
              for s in era_pool_seasons(season) for pat in _FINGERPRINT_POOL_FILES]
     paths += [directory / pat.format(s=season)
               for directory, pat in _FINGERPRINT_EXTRA_POOLS]
-    # Service time (roster control): every published MLS list, and the roster
-    # ledger for each season through this one.
-    from service_time import MLS_DIR, ROSTER_DIR
-    paths += sorted(MLS_DIR.glob("mls_thru_*.csv"))
-    paths += [ROSTER_DIR / f"rosters_{s}.parquet" for s in range(2009, season + 1)]
+    # Service time (roster control): the frozen per-player totals it rests on
+    # — identical on the build machine and the nightly runner, which has
+    # neither the MLS lists nor the full roster ledger.
+    from service_time import fingerprint_inputs
+    paths += fingerprint_inputs(season)
     parts = []
     for path in paths:
         h = hashlib.sha256()
