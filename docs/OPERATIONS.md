@@ -216,6 +216,8 @@ day from March to October. With a season in progress it:
 - tops up that season's Statcast;
 - re-pulls its season totals and re-seeds them into the database (strict: it
   refuses to write rows without the pitch aggregates);
+- pulls that season's 40-man rosters through yesterday, for service time
+  (30 requests a night; `scripts/pull_rosters.py`);
 - force-rebuilds its 30 portraits and league identity;
 - publishes that season's portraits, league data and Scout rows — only if
   every step before succeeded; a failed build leaves production as it was.

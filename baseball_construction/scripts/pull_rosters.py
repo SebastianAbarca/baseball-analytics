@@ -85,23 +85,32 @@ def roster_day(season: int, team: int, day: dt.date) -> list[dict]:
             for p in rows.get("roster", [])]
 
 
-def pull_season(season: int) -> Path:
+def pull_season(season: int, through: dt.date | None = None) -> Path:
+    """
+    Pull a season's team-days into rosters_{season}.parquet, adding to what
+    the file already holds — so the nightly job calls it with through=
+    yesterday and fetches only the new days (30 requests a night). A day
+    already in the file is not fetched again; a team-day that came back empty
+    is retried next time.
+    """
     OUT.mkdir(parents=True, exist_ok=True)
     final = OUT / f"rosters_{season}.parquet"
-    if final.exists():
-        log.info("%d: already pulled", season)
-        return final
     partial = OUT / f"rosters_{season}.partial.parquet"
-    have = pd.read_parquet(partial) if partial.exists() else pd.DataFrame(
-        columns=["season", "date", "team_id", "player_id", "status"])
+    empty = pd.DataFrame(columns=["season", "date", "team_id", "player_id", "status"])
+    have = (pd.read_parquet(partial) if partial.exists()
+            else pd.read_parquet(final) if final.exists() else empty)
     done = {(int(t), d) for t, d in zip(have["team_id"], pd.to_datetime(have["date"]).dt.date)}
 
     start, end = season_window(season)
+    last = min(end, through) if through else end
     teams = team_ids(season)
-    days = [start + dt.timedelta(n) for n in range((end - start).days + 1)]
+    days = [start + dt.timedelta(n) for n in range((last - start).days + 1)]
     todo = [(t, d) for d in days for t in teams if (t, d) not in done]
+    if not todo:
+        log.info("%d: current through %s", season, last)
+        return final
     log.info("%d: %s to %s, %d clubs, %d team-days to pull (%d already)",
-             season, start, end, len(teams), len(todo), len(done))
+             season, start, last, len(teams), len(todo), len(done))
 
     frames = [have] if len(have) else []
     batch: list[dict] = []
@@ -115,6 +124,7 @@ def pull_season(season: int) -> Path:
                 log.info("  %d: %d/%d team-days", season, i, len(todo))
     out = pd.concat(frames, ignore_index=True) if frames else have
     out["date"] = pd.to_datetime(out["date"])
+    out = out.drop_duplicates(["date", "team_id", "player_id"])
     out.to_parquet(final, index=False)
     partial.unlink(missing_ok=True)
     log.info("%d: saved %d rows", season, len(out))
@@ -125,11 +135,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seasons", default=f"{FIRST_SEASON}-{dt.date.today().year}")
+    ap.add_argument("--through", type=dt.date.fromisoformat, default=None,
+                    help="pull only days up to this date (YYYY-MM-DD)")
     args = ap.parse_args()
     a, _, b = args.seasons.partition("-")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
     for season in range(int(a), int(b or a) + 1):
-        pull_season(season)
+        pull_season(season, args.through)
     return 0
 
 
