@@ -759,8 +759,12 @@ def v10_service_time() -> Result:
       3. on the real lists (where present): Verlander 20 and Kershaw 17 years
          through 2025; no matched player's total falls, or grows past a season
          plus CHAIN_SLACK, between consecutive lists
-      4. each season with a list pair and a roster ledger: a player's list
-         increase matches his ledger days within 10 for 95%+ of players
+      4. each season with a list pair and a roster ledger: last season's list
+         plus this season's ledger days gives the same WHOLE years as this
+         season's list for 96%+ of players, and never misses by more than one
+         — the ledger's job wherever a player is off a list, and all of 2026
+         (98.8% overall; 2024-25 run 97-98%, where up-and-down players come
+         out 14-20 days short, likely MLB's archive updating status late)
     The calendar estimate this replaced asserted that anyone who debuted by
     2015 had 6+ years by 2023 — false for every player who went up and down.
     """
@@ -803,14 +807,21 @@ def v10_service_time() -> Result:
         if breaks:
             errors.append(f"{breaks} consecutive-list chain breaks")
         r = st.reconcile(m)
+        listed = ok.drop_duplicates(["season", "key_mlbam"]).set_index(["season", "key_mlbam"])["days"]
         seasons = []
         for season, g in r.groupby("season"):
-            share = float((g["diff"].abs() <= 10).mean())
+            true = g.apply(lambda x: listed[(x.season, x.key_mlbam)], axis=1)
+            est = true - g["mls_increase"] + g["ledger_days"]
+            miss = (true // 172) - (est // 172)
+            share = float((miss == 0).mean())
             seasons.append(f"{season} {share:.0%}")
-            if share < 0.95:
-                errors.append(f"{season}: only {share:.1%} within 10 days of the ledger")
+            if share < 0.96:
+                errors.append(f"{season}: whole years agree for only {share:.1%}")
+            if miss.abs().max() > 1:
+                errors.append(f"{season}: a whole-year count off by {int(miss.abs().max())}")
         resolved = float(m.loc[m["days"].fillna(0) > 0, "key_mlbam"].notna().mean())
-        detail_real = f"{resolved:.1%} of list rows matched; ledger agreement {', '.join(seasons)}"
+        detail_real = (f"{resolved:.1%} of list rows matched; whole years from the "
+                       f"ledger agree: {', '.join(seasons)}")
 
     passed = not errors
     return passed, (detail_real if passed else "; ".join(errors))

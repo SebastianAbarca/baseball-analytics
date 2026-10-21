@@ -41,9 +41,12 @@ DAYS_PER_YEAR = 172
 # credit suspended players in full (A-Rod's 2014, Mejia's and Santana's 2015),
 # where the roster archive drops them. Not: optioned (RM), restricted, etc.
 SERVICE_STATUSES = frozenset({"A", "D7", "D10", "D15", "D60", "BRV", "PL", "FME", "SU"})
-# A short season credited as a full one: 2020's 67 days counted as 172 (the
-# lists add exactly 1.000 for full-time players: Pujols 19.000 -> 20.000).
-SEASON_CREDIT = {2020: DAYS_PER_YEAR / 67}
+# A short season scaled to a full one. 2020's 67 days were prorated to the
+# normal 186-day season (capped at 172): fitted on the 270 players the 2020
+# list credits with a partial year, round((days + 1) x 186/67) has a median
+# error of 0 and 91% within 10 days; 172/67 left 89% more than 3 days short.
+# Full-time players get exactly 1.000 either way (Pujols 19.000 -> 20.000).
+SEASON_CREDIT = {2020: (186 / 67, 1)}       # (factor, days added before scaling)
 FIRST_LEDGER_SEASON = 2009
 
 _SUFFIX = re.compile(r"\b(jr|sr|ii|iii|iv)\b")
@@ -467,7 +470,8 @@ def ledger_days(season: int) -> Optional[pd.Series]:
         played["date"] = pd.to_datetime(played["date"])
         svc = pd.concat([svc, played.drop_duplicates()])
     days = svc.drop_duplicates().groupby("player_id")["date"].nunique()
-    days = (days * SEASON_CREDIT.get(season, 1.0)).round().astype(int)
+    factor, plus = SEASON_CREDIT.get(season, (1.0, 0))
+    days = ((days + plus) * factor).round().astype(int)
     return days.clip(upper=DAYS_PER_YEAR)
 
 
