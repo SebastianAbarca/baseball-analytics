@@ -512,3 +512,27 @@ plate discipline, sequencing or tunneling is computed kept serving the old
 numbers until someone remembered `--force-league`. Each now stamps
 `method_version`; bump the module's constant and every older cache rebuilds —
 on its next load and in refresh's `league` stage. Spin already worked this way.
+
+### Service time is MLB's own number, checked against every roster day
+
+The estimate in `database.py` assumed a player was in the majors every day from
+his debut and subtracted injured-list days — which earn service — so it was
+wrong in both directions. `service_time.py` uses two independent sources:
+
+- **MLB's published service lists** (`scripts/pull_mls.py`), one per January,
+  2006–2025: career service in years.days for everyone under reserve. They
+  carry pre-2006 careers in their totals, and they credit what a roster
+  archive cannot see (suspended players keep accruing: A-Rod's 2014).
+- **The 40-man roster ledger** (`scripts/pull_rosters.py`): every club's
+  roster on every regular-season day from 2009 (MLB's archive is incomplete
+  before that). Active, MLB injured list, bereavement, paternity, family
+  emergency and suspended days count; 2020's 67 days count as a full season.
+  From 2015 a game appearance fills a day the archive dropped (Figgins, 2009).
+
+Service through a season is that season's list where the player is on it,
+else his last list plus ledger days since; 2026 is the 2025 list plus the
+ledger. The lists have names, not ids: matched through Chadwick with position,
+playing years, nickname groups and typo tolerance, then same-named players are
+separated by whether their totals chain (a total never falls, and grows at
+most a season's worth). Lists and ledger agree within 10 days for 96–99% of
+players in every season compared.

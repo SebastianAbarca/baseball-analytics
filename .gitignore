@@ -9,6 +9,9 @@ __pycache__/
 
 # Data files (large, re-pullable)
 baseball_construction/data/raw/*.parquet
+baseball_construction/data/raw/rosters/
+baseball_construction/data/raw/retrosheet/
+baseball_construction/data/raw/mls/
 baseball_construction/data/processed/*.csv
 baseball_construction/data/reference/*.csv
 
