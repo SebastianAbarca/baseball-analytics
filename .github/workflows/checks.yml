@@ -1,0 +1,46 @@
+# Pull-request checks: the validation suite, offline.
+#
+# The other workflows build, seed and publish; none of them checked that a
+# change was correct before it merged. This runs on every pull request to main.
+# `validation.py --offline` skips the checks that need the database or a full
+# season of local data (validation.NEEDS) and runs the rest: the synthetic
+# checks, and the ones that use one cached week of Statcast (2023-06-01..07,
+# 3.5 MB, downloaded from Savant on a cache miss).
+name: checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: baseball_construction/requirements.txt
+
+      - name: Install
+        run: pip install -r baseball_construction/requirements.txt
+
+      - name: Restore the cached test week
+        uses: actions/cache@v4
+        with:
+          path: baseball_construction/data/raw/statcast_test.parquet
+          key: statcast-test-week-2023-06-01
+
+      - name: Compile
+        run: python -m compileall -q baseball_construction
+
+      - name: Validation (offline)
+        working-directory: baseball_construction/modules
+        run: python validation.py --offline
