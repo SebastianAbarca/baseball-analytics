@@ -47,6 +47,19 @@ log = logging.getLogger(__name__)
 
 Result = tuple[bool, str]
 
+# What a check needs beyond the code: --offline (the pull-request checks)
+# skips these instead of failing on a runner that has none of them. The
+# rest need nothing, or one cached week of Statcast (2023-06-01..07).
+NEEDS = {
+    "V7":  "the database",
+    "V9":  "a full season of Statcast (2023)",
+    "V13": "a full season of Statcast (2025) and Savant's active spin",
+    "V18": "this machine's season data",
+    "V20": "this machine's league caches",
+    "V21": "this machine's fg_batting roots",
+    "V22": "the database",
+}
+
 
 # ---------------------------------------------------------------------------
 # V1 — Temporal mode determination
@@ -791,7 +804,7 @@ def v10_service_time() -> Result:
     if list(res["key_mlbam"]) != [1, 1, 2]:
         errors.append(f"continuity split same-named players as {list(res['key_mlbam'])}")
 
-    detail_real = "no MLS lists on this machine"
+    detail_real = "synthetic checks only: no MLS lists on this machine"
     if any(st.MLS_DIR.glob("mls_thru_*.csv")):
         m = st.match_mls_ids()
         through = st.service_days_through(2025, m)
@@ -1718,7 +1731,8 @@ def v24_league_steal_ranks() -> Result:
                       f"teams (e.g. {', '.join(split[:3])})")
 
     passed = not errors
-    return passed, (f"league-wide ranks; one per player-season across {checked} seasons"
+    return passed, ((f"league-wide ranks; one per player-season across {checked} seasons"
+                     if checked else "synthetic league only: no portraits on this machine")
                     if passed else "; ".join(errors))
 
 
@@ -1754,13 +1768,20 @@ TESTS = [
 ]
 
 
-def run_all(verbose: bool = True) -> bool:
+def run_all(verbose: bool = True, offline: bool = False) -> bool:
     """
-    Run every validation test and print a summary.
-    Returns True if every test passes.
+    Run every validation test and print a summary. With offline, a test in
+    NEEDS is reported SKIP — not run, not counted — so the pull-request
+    checks pass or fail on what a bare runner can actually test.
+    Returns True if no test that ran failed.
     """
     results = []
     for code, name, fn in TESTS:
+        if offline and code in NEEDS:
+            print(f"SKIP  {code}  {name}")
+            if verbose:
+                print(f"      needs {NEEDS[code]}")
+            continue
         try:
             passed, detail = fn()
         except Exception as exc:
@@ -1774,12 +1795,20 @@ def run_all(verbose: bool = True) -> bool:
 
     all_pass = all(r[2] for r in results)
     n_pass = sum(1 for r in results if r[2])
+    skipped = len(TESTS) - len(results)
     print()
-    print(f"{'ALL PASS' if all_pass else 'FAILURES PRESENT'}  {n_pass}/{len(results)} tests passed")
+    print(f"{'ALL PASS' if all_pass else 'FAILURES PRESENT'}  {n_pass}/{len(results)} tests passed"
+          + (f"  ({skipped} skipped offline)" if skipped else ""))
     return all_pass
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Run the validation suite.")
+    ap.add_argument("--offline", action="store_true",
+                    help="skip checks that need the database or full-season data "
+                         "(the pull-request checks)")
+    args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
-    ok = run_all(verbose=True)
+    ok = run_all(verbose=True, offline=args.offline)
     sys.exit(0 if ok else 1)
