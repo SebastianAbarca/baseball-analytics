@@ -3,8 +3,9 @@
 How a major-league roster is built, read from pitch-level Statcast: what each
 team is made of, what each player actually does, and who resembles whom.
 
-Twelve seasons (2015–2026), 30 teams, **18,664 player-seasons**, 2.3M pitches
-per season.
+Twelve seasons (2015–2026), 30 teams, **16,936 player profiles** — one per
+player per team per side, so a traded player has a profile on each club
+(15,587 distinct player-season-sides) — and about 680,000 pitches a season.
 
 ```bash
 pip install -r baseball_construction/requirements.txt

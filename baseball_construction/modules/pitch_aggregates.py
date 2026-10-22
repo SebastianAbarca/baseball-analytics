@@ -718,6 +718,23 @@ _FRAMING_CACHE: dict[int, pd.DataFrame] = {}
 _FR_W = ZONE_HALF_WIDTH
 _SHADOW_BAND = 0.25   # ft each side of the zone edge = the frameable region
 
+
+def frameable_mask(sc: pd.DataFrame) -> pd.Series:
+    """
+    Pitches in the shadow band — within _SHADOW_BAND of a zone edge, either
+    side — with a location. The one definition of "frameable": framing and
+    scripts/battery_base.py both select with it. battery_base kept its own
+    copy, with constants this module later replaced by data-driven bounds
+    (_fill_zone), and stopped importing.
+    """
+    px = pd.to_numeric(sc["plate_x"], errors="coerce")
+    pz = pd.to_numeric(sc["plate_z"], errors="coerce")
+    top = _fill_zone(pd.to_numeric(sc["sz_top"], errors="coerce"), ZONE_TOP_LAST_RESORT)
+    bot = _fill_zone(pd.to_numeric(sc["sz_bot"], errors="coerce"), ZONE_BOT_LAST_RESORT)
+    # Signed distance outside the zone on its nearest edge: positive = outside
+    outside = pd.concat([px.abs() - _FR_W, pz - top, bot - pz], axis=1).max(axis=1)
+    return (outside.abs() <= _SHADOW_BAND) & px.notna() & pz.notna()
+
 def compute_catcher_framing(statcast: pd.DataFrame, season: int,
                             min_taken: int = 500) -> pd.DataFrame:
     """
@@ -738,20 +755,7 @@ def compute_catcher_framing(statcast: pd.DataFrame, season: int,
                    "sz_top", "sz_bot"]].copy()
     sc = sc[sc["description"].isin(["called_strike", "ball"])]
 
-    px = pd.to_numeric(sc["plate_x"], errors="coerce")
-    pz = pd.to_numeric(sc["plate_z"], errors="coerce")
-    top = _fill_zone(pd.to_numeric(sc["sz_top"], errors="coerce"), ZONE_TOP_LAST_RESORT)
-    bot = _fill_zone(pd.to_numeric(sc["sz_bot"], errors="coerce"), ZONE_BOT_LAST_RESORT)
-
-    # Distance outside the zone on each axis (0 inside); shadow = within the
-    # band of an edge, either side.
-    dx = (px.abs() - _FR_W).clip(lower=None)
-    dz_hi = pz - top
-    dz_lo = bot - pz
-    # Signed "distance from in-zone region": positive = outside
-    outside = pd.concat([dx, dz_hi, dz_lo], axis=1).max(axis=1)
-    shadow = outside.abs() <= _SHADOW_BAND
-    sc = sc[shadow & px.notna() & pz.notna()]
+    sc = sc[frameable_mask(sc)]
 
     sc["_cs"] = sc["description"] == "called_strike"
     league_rate = float(sc["_cs"].mean())

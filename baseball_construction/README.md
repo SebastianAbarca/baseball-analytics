@@ -3,8 +3,9 @@
 How a major-league roster is built, read from pitch-level Statcast: what each
 team is made of, what each player actually does, and who resembles whom.
 
-Twelve seasons (2015–2026), 30 teams, **18,664 player-seasons**, 2.3M pitches
-per season.
+Twelve seasons (2015–2026), 30 teams, **16,936 player profiles** — one per
+player per team per side, so a traded player has a profile on each club
+(15,587 distinct player-season-sides) — and about 680,000 pitches a season.
 
 ```bash
 python baseball_construction/dashboard/app.py     # http://localhost:8050
@@ -47,7 +48,7 @@ archetype.
 | **Compare** | How do these player-seasons actually differ? |
 | **Scout** | Who has this trait — or who plays like this guy? |
 
-Scout answers a tag query over all 18,664 player-seasons in **6 ms**, and will
+Scout answers a tag query over all 16,936 player profiles in **6 ms**, and will
 also find a player's nearest comps by tag profile. Skubal 2024's closest comp
 is Skubal 2025, which is the metric checking its own work.
 
