@@ -394,5 +394,9 @@ with the anon key every two days and fails loudly if it cannot.
 | `dashboard/store.py` | every read the dashboard makes, cached |
 | `dashboard/` | presentation; reads through `store.py` with the anon key |
 
-`hitter_archetypes.py` and `pitcher_archetypes.py` predate the tag taxonomy and
-are no longer on the portrait path.
+`hitter_archetypes.py` and `pitcher_archetypes.py` predate the tag taxonomy.
+Their archetype labels are retired, but both are still on the portrait path:
+`team_portrait` calls `pitcher_archetypes.build_starter_profile` and
+`build_bullpen_profile` for each starter's profile and the bullpen collective,
+and `hitter_traits` imports helpers from `hitter_archetypes` (the speed tier
+among them). A change to either can move tags.

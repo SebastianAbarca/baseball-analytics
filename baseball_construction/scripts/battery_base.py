@@ -51,7 +51,7 @@ import pandas as pd
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
-from pitch_aggregates import _FR_TOP, _FR_BOT, _FR_W, _SHADOW_BAND  # noqa: E402
+from pitch_aggregates import frameable_mask  # noqa: E402
 
 MIN_PAIR = 25        # opportunities before a battery pair is usable
 MIN_CATCHER = 500    # matches compute_catcher_framing's qualification bar
@@ -65,12 +65,7 @@ def _frameable(season: int) -> pd.DataFrame:
         "fielder_2", "pitcher", "description", "plate_x", "plate_z",
         "sz_top", "sz_bot"])
     sc = sc[sc["description"].isin(["called_strike", "ball"])]
-    px = pd.to_numeric(sc["plate_x"], errors="coerce")
-    pz = pd.to_numeric(sc["plate_z"], errors="coerce")
-    top = pd.to_numeric(sc["sz_top"], errors="coerce").fillna(_FR_TOP)
-    bot = pd.to_numeric(sc["sz_bot"], errors="coerce").fillna(_FR_BOT)
-    outside = pd.concat([(px.abs() - _FR_W), pz - top, bot - pz], axis=1).max(axis=1)
-    sc = sc[(outside.abs() <= _SHADOW_BAND) & px.notna() & pz.notna()].copy()
+    sc = sc[frameable_mask(sc)].copy()
     sc["cs"] = (sc["description"] == "called_strike").astype(float)
     sc = sc.dropna(subset=["fielder_2", "pitcher"])
     sc["fielder_2"] = sc["fielder_2"].astype(int)
