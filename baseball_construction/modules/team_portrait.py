@@ -2278,11 +2278,10 @@ KIND_TOOL       = "tool"
 KIND_BEHAVIOR   = "behavior"
 KIND_RESULT     = "result"
 KIND_DEPLOYMENT = "deployment"
-KIND_NOISE      = "noise"
 
 # Display order, least controllable → most.
 TAG_KINDS = [KIND_ATTRIBUTE, KIND_TOOL, KIND_BEHAVIOR, KIND_RESULT,
-             KIND_DEPLOYMENT, KIND_NOISE]
+             KIND_DEPLOYMENT]
 
 TAG_KIND: dict[str, str] = {}
 
@@ -2337,7 +2336,7 @@ _assign_kind(
     "elite defender", "plus defender", "defensive liability",
     "elite framer", "poor framer", "good blocker", "bad blocker",
     "bat-misser", "ground-baller", "fly-ball prone", "pitch-to-contact",
-    "elite command", "plus command", "walk prone", "invisible ball",
+    "elite control", "plus control", "walk prone", "whiffs above velo",
     "contact suppressor", "controls runners",
     "platoon liability", "reverse split", "platoon-vulnerable",
 )
@@ -2349,7 +2348,6 @@ _assign_kind(
     "platoon specialist", "super-utility",
 )
 
-_assign_kind(KIND_NOISE, "lucky", "unlucky")
 
 
 # Tags that carve up ONE underlying axis. At team level several ends carry
@@ -2375,7 +2373,7 @@ TAG_EXCLUSIVE_GROUPS: list[frozenset[str]] = [
     frozenset({"air-ball bat", "ground-ball bat"}),
     frozenset({"pull-heavy", "oppo bat"}),
     frozenset({"elite defender", "plus defender", "defensive liability"}),
-    frozenset({"elite command", "plus command", "walk prone"}),
+    frozenset({"elite control", "plus control", "walk prone"}),
     frozenset({"bat-misser", "pitch-to-contact"}),
     frozenset({"quick pitcher", "slow pitcher"}),
     frozenset({"deep arsenal", "two-pitch"}),

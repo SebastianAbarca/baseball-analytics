@@ -25,7 +25,6 @@ Families:
     catcher      — elite|poor framer / good|bad blocker / quick pop
     handedness   — left|right-handed hitter / switch hitter
     platoon      — platoon liability / reverse split
-    luck         — lucky / unlucky
     role         — everyday player
 
 The power-contact spectrum survives as a CONTINUOUS field (`spectrum`,
@@ -60,19 +59,21 @@ from hitter_archetypes import (
     compute_aggressive,
     compute_speed_tier,
     compute_contact_quality,
-    compute_plus_power,
     compute_gap_hitter,
     compute_disruptiveness,
 )
 
 log = logging.getLogger(__name__)
 
-# Power gate. The spectrum is a RATIO of power to contact production, and a
-# ratio cannot express a hitter who is moderate in both — doubles hitters land
-# in the middle by construction, which is exactly where no tag fires. So the
-# ratio path is retired and `power bat` gates on absolute ISO only. The
-# spectrum survives as a continuous field (Scout search band), not as tags.
-POWER_BAT_ISO_ELITE  = 85.0   # ISO percentile ≥ → power bat
+# Power gates on the PROCESS — barrel and hard-hit rates, how hard and how
+# squarely a hitter strikes the ball — not on ISO, the OUTCOME (extra bases,
+# after park, defense, gaps and luck). The process repeats: year-to-year rank
+# correlation 0.81 for the barrel + hard-hit composite against 0.61 for ISO
+# (300+ PA, 2022-25). ISO stays in the evidence. The composite is the mean of
+# the two percentiles, which bunches toward the middle, so the tiers are set
+# to fire about as often as the ISO gates did (85th / 60th percentile).
+POWER_BAT_CONTACT    = 80.0   # barrel + hard-hit composite ≥ → power bat
+PLUS_POWER_CONTACT   = 60.0   # composite ≥ (below power bat) → plus power
 
 # `gap hitter` means extra-base production WITHOUT home-run power. The HR/FB
 # ceiling was removed once to avoid mutual exclusivity with plus power; the
@@ -106,13 +107,6 @@ STEAL_ATTEMPTS_LOW_PCT  = 15.0   # ≤ → stays put
 STEAL_RATE_HIGH         = 0.80   # success rate ≥ (league ~0.78)
 STEAL_RATE_LOW          = 0.65   # ≤ → runs into outs
 STEAL_RATE_MIN_ATTEMPTS = 10     # below this a rate is noise
-
-# Luck tags mark the TAILS of the luck-delta distribution. The old 25/75
-# gates tagged half the league — a tag that common is noise, not identity.
-# Sign: the source column (est_woba_minus_woba_diff) is empirically
-# wOBA − xwOBA, so HIGH percentile = results outran contact = lucky.
-LUCKY_TAIL_PCT   = 90.0
-UNLUCKY_TAIL_PCT = 10.0
 
 # Batted-ball direction gates (spray percentiles are season-ranked upstream)
 PULL_HEAVY_PCT      = 85.0
@@ -197,23 +191,22 @@ def build_hitter_traits(
     gm = {**metrics, **{k: v for k, v in (season_metrics or {}).items()
                         if v is not None and not (isinstance(v, float) and np.isnan(v))}}
 
-    # ── bat: power (absolute ISO — no ratio path) ─────────────────────────
+    # ── bat: power (barrel + hard-hit — the process, not ISO) ─────────────
     # The spectrum is still computed and returned as a continuous field, but
     # nothing is tagged off its tails any more.
     spectrum = compute_spectrum(metrics)
     iso = gm.get("ISO")
-    power_bat = iso is not None and float(iso) >= POWER_BAT_ISO_ELITE
+    vals = [float(v) for v in (gm.get("Barrel_pct"), gm.get("HardHit_pct")) if v is not None]
+    contact = float(np.mean(vals)) if vals else None
+    iso_note = f" (ISO {iso:.0f}th pct)" if iso is not None else ""
+    power_bat = contact is not None and contact >= POWER_BAT_CONTACT
     if power_bat:
         # `hard contact` was 82% contained by this tag — one skill shouldn't
         # wear two chips, and "power" reads to a casual fan where "hard
-        # contact" doesn't. The barrel/hard-hit evidence rides along here.
-        vals = [v for v in [gm.get("Barrel_pct"), gm.get("HardHit_pct")]
-                if v is not None]
-        comp = float(np.mean(vals)) if vals else None
-        ev = f"ISO {iso:.0f}th pct — elite raw power"
-        if comp is not None:
-            ev += f" (barrel + hard-hit composite {comp:.0f}th pct)"
-        traits.append(_trait("power bat", "bat", iso, iso, ev))
+        # contact" doesn't.
+        traits.append(_trait("power bat", "bat", contact, contact,
+                             f"barrel + hard-hit {contact:.0f}th pct — elite "
+                             f"contact quality{iso_note}"))
 
     # ── bat: gap hitter — doubles, not homers ─────────────────────────────
     # `power bat` suppresses this outright. The HR/FB ceiling alone was not
@@ -236,9 +229,11 @@ def build_hitter_traits(
                              "spray-confirmed extra-base production into the "
                              "gaps, without home-run power"
                              + (f" (HR/FB {hrfb:.0f}th pct)" if hrfb is not None else "")))
-    if not power_bat and not gap_hitter and compute_plus_power(gm):
-        traits.append(_trait("plus power", "bat", iso, iso,
-                             f"ISO {iso:.0f}th pct — real thump"))
+    if (not power_bat and not gap_hitter and contact is not None
+            and contact >= PLUS_POWER_CONTACT):
+        traits.append(_trait("plus power", "bat", contact, contact,
+                             f"barrel + hard-hit {contact:.0f}th pct — real "
+                             f"thump{iso_note}"))
 
     # ── bat: weak contact (no `hard contact` counterpart — see above) ──────
     if compute_contact_quality(gm) == "Weak Contact":
@@ -423,19 +418,10 @@ def build_hitter_traits(
                              f"{_pa_t or 0:,} PA with the team — {_pa_szn:.0f}th "
                              "pct of the season (in the lineup daily)"))
 
-    # ── luck (distribution tails, season percentile ONLY) ──────────────────
-    # Era fallback deliberately not used here: the era luck map had a
-    # cross-season leakage bug and luck is a season-local phenomenon anyway.
-    luck = (season_metrics or {}).get("LuckDelta")
-    if luck is not None and not (isinstance(luck, float) and np.isnan(luck)):
-        if float(luck) >= LUCKY_TAIL_PCT:
-            traits.append(_trait("lucky", "luck", luck, luck,
-                                 "wOBA far above xwOBA (top decile of luck delta) — "
-                                 "results outran the contact"))
-        elif float(luck) <= UNLUCKY_TAIL_PCT:
-            traits.append(_trait("unlucky", "luck", luck, luck,
-                                 "xwOBA far above wOBA (bottom decile of luck delta) — "
-                                 "contact deserved better"))
+    # Luck (`lucky` / `unlucky`, wOBA − xwOBA tails) is retired: the gap is a
+    # model residual — park, sprint speed, xwOBA's own blind spots — not
+    # randomness, and season to season it is mostly noise. The delta stays in
+    # the metrics; no tag is cut from it.
 
     # ── reliability gate ──────────────────────────────────────────────────
     # Last step on purpose: every tag above states its own baseball logic, and

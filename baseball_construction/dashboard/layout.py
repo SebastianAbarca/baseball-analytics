@@ -427,8 +427,8 @@ def _archetype_guide_card() -> dbc.Card:
             "code": "BAT", "color": "#f97316", "name": "Bat traits",
             "desc": "Production shape, measured directly rather than as a ratio.",
             "gates": [
-                "power bat — ISO ≥ 85th pct (absorbs the old hard contact tag, which it contained 82% of)",
-                "plus power — ISO ≥ 60th pct in a non-power-bat (suppressed by gap hitter)",
+                "power bat — barrel + hard-hit composite ≥ 80 (the process; ISO, the outcome, is in the evidence)",
+                "plus power — barrel + hard-hit composite ≥ 60 in a non-power-bat (suppressed by gap hitter)",
                 "gap hitter — doubles/triples into the gaps WITHOUT home-run power (XB ≥ 60th + gap tendency ≥ 55th + HR/FB ≤ 70th)",
                 "weak contact — Barrel% + HardHit% composite bottom 30%",
             ],
@@ -468,7 +468,7 @@ def _archetype_guide_card() -> dbc.Card:
         },
     ]
 
-    # ── Athleticism / luck + pitcher trait families ──────────────────────────
+    # ── Athleticism + pitcher trait families ─────────────────────────────────
     MODIFIERS = [
         {
             "tag": "elite speed / fast / station-to-station / high|low steal attempts / high|low steal rate / extra base taker / everyday player / super-utility", "color": "#a78bfa",
@@ -484,15 +484,6 @@ def _archetype_guide_card() -> dbc.Card:
                 "super-utility = real innings at 4+ positions."
             ),
             "examples": "elite speed: Witt Jr., Peña",
-        },
-        {
-            "tag": "lucky / unlucky", "color": "#fbbf24",
-            "desc": (
-                "wOBA vs xwOBA gap, season decile tails only. lucky = results "
-                "outran the contact quality (regression risk); unlucky = contact "
-                "deserved better (positive regression candidate)."
-            ),
-            "examples": "lucky: Altuve 2023 · unlucky: Albies 2023",
         },
         {
             "tag": "Hitter: batted-ball family", "color": "#ec4899",
@@ -561,13 +552,13 @@ def _archetype_guide_card() -> dbc.Card:
             "tag": "Pitcher: deception family", "color": "#f59e0b",
             "desc": (
                 "How the stuff plays beyond its raw quality. tunneler (league tunnel "
-                "score ≥ 75th pct), invisible ball (whiff rate above what velocity "
+                "score ≥ 75th pct), whiffs above velo (whiff rate above what velocity "
                 "predicts, ≥ 90th pct residual), high spin efficiency. The old "
                 "gyro-heavy tag retired — 79% of the pitchers carrying it also "
                 "threw a slider as their out pitch, so it mostly restated the "
                 "pitch."
             ),
-            "examples": "tunneler: Javier, Pressly 2023 · invisible ball: Luis García, Abreu 2023",
+            "examples": "tunneler: Javier, Pressly 2023 · whiffs above velo: Luis García, Abreu 2023",
         },
         {
             "tag": "Pitcher: arsenal + outcome families", "color": "#3b82f6",
@@ -575,7 +566,7 @@ def _archetype_guide_card() -> dbc.Card:
                 "Arsenal: sinker-baller / ride four-seam / cutter-primary, the out "
                 "pitch, deep arsenal / two-pitch (starters only), velo tiers. Outcome: bat-misser / "
                 "pitch-to-contact, ground-baller / fly-ball prone, contact suppressor, "
-                "elite/plus command, walk prone, controls runners (fewest mid-PA "
+                "elite/plus control (walk avoidance), walk prone, controls runners (fewest mid-PA "
                 "runner advances allowed — steals, WP and PB included), and the "
                 "ace badge (dominance composite ≥ 70 with 2+ elite traits)."
             ),
@@ -649,7 +640,7 @@ def _archetype_guide_card() -> dbc.Card:
                 flush=True, always_open=False, style=_acc_style, className="mb-3",
             ),
             html.Hr(style={"borderColor": "#374151", "margin": "10px 0"}),
-            html.P("Athleticism, Luck & Pitcher Trait Families", className="mb-2",
+            html.P("Athleticism & Pitcher Trait Families", className="mb-2",
                    style={"fontSize": "0.7rem", "textTransform": "uppercase",
                           "letterSpacing": "0.06em", "color": "#6b7280", "fontWeight": "600"}),
             dbc.Accordion(

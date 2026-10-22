@@ -362,7 +362,7 @@ def sequencing_traits(
 
 TUNNELER_PCT       = 75.0   # league tunnel score ≥ → "tunneler" (matches the
                             # arsenal approach gate in pitch_mix._approach)
-INVISIBLE_BALL_PCT = 90.0   # velocity-adjusted whiff residual ≥ → "invisible ball"
+WHIFFS_ABOVE_VELO_PCT = 90.0   # velocity-adjusted whiff residual ≥ → "whiffs above velo"
 HIGH_SPIN_EFF_PCT  = 90.0   # spin efficiency ≥ → "high spin efficiency"
 GYRO_HEAVY_PCT     = 10.0   # spin efficiency ≤ → "gyro-heavy" (bullet spin)
 
@@ -389,12 +389,11 @@ def deception_traits(
 
     if discipline_row is not None:
         sp = discipline_row.get("swstr_per_velo_pct")
-        if sp is not None and not pd.isna(sp) and float(sp) >= INVISIBLE_BALL_PCT:
+        if sp is not None and not pd.isna(sp) and float(sp) >= WHIFFS_ABOVE_VELO_PCT:
             resid = discipline_row.get("swstr_resid")
-            traits.append(_trait("invisible ball", "deception", resid, sp,
+            traits.append(_trait("whiffs above velo", "deception", resid, sp,
                                  f"whiff rate {resid:+.1%} above what velocity "
-                                 f"predicts ({sp:.0f}th pct) — misses bats the "
-                                 "radar gun can't explain"))
+                                 f"predicts ({sp:.0f}th pct)"))
 
     if spin_row is not None:
         ep = spin_row.get("spin_efficiency_pct")
@@ -585,10 +584,10 @@ def outcome_traits(metrics: Optional[dict]) -> list[dict]:
     bb = _get("BB_pct_pct")   # inverted: higher = fewer walks
     if bb is not None:
         if bb >= COMMAND_ELITE_PCT:
-            traits.append(_trait("elite command", "outcome", bb, bb,
+            traits.append(_trait("elite control", "outcome", bb, bb,
                                  f"walk avoidance {bb:.0f}th pct"))
         elif bb >= COMMAND_PLUS_PCT:
-            traits.append(_trait("plus command", "outcome", bb, bb,
+            traits.append(_trait("plus control", "outcome", bb, bb,
                                  f"walk avoidance {bb:.0f}th pct"))
         elif bb <= WALK_PRONE_PCT:
             traits.append(_trait("walk prone", "outcome", bb, bb,
