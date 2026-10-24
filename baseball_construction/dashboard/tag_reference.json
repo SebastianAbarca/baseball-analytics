@@ -8,10 +8,10 @@
      "tag": "deep extension",
      "side": "P",
      "family": "mechanics",
-     "fires": 506,
+     "fires": 850,
      "population": "mechanics",
      "floor": "\u2014",
-     "earned": "7.36 ft release extension (100th pct) \u2014 perceived velo plays up"
+     "earned": "7.48 ft release extension (100th pct) \u2014 perceived velo plays up"
     },
     {
      "tag": "left-handed hitter",
@@ -62,10 +62,10 @@
      "tag": "short extension",
      "side": "P",
      "family": "mechanics",
-     "fires": 520,
+     "fires": 877,
      "population": "mechanics",
      "floor": "\u2014",
-     "earned": "5.75 ft release extension (10th pct) \u2014 ball travels farther to the plate"
+     "earned": "5.51 ft release extension (10th pct) \u2014 ball travels farther to the plate"
     },
     {
      "tag": "sidearm",
@@ -80,7 +80,7 @@
      "tag": "submarine",
      "side": "P",
      "family": "mechanics",
-     "fires": 139,
+     "fires": 137,
      "population": "mechanics",
      "floor": "\u2014",
      "earned": "arm angle -15\u00b0 \u2014 below horizontal-plus buffer"
@@ -98,10 +98,10 @@
      "tag": "wide release",
      "side": "P",
      "family": "mechanics",
-     "fires": 533,
+     "fires": 897,
      "population": "mechanics",
      "floor": "\u2014",
-     "earned": "release 3.97 ft off-center (100th pct for handedness) \u2014 cross-fire angle"
+     "earned": "release 4.60 ft off-center (100th pct for handedness) \u2014 cross-fire angle"
     }
    ]
   },

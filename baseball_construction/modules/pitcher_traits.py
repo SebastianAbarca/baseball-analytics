@@ -46,6 +46,14 @@ PROCESSED_DIR.mkdir(exist_ok=True)
 # Minimum pitches for a stable mechanics read
 MIN_MECHANICS_PITCHES = 150
 
+# Bump when the pool's computation changes; older caches rebuild
+# (pitch_aggregates.cached_if_current).
+# 2: Statcast records arm_angle only from 2020, and the pool used to drop any
+#    pitcher without one — so 2015-19 had no pool at all, and extension and
+#    release width (99% populated then) could never be tagged. Pitchers now
+#    qualify on release data; arm angle and its tags are blank where absent.
+MECHANICS_METHOD_VERSION = 2
+
 # ---------------------------------------------------------------------------
 # Mechanics thresholds — set from the 2023 league distribution (684 pitchers):
 #   arm_angle pct:  2%≈8°  10%≈22.5°  50%≈39.4°  90%≈52.3°  95%≈55.4°  98%≈59°
@@ -80,9 +88,11 @@ def load_league_mechanics(
              arm_angle_pct, extension_pct, rel_x_abs_pct (within handedness)
     """
     cache = PROCESSED_DIR / f"mechanics_league_{season}.parquet"
-    if cache.exists() and not force:
+    from pitch_aggregates import cached_if_current
+    hit = None if force else cached_if_current(cache, MECHANICS_METHOD_VERSION)
+    if hit is not None:
         log.info("mechanics_league %d: loading from cache", season)
-        return pd.read_parquet(cache)
+        return hit
 
     if statcast is None:
         from ingest import pull_statcast_season
@@ -93,7 +103,7 @@ def load_league_mechanics(
                    "release_extension", "release_pos_x", "release_pos_z"]]
 
     per = sc.groupby(["pitcher", "p_throws"]).agg(
-        n_pitches=("arm_angle", "size"),
+        n_pitches=("release_extension", "count"),
         arm_angle=("arm_angle", "mean"),
         extension=("release_extension", "mean"),
         rel_x=("release_pos_x", "mean"),
@@ -101,7 +111,7 @@ def load_league_mechanics(
     ).reset_index()
 
     per = per[(per["n_pitches"] >= MIN_MECHANICS_PITCHES)
-              & per["arm_angle"].notna()].copy()
+              & per["extension"].notna()].copy()
     per["rel_x_abs"] = per["rel_x"].abs()
 
     per["arm_angle_pct"] = per["arm_angle"].rank(pct=True) * 100.0
@@ -113,6 +123,7 @@ def load_league_mechanics(
 
     per = per.astype({"arm_angle": float, "extension": float,
                       "rel_x": float, "rel_z": float, "rel_x_abs": float})
+    per["method_version"] = MECHANICS_METHOD_VERSION
     per.to_parquet(cache, index=False)
     log.info("mechanics_league %d: saved %d pitchers", season, len(per))
     return per

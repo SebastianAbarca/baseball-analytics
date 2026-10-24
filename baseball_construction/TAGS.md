@@ -18,21 +18,21 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 
 `kind` runs least to most controllable: **attribute** (nobody chose it) → **tool** (physical capacity) → **behavior** (a choice) → **result** (what came out) → **deployment** (what the club did).
 
-## attribute  ·  11 tags, 17,724 firings
+## attribute  ·  11 tags, 18,787 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `deep extension` | P | mechanics | 506 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `deep extension` | P | mechanics | 850 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 | `left-handed hitter` | H | handedness | 2,480 | splits | — (an attribute of the player, not a rate) | right-handed hitter, switch hitter |
 | `left-handed pitcher` | P | handedness | 2,106 | splits_qual | — (an attribute of the player, not a rate) | right-handed pitcher |
 | `over-the-top` | P | mechanics | 307 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 | `right-handed hitter` | H | handedness | 4,240 | splits | — (an attribute of the player, not a rate) | left-handed hitter, switch hitter |
 | `right-handed pitcher` | P | handedness | 5,569 | splits_qual | — (an attribute of the player, not a rate) | left-handed pitcher |
-| `short extension` | P | mechanics | 520 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `short extension` | P | mechanics | 877 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 | `sidearm` | P | mechanics | 515 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
-| `submarine` | P | mechanics | 139 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `submarine` | P | mechanics | 137 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 | `switch hitter` | H | handedness | 809 | splits | — (an attribute of the player, not a rate) | left-handed hitter, right-handed hitter |
-| `wide release` | P | mechanics | 533 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
+| `wide release` | P | mechanics | 897 | mechanics | — (release geometry; the mechanics pool requires 150 pitches) | — |
 
 ## tool  ·  10 tags, 9,597 firings
 
