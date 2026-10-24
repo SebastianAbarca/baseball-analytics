@@ -1737,6 +1737,97 @@ def v24_league_steal_ranks() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V25 — Tag states and framing
+# ---------------------------------------------------------------------------
+
+def v25_tag_states_and_framing() -> Result:
+    """
+    Offline, synthetic:
+      1. every tag in the vocabulary belongs to exactly one tag family on each
+         side (out-pitch tags by suffix), so no tag can fire without moving a
+         family to `present`
+      2. a catcher with edge pitches but no framing percentile reads
+         `insufficient_sample` for framing, a non-catcher `not_applicable`, a
+         player who never ran `not_applicable` for steal success, and a
+         reliever `not_applicable` for starter workload
+      3. framing credits the catcher, not the pitch: on synthetic pitches
+         called by one rule except that one catcher gets every edge pitch
+         called a strike, he ranks first and the others are not all above
+         expected
+    """
+    import numpy as np
+    import pandas as pd
+    import team_portrait as tp
+    import pitch_aggregates as pa
+
+    errors = []
+    h_fam = [t for tags in tp.HITTER_TAG_FAMILIES.values() for t in tags]
+    p_fam = [t for tags in tp.PITCHER_TAG_FAMILIES.values() for t in tags]
+    for side, fam in (("hitter", h_fam), ("pitcher", p_fam)):
+        dup = sorted({t for t in fam if fam.count(t) > 1})
+        if dup:
+            errors.append(f"{side} tags in two families: {dup}")
+    covered = set(h_fam) | set(p_fam)
+    loose = sorted(t for t in tp.TAG_KIND if t not in covered and not t.endswith(" out pitch"))
+    if loose:
+        errors.append(f"tags in no family: {loose}")
+    if covered - set(tp.TAG_KIND):
+        errors.append(f"family tags not in the vocabulary: {sorted(covered - set(tp.TAG_KIND))}")
+
+    st = tp.hitter_tag_states([], {"pa": 400, "sb": 0, "cs": 0,
+                                   "catching": {"framing_taken": 120},
+                                   "positions": {"pos_detail": {"C": 1.0}}})
+    if st.get("framing") != "insufficient_sample":
+        errors.append(f"unranked catcher: framing = {st.get('framing')}")
+    if st.get("steal success") != "not_applicable":
+        errors.append(f"never ran: steal success = {st.get('steal success')}")
+    st = tp.hitter_tag_states([], {"pa": 400, "positions": {"pos_detail": {"SS": 1.0}}})
+    if st.get("framing") != "not_applicable":
+        errors.append(f"shortstop: framing = {st.get('framing')}")
+    st = tp.pitcher_tag_states([], {"bf": 250, "pool_rows": {}}, False, None)
+    if st.get("starter workload") != "not_applicable":
+        errors.append(f"reliever: starter workload = {st.get('starter workload')}")
+
+    rng = np.random.default_rng(7)
+    n = 60000
+    df = pd.DataFrame({
+        "fielder_2": rng.integers(1, 9, n),
+        "plate_x": rng.uniform(-1.6, 1.6, n),
+        "plate_z": rng.uniform(1.0, 4.0, n),
+        "sz_top": 3.4, "sz_bot": 1.6,
+        "stand": rng.choice(["L", "R"], n),
+        "balls": rng.integers(0, 4, n), "strikes": rng.integers(0, 3, n),
+    })
+    zn = (df["plate_z"] - 1.6) / 1.8
+    inside = (df["plate_x"].abs() <= pa.ZONE_HALF_WIDTH) & (zn >= 0) & (zn <= 1)
+    cs = rng.random(n) < np.where(inside, 0.85, 0.08)
+    edge = (((df["plate_x"].abs() - pa.ZONE_HALF_WIDTH).abs() <= 0.5)
+            | ((zn - 1).abs() <= 0.2) | (zn.abs() <= 0.2))
+    cs = np.where((df["fielder_2"] == 1) & edge, True, cs)
+    df["description"] = np.where(cs, "called_strike", "ball")
+    saved = dict(pa._FRAMING_CACHE)
+    try:
+        pa._FRAMING_CACHE.pop(-1, None)
+        fr = pa.compute_catcher_framing(df, -1, min_taken=100).set_index("catcher")
+    finally:
+        pa._FRAMING_CACHE.clear()
+        pa._FRAMING_CACHE.update(saved)
+    if fr["framing_above"].idxmax() != 1:
+        errors.append(f"strike-getter ranked {fr['framing_pct'].get(1)}th pct")
+    rest = fr.drop(index=1)["framing_above"]
+    if (rest > 0).all():
+        errors.append(f"every other catcher above expected: {rest.round(1).to_dict()}")
+
+    passed = not errors
+    detail = (f"{len(h_fam)} hitter + {len(p_fam)} pitcher tags in families; "
+              "unranked catcher / non-catcher / never ran / reliever states; "
+              f"synthetic framer {fr.loc[1, 'framing_above']:+.1f} per 100, "
+              f"others {rest.min():+.1f}..{rest.max():+.1f}"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1765,6 +1856,7 @@ TESTS = [
     ("V22", "Complete reads and rosters",      v22_complete_rosters),
     ("V23", "Pitch outcomes and pairing",      v23_pitch_outcomes_pairing),
     ("V24", "Steal-attempt ranks league-wide", v24_league_steal_ranks),
+    ("V25", "Tag states and framing",          v25_tag_states_and_framing),
 ]
 
 

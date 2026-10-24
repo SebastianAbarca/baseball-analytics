@@ -440,8 +440,9 @@ def build_hitter_traits(
 
 def _catcher_traits(catching: Optional[dict]) -> list[dict]:
     """
-    Catcher-craft tags. `catching` is present only for players who caught a
-    qualifying number of taken pitches:
+    Catcher-craft tags. `catching` holds whichever readings this catcher has
+    (framing_taken for anyone who caught an edge pitch; the percentiles only
+    where he qualified):
       framing_pct — percentile among qualified catchers of called strikes
                     above expected on edge pitches (expected from location,
                     batter side and count — compute_catcher_framing)
