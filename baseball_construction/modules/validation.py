@@ -1828,6 +1828,65 @@ def v25_tag_states_and_framing() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V26 — Team comps from the measurements
+# ---------------------------------------------------------------------------
+
+def v26_team_comps() -> Result:
+    """
+    Offline, synthetic league of 30 offenses (team_similarity):
+      1. two teams with the same hitters are each other's top comp at 1.0
+      2. a metric measured for under half a team's PA does not count for it
+         (its features are NaN, not zero)
+      3. every team gets style and deployment comps, the deployment one from
+         its own features — identical usage, different hitters, is a top
+         deployment comp and not a top style comp
+    """
+    import sys as _sys
+    import numpy as np
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import team_similarity as ts
+
+    rng = np.random.default_rng(3)
+    keys = [k for items in ts.HITTER_DOMAINS.values() for src, k in items if src == "m"]
+
+    def hitter(pa, lean):
+        m = {k: float(np.clip(rng.normal(50 + lean, 20), 0, 100)) for k in keys}
+        return {"pa": pa, "gate_inputs": {"metrics": m, "attempt_rate_pct": 50.0,
+                                          "advancement": {"xbt_pct": 50.0}}}
+
+    teams = {f"T{i:02d}": {"hitters": [hitter(int(rng.integers(150, 650)), rng.normal(0, 8))
+                                       for _ in range(13)]} for i in range(28)}
+    teams["TWIN"] = {"hitters": [dict(h) for h in teams["T00"]["hitters"]]}
+    usage = [h["pa"] for h in teams["T01"]["hitters"]]
+    teams["USAGE"] = {"hitters": [hitter(pa, 15) for pa in usage]}
+    league = {t: {} for t in teams}
+    ts.compute_positions(league, teams)
+
+    errors = []
+    top = league["T00"]["neighbours"]["offense"][0]
+    if top["team"] != "TWIN" or abs(top["similarity"] - 1.0) > 1e-6:
+        errors.append(f"identical roster's top comp is {top}")
+    dep = [x["team"] for x in league["USAGE"]["deployment_neighbours"]["offense"]]
+    style = [x["team"] for x in league["USAGE"]["neighbours"]["offense"]]
+    if "T01" not in dep[:1]:
+        errors.append(f"same usage not the top deployment comp: {dep}")
+    if "T01" in style[:1]:
+        errors.append("same usage leaked into the style comp")
+    thin = [dict(h) for h in teams["T02"]["hitters"]]
+    for h in thin[:-1]:
+        h["gate_inputs"] = {**h["gate_inputs"], "metrics": {k: v for k, v in h["gate_inputs"]["metrics"].items()
+                                                            if k != "Barrel_pct_pct"}}
+    f = ts.style_features(thin, "pa", ts.HITTER_DOMAINS)
+    if not np.isnan(f[("power", "Barrel_pct_pct", "mean")]):
+        errors.append("a metric measured for one hitter still counted")
+
+    passed = not errors
+    detail = ("identical rosters comp at 1.00; thin coverage excluded; "
+              "deployment comp kept separate" if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1857,6 +1916,7 @@ TESTS = [
     ("V23", "Pitch outcomes and pairing",      v23_pitch_outcomes_pairing),
     ("V24", "Steal-attempt ranks league-wide", v24_league_steal_ranks),
     ("V25", "Tag states and framing",          v25_tag_states_and_framing),
+    ("V26", "Team comps from measurements",    v26_team_comps),
 ]
 
 

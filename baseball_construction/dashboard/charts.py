@@ -2993,9 +2993,13 @@ def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
     who, sim = top.get("team", "?"), top.get("similarity")
     med, q1, q3 = uq.get("unit_median"), uq.get("unit_q1"), uq.get("unit_q3")
     parts = []
+    basis = ("over the unit's measurements: team averages and the share of "
+             "its workload in each tail, every domain weighted equally"
+             if uq.get("method") == "hybrid-v1"
+             else "over per-tag deviations from league average")
     if sim is not None:
         parts.append(f"Closest comparable team is {who}, at {sim:.2f} similarity "
-                     f"(cosine, over per-tag deviations from league average).")
+                     f"(cosine, {basis}).")
     if med is not None:
         parts.append(f"Across this season's {unit}s the closest comp typically "
                      f"lands at {med:.2f}; below {q1:.2f} counts as loose and "
@@ -3236,11 +3240,28 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
                              "cursor": "help"}),
         ])
 
+    # How the club USED the unit is a separate comparison from how it plays
+    # (team_similarity: deployment carries little year to year, so mixing it
+    # in would blur the style comp). It gets its own quiet line.
+    def _with_usage(unit: str, sub):
+        dep = ((position or {}).get("deployment_neighbours") or {}).get(unit) or []
+        if not dep:
+            return sub
+        used = html.Div(
+            "Used like " + ", ".join(x.get("team", "") for x in dep[:2]),
+            title=("Closest by deployment — workload concentration, starts and "
+                   "leverage — at " + ", ".join(f"{x.get('team')} {x.get('similarity', 0):.2f}"
+                                                for x in dep[:3])),
+            style={"cursor": "help"})
+        return html.Div([html.Div(sub), used]) if sub else used
+
     cols = dbc.Row([
-        _identity_col("Offense",  _headline("offense"),  offense_sub,  COLORS["offense"]),
-        _identity_col("Rotation", _headline("rotation"), rotation_sub, COLORS["pitching"]),
+        _identity_col("Offense",  _headline("offense"),
+                      _with_usage("offense", offense_sub), COLORS["offense"]),
+        _identity_col("Rotation", _headline("rotation"),
+                      _with_usage("rotation", rotation_sub), COLORS["pitching"]),
         _identity_col("Bullpen",  _headline("bullpen", bullpen_label),
-                      bullpen_sub, COLORS["roster"]),
+                      _with_usage("bullpen", bullpen_sub), COLORS["roster"]),
     ], className="g-3")
 
     fit_notes = [v for v in fit.values() if v]

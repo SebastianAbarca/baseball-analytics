@@ -676,7 +676,8 @@ def team_identity_card(data):
             # replaced the headline labels, and it had never been wired in, so
             # the card rendered a bare "—" where the label used to be.
             position = {"neighbours": entry.get("neighbours") or {},
-                        "uniqueness": entry.get("uniqueness") or {}}
+                        "uniqueness": entry.get("uniqueness") or {},
+                        "deployment_neighbours": entry.get("deployment_neighbours") or {}}
     except Exception:
         pass
     return charts.team_identity_card(p, fingerprint=fingerprint, position=position)
