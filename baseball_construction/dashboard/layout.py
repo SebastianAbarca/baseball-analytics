@@ -51,19 +51,15 @@ MODE_COLORS = {
 def navbar() -> dbc.Navbar:
     return dbc.Navbar(
         dbc.Container([
+            # No MLB or club marks anywhere: this is an independent site, and
+            # a league logo in the corner reads as an official one. The
+            # toggler went too — there was never a collapse for it to open.
             html.A(
-                dbc.Row([
-                    dbc.Col(html.Img(
-                        src="https://upload.wikimedia.org/wikipedia/commons/a/a6/MLB_Logo.svg",
-                        height="28px", className="me-2",
-                    )),
-                    dbc.Col(dbc.NavbarBrand(
-                        "Baseball Construction", className="fw-bold text-white",
-                    )),
-                ], align="center", className="g-0"),
+                dbc.NavbarBrand(
+                    "Baseball Construction", className="fw-bold text-white",
+                ),
                 href="#", style={"textDecoration": "none"},
             ),
-            dbc.NavbarToggler(id="navbar-toggler"),
             html.Small(
                 "Team Construction Analytics · Statcast Era (2015+)",
                 className="text-secondary ms-auto d-none d-md-block",
@@ -305,6 +301,38 @@ def tag_footer() -> html.Div:
 # Defined in charts, which owns the zone constants and the era-aware fallback
 # that depends on it. Re-exported here so the existing references keep working.
 ABS_FIRST_SEASON = charts.ABS_FIRST_SEASON
+
+
+def site_footer() -> html.Footer:
+    """
+    Where the numbers come from, and that none of it is official.
+
+    Every source the build pulls from is named, not just Statcast: bWAR and
+    the range totals are Baseball-Reference's, and the ID crosswalk behind
+    every join is the Chadwick Bureau's register.
+    """
+    link = {"color": "#9ca3af"}
+    return html.Footer([
+        html.Hr(style={"borderColor": "#374151", "marginTop": "24px"}),
+        html.Div([
+            "Data: MLB Advanced Media via ",
+            html.A("Baseball Savant", href="https://baseballsavant.mlb.com",
+                   target="_blank", rel="noopener", style=link),
+            " and the MLB Stats API; ",
+            html.A("Baseball-Reference", href="https://www.baseball-reference.com",
+                   target="_blank", rel="noopener", style=link),
+            "; player IDs from the ",
+            html.A("Chadwick Baseball Bureau", href="https://github.com/chadwickbureau/register",
+                   target="_blank", rel="noopener", style=link),
+            ".",
+        ]),
+        html.Div(
+            "Not affiliated with, endorsed by, or sponsored by Major League "
+            "Baseball, MLB Advanced Media, or any MLB club. Team names are used "
+            "only to identify the data.",
+        ),
+    ], className="text-secondary pb-4",
+       style={"fontSize": "0.72rem", "maxWidth": "820px"})
 
 
 def data_notes() -> html.Div:
@@ -1245,5 +1273,6 @@ def full_layout() -> html.Div:
             # wherever the reader hits a tag they do not recognise.
             tag_footer(),
             data_notes(),
+            site_footer(),
         ], fluid=True),
     ], style={"backgroundColor": "#111827", "minHeight": "100vh", "color": "#f9fafb"})
