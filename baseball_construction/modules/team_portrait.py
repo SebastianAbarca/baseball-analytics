@@ -3055,6 +3055,9 @@ def pitcher_tag_states(traits: list[dict], gi: dict, is_starter: bool,
         pool = _PITCHER_TAG_POOL.get(tag)
         if pool and pool_rows.get(pool) is None:
             return "insufficient_sample"
+        if tag in ("over-the-top", "sidearm", "submarine") and not _is_num(
+                (pool_rows.get("league_mechanics") or {}).get("arm_angle")):
+            return "missing_data"     # Statcast records arm angle from 2020
         if tag in _ARSENAL_TAGS and not arsenal_profile:
             return "insufficient_sample"
         if tag in ("elite velo", "plus velo", "soft tosser") \
