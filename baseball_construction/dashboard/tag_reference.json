@@ -168,7 +168,7 @@
      "side": "H",
      "family": "catcher",
      "fires": 135,
-     "population": "catchers",
+     "population": "catchers_pop",
      "floor": "\u2014",
      "earned": "1.88s pop to second \u2014 among the fastest exchanges in the league"
     },
@@ -272,10 +272,10 @@
      "tag": "extra base taker",
      "side": "H",
      "family": "running-game",
-     "fires": 803,
+     "fires": 801,
      "population": "xbt",
      "floor": "\u2014",
-     "earned": "37 extra bases on 47 chances (100th pct) \u2014 took 3rd on 18/27 singles"
+     "earned": "went for the extra base on 37 of 47 chances (100th pct), made it 37 of 37 \u2014 took 3rd on 18/27 singles"
     },
     {
      "tag": "first-pitch attacker",
@@ -504,7 +504,7 @@
      "side": "H",
      "family": "catcher",
      "fires": 88,
-     "population": "catchers",
+     "population": "catchers_blocking",
      "floor": "\u2014",
      "earned": "blocking 10th pct among catchers (-11 blocks above average, 68 PB+WP allowed)"
     },
@@ -566,10 +566,10 @@
      "tag": "elite framer",
      "side": "H",
      "family": "catcher",
-     "fires": 134,
-     "population": "catchers",
+     "fires": 163,
+     "population": "catchers_framing",
      "floor": "\u2014",
-     "earned": "shadow-zone strike-stealing 100th pct among catchers (+7.4 pp vs league on edge pitches)"
+     "earned": "strikes above expected 100th pct among catchers (+4.8 strikes per 100 edge pitches vs expected)"
     },
     {
      "tag": "fly-ball prone",
@@ -594,7 +594,7 @@
      "side": "H",
      "family": "catcher",
      "fires": 97,
-     "population": "catchers",
+     "population": "catchers_blocking",
      "floor": "\u2014",
      "earned": "blocking 100th pct among catchers (+16 blocks above average, 31 PB+WP allowed)"
     },
@@ -692,10 +692,10 @@
      "tag": "poor framer",
      "side": "H",
      "family": "catcher",
-     "fires": 124,
-     "population": "catchers",
+     "fires": 155,
+     "population": "catchers_framing",
      "floor": "\u2014",
-     "earned": "shadow-zone strike rate 14th pct among catchers (-3.0 pp vs league on edge pitches)"
+     "earned": "strikes above expected 12th pct among catchers (-2.2 strikes per 100 edge pitches vs expected)"
     },
     {
      "tag": "power bat",
