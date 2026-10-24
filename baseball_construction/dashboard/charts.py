@@ -21,7 +21,7 @@ from dash import html
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
-# Tag kind (attribute / tool / behavior / result / deployment / noise) — the
+# Tag kind (attribute / tool / behavior / result / deployment) — the
 # vocabulary axis, used here to tell a genuinely empty trait cell from one
 # holding only attributes that fire regardless of sample.
 from team_portrait import kind_of  # noqa: E402
@@ -909,8 +909,8 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
         })
 
     # Width follows how much each kind actually holds: behavior and result
-    # carry 32 and 29 of the 94 tags, attribute is usually one chip, and noise
-    # is at most one. Pitchers give up some of it to the arsenal column.
+    # carry most of the tags and attribute is usually one chip. Pitchers give
+    # up some of it to the arsenal column.
     is_pitcher = unit in ("starters", "bullpen_arms")
     # Handedness moves next to the name and drops out of the kind columns.
     # Measured across 18,483 player-seasons, the attribute cell held ONLY
@@ -922,12 +922,12 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
     # which are the crowded ones.
     if is_pitcher:
         shown_kinds = KIND_ORDER
-        kind_w = {"attribute": "9%", "tool": "8%", "behavior": "16%",
-                  "result": "16%", "deployment": "10%", "noise": "4%"}
+        kind_w = {"attribute": "9%", "tool": "8%", "behavior": "18%",
+                  "result": "18%", "deployment": "10%"}
     else:
         shown_kinds = [k for k in KIND_ORDER if k != "attribute"]
-        kind_w = {"tool": "11%", "behavior": "24%",
-                  "result": "24%", "deployment": "13%", "noise": "8%"}
+        kind_w = {"tool": "11%", "behavior": "28%",
+                  "result": "28%", "deployment": "13%"}
     season = int(portrait.get("season") or 0)
 
     body = []
@@ -1713,7 +1713,7 @@ def _unit_trait_density_figure(arms: list, weight_key: str,
     # Which kinds are actually on this chart, in canonical order — the legend
     # below is built from these so it never advertises a colour that is absent.
     kinds_present = [k for k in KIND_ORDER
-                     if any((kind_of(t) or "noise") == k for t in tags)]
+                     if any((kind_of(t) or "result") == k for t in tags)]
 
     fig = go.Figure()
     xmax = max(shares)
@@ -2893,12 +2893,10 @@ KIND_COLORS: dict[str, str] = {
     "behavior":   "#67e8f9",   # light blue / cyan
     "result":     "#f87171",   # red
     # Not specified, chosen to stay clear of the four above: amber is the
-    # remaining warm hue that red does not swallow, and luck stays grey so it
-    # reads as the absence of a claim rather than as another category.
+    # remaining warm hue that red does not swallow.
     "deployment": "#fbbf24",   # amber
-    "noise":      "#9ca3af",   # grey
 }
-KIND_ORDER = ["attribute", "tool", "behavior", "result", "deployment", "noise"]
+KIND_ORDER = ["attribute", "tool", "behavior", "result", "deployment"]
 
 
 def _shade(hex_color: str, i: int, n: int) -> str:
@@ -2932,11 +2930,11 @@ def kind_shaded_colors(tags: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     counts: dict[str, int] = {}
     for t in tags:
-        k = kind_of(t) or "noise"
+        k = kind_of(t) or "result"
         counts[k] = counts.get(k, 0) + 1
     out = []
     for t in tags:
-        k = kind_of(t) or "noise"
+        k = kind_of(t) or "result"
         i = seen.get(k, 0)
         seen[k] = i + 1
         out.append(_shade(KIND_COLORS.get(k, COLORS["neutral"]), i, counts[k]))
@@ -3043,15 +3041,6 @@ _TYPICAL_TEXT: dict[tuple, tuple] = {
         "conventional usage",
         "The front office used this unit in unremarkable ways: no unusual "
         "leverage, workload or platoon patterns."),
-    ("league-typical", "noise"): (
-        "ordinary luck",
-        "Results tracked the underlying contact; no notable over- or "
-        "under-performance."),
-    ("not measured", "noise"): (
-        "not measured",
-        "Luck is computed from a hitter's wOBA against his xwOBA, so it has "
-        "no definition for a pitching staff. This is an absence of vocabulary, "
-        "not a finding about the team."),
 }
 
 
@@ -3105,7 +3094,7 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
         # has its own fingerprint row; it just cannot be allowed to describe
         # the staff.
         shown = [(t, v) for t, v in density.items()
-                 if kind_of(t) not in ("attribute", "noise")][:2]
+                 if kind_of(t) != "attribute"][:2]
         rotation_sub = " · ".join(f"{t} {v:.0%}" for t, v in shown) or None
     elif rotation.get("approach_dist"):
         appr = rotation.get("dominant_approach")

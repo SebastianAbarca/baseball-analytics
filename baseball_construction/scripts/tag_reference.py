@@ -141,9 +141,6 @@ KIND_DEF = {
     "deployment": "How the club used the player — workload, leverage, "
                   "starting or relieving, platoon usage, and how many "
                   "positions they were asked to cover.",
-    "noise": "The gap between results and expected outcomes — wOBA measured "
-             "against xwOBA. Positive means the results outran the contact "
-             "quality; negative means the contact deserved better.",
 }
 
 
@@ -223,8 +220,7 @@ def build(check_only: bool) -> int:
         "",
         "`kind` runs least to most controllable: **attribute** (nobody chose "
         "it) → **tool** (physical capacity) → **behavior** (a choice) → "
-        "**result** (what came out) → **deployment** (what the club did) → "
-        "**noise** (luck).",
+        "**result** (what came out) → **deployment** (what the club did).",
         "",
     ]
 

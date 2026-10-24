@@ -64,7 +64,7 @@ how much control the player has over it:
 | **attribute** | a fact about the body | throws left · sidearm · deep extension |
 | **tool** | a capability that clears a bar | elite velo · ride four-seam · elite speed |
 | **behavior** | a choice he makes | patient · sinker-baller · tunneler |
-| **result** | what came of it | bat-misser · walk prone · elite command |
+| **result** | what came of it | bat-misser · walk prone · elite control |
 | **deployment** | the club's decision about him | high-leverage arm · platoon specialist |
 | **noise** | results minus contact quality | lucky · unlucky |
 

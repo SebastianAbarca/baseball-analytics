@@ -545,7 +545,7 @@
      "earned": "outs above average 10th pct"
     },
     {
-     "tag": "elite command",
+     "tag": "elite control",
      "side": "P",
      "family": "outcome",
      "fires": 665,
@@ -626,15 +626,6 @@
      "earned": "strikeout rate 90th pct (more Ks than 90% of this season's hitters)"
     },
     {
-     "tag": "invisible ball",
-     "side": "P",
-     "family": "deception",
-     "fires": 740,
-     "population": "all",
-     "floor": "75 (SwStr_pct)",
-     "earned": "whiff rate +11.1% above what velocity predicts (100th pct) \u2014 misses bats the radar gun can't explain"
-    },
-    {
      "tag": "low steal rate",
      "side": "H",
      "family": "running-game",
@@ -671,7 +662,7 @@
      "earned": "wOBA allowed 0.351 vs opp-hand, 0.273 vs same \u2014 a 0.078 gap"
     },
     {
-     "tag": "plus command",
+     "tag": "plus control",
      "side": "P",
      "family": "outcome",
      "fires": 1160,
@@ -692,10 +683,10 @@
      "tag": "plus power",
      "side": "H",
      "family": "bat",
-     "fires": 1734,
+     "fires": 1172,
      "population": "all",
-     "floor": "150 (ISO)",
-     "earned": "ISO 71th pct \u2014 real thump"
+     "floor": "100 (HardHit_pct)",
+     "earned": "barrel + hard-hit 65th pct \u2014 real thump (ISO 71th pct)"
     },
     {
      "tag": "poor framer",
@@ -710,10 +701,10 @@
      "tag": "power bat",
      "side": "H",
      "family": "bat",
-     "fires": 1097,
+     "fires": 1071,
      "population": "all",
-     "floor": "150 (ISO)",
-     "earned": "ISO 100th pct \u2014 elite raw power (barrel + hard-hit composite 100th pct)"
+     "floor": "100 (HardHit_pct)",
+     "earned": "barrel + hard-hit 100th pct \u2014 elite contact quality (ISO 100th pct)"
     },
     {
      "tag": "rarely strikes out",
@@ -759,6 +750,15 @@
      "population": "all",
      "floor": "150 (Barrel_pct)",
      "earned": "barrel + hard-hit composite 10th pct"
+    },
+    {
+     "tag": "whiffs above velo",
+     "side": "P",
+     "family": "deception",
+     "fires": 740,
+     "population": "all",
+     "floor": "75 (SwStr_pct)",
+     "earned": "whiff rate +11.1% above what velocity predicts (100th pct)"
     }
    ]
   },
@@ -855,30 +855,6 @@
      "population": "starters",
      "floor": "\u2014",
      "earned": "831 BF \u2014 top of the league in workload"
-    }
-   ]
-  },
-  {
-   "kind": "noise",
-   "definition": "The gap between results and expected outcomes \u2014 wOBA measured against xwOBA. Positive means the results outran the contact quality; negative means the contact deserved better.",
-   "tags": [
-    {
-     "tag": "lucky",
-     "side": "H",
-     "family": "luck",
-     "fires": 571,
-     "population": "all",
-     "floor": "100 (xwOBA)",
-     "earned": "wOBA far above xwOBA (top decile of luck delta) \u2014 results outran the contact"
-    },
-    {
-     "tag": "unlucky",
-     "side": "H",
-     "family": "luck",
-     "fires": 580,
-     "population": "all",
-     "floor": "100 (xwOBA)",
-     "earned": "xwOBA far above wOBA (bottom decile of luck delta) \u2014 contact deserved better"
     }
    ]
   }

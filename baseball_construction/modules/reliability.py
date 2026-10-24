@@ -127,8 +127,8 @@ _CALIBRATION = "measured on 360 portraits, 2026-08-22"
 # why the others are deliberately absent.
 TAG_EVIDENCE: dict[str, str] = {
     # ── hitters ──────────────────────────────────────────────────────────
-    "power bat":       "ISO",
-    "plus power":      "ISO",
+    "power bat":       "HardHit_pct",  # barrel + hard-hit composite
+    "plus power":      "HardHit_pct",
     "gap hitter":      "ISO",          # extra-base production per ball in play
     "weak contact":    "Barrel_pct",   # barrel + hard-hit composite
     "high-K":          "K_pct",
@@ -141,18 +141,16 @@ TAG_EVIDENCE: dict[str, str] = {
     "oppo bat":        "BatGB_pct",
     "air-ball bat":    "BatGB_pct",
     "ground-ball bat": "BatGB_pct",
-    "lucky":           "xwOBA",
-    "unlucky":         "xwOBA",
     # ── pitchers ─────────────────────────────────────────────────────────
     "bat-misser":        "K_pct_pitch",
     "pitch-to-contact":  "K_pct_pitch",
     "ground-baller":     "GB_pct_pitch",
     "fly-ball prone":    "GB_pct_pitch",
     "contact suppressor":"HardHit_allowed",
-    "elite command":     "BB_pct_pitch",
-    "plus command":      "BB_pct_pitch",
+    "elite control":     "BB_pct_pitch",
+    "plus control":      "BB_pct_pitch",
     "walk prone":        "BB_pct_pitch",
-    "invisible ball":    "SwStr_pct",     # velocity-adjusted whiff rate
+    "whiffs above velo": "SwStr_pct",     # velocity-adjusted whiff rate
     "first-pitch attacker": "FPS_pct",
     "high spin efficiency": "spin_efficiency",
     "tunneler":          "tunnel_score",

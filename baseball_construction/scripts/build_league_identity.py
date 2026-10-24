@@ -90,9 +90,8 @@ _FP_MIN_CARRIERS_SMALL_POOL = 2
 # Every kind gets a row, so the card is a fixed skeleton and teams can be read
 # against each other line by line. A kind where nothing clears the bar is
 # reported as league-typical, which is information rather than a gap. A kind
-# with no vocabulary in that unit at all (luck applies only to hitters, so
-# `noise` is undefined for a pitching staff) is reported as unmeasured, which
-# is a different statement.
+# with no vocabulary in that unit at all is reported as unmeasured, which is
+# a different statement.
 #
 # Selection is by |z| — deviation over the tag's own cross-team spread —
 # because raw deviations are not comparable between tags. The gate is a z
@@ -102,9 +101,7 @@ _FP_MIN_CARRIERS_SMALL_POOL = 2
 # against the 3 the old design showed — the same density, now structured.
 _FP_MIN_Z = 1.5
 _FP_PER_KIND = 2
-# Luck is one line or none. It is the one kind where more detail is actively
-# misleading, since a second luck tag says nothing a first does not.
-_FP_PER_KIND_OVERRIDE = {"noise": 1}
+_FP_PER_KIND_OVERRIDE: dict[str, int] = {}
 
 _FP_TYPICAL = "league-typical"    # vocabulary exists, team is unremarkable
 _FP_UNMEASURED = "not measured"   # kind has no vocabulary for this unit
@@ -148,9 +145,8 @@ def _compute_fingerprints(league: dict[str, dict],
             mu = sum(vals) / len(vals)
             sd[tag] = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
 
-        # Which kinds have any vocabulary at all in this unit. Luck tags exist
-        # only for hitters, so a pitching staff has no `noise` vocabulary — a
-        # different statement from "this staff had average luck".
+        # Which kinds have any vocabulary at all in this unit — "no vocabulary
+        # here" is a different statement from "unremarkable here".
         unit_kinds = {k for k in (kind_of(t) for t in all_tags) if k}
 
         for team in teams:
