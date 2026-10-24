@@ -24,7 +24,8 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 # Tag kind (attribute / tool / behavior / result / deployment) — the
 # vocabulary axis, used here to tell a genuinely empty trait cell from one
 # holding only attributes that fire regardless of sample.
-from team_portrait import kind_of  # noqa: E402
+from team_portrait import (kind_of, HITTER_TAG_FAMILIES,  # noqa: E402
+                           PITCHER_TAG_FAMILIES)
 
 # ---------------------------------------------------------------------------
 # Strike zone geometry
@@ -966,10 +967,10 @@ def roster_table(portrait: dict, unit: str, page: int = 0):
             cells.append(td(
                 html.Span([_chip(t["tag"], k, t.get("evidence")) for t in ts])
                 if ts else
-                # An empty cell is a real statement here — nothing of this
-                # kind separates the player — so it gets a mark rather than
-                # blank space the eye reads as missing data.
-                html.Span("·", style={"color": COLORS["border"]})))
+                # An empty cell is a real statement — nothing of this kind
+                # separates the player — so it gets a mark rather than blank
+                # space; '?' when part of the kind could not be measured.
+                _empty_kind_cell(p, k, is_pitcher)))
         body.append(html.Tr(cells, style={"opacity": "0.7" if limited else "1"}))
 
     # Everyone who appeared is on the roster: players under the minimum with
@@ -1074,10 +1075,8 @@ def hitter_archetype_table(portrait: dict) -> go.Figure:
         substantive = [t for t in tags if kind_of(t) != "attribute"]
         if substantive:
             traits_col.append(", ".join(tags))
-        elif limited:
-            traits_col.append("limited sample")
         else:
-            traits_col.append("league-average")
+            traits_col.append(_untagged_label(h, is_pitcher=False))
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
@@ -1540,8 +1539,7 @@ def starter_archetype_bars(portrait: dict) -> go.Figure:
         if [t for t in shown if kind_of(t) != "attribute"]:
             traits_col.append(", ".join(shown))
         else:
-            traits_col.append("limited sample" if s.get("limited_sample")
-                              else "league-average")
+            traits_col.append(_untagged_label(s, is_pitcher=True))
 
     n = len(names)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
@@ -1634,8 +1632,7 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         if [t for t in shown if kind_of(t) != "attribute"]:
             traits_col.append(", ".join(shown))
         else:
-            traits_col.append("limited sample" if arm.get("limited_sample")
-                              else "league-average")
+            traits_col.append(_untagged_label(arm, is_pitcher=True))
 
     n = len(rows)
     row_colors = [COLORS["surface"] if i % 2 == 0 else COLORS["background"] for i in range(n)]
@@ -3008,6 +3005,115 @@ def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Tag states — telling "measured and ordinary" from "not measured"
+# ---------------------------------------------------------------------------
+# Portraits (schema 24) carry, per player, a state for every tag family:
+# present / absent / insufficient_sample / missing_data / not_applicable; and
+# per team unit, the workload share in each state (family_states). An empty
+# cell or an empty fingerprint row used to read as "ordinary" whatever the
+# reason. These helpers let it say "not enough evidence" when that is the
+# truth. Portraits without states render exactly as before.
+_UNMEASURED_WORDS = {"insufficient_sample": "sample too small",
+                     "missing_data": "no data"}
+# Below this measured share of the eligible workload, an untagged kind is
+# "not enough evidence" rather than typical.
+_MIN_MEASURED_SHARE = 0.5
+
+
+def _families_by_kind(is_pitcher: bool) -> dict[str, list[str]]:
+    fams = PITCHER_TAG_FAMILIES if is_pitcher else HITTER_TAG_FAMILIES
+    out: dict[str, list[str]] = {}
+    for fam, tags in fams.items():
+        kinds = {kind_of(t) for t in (tags or ("any out pitch",))} - {None}
+        for k in kinds:
+            out.setdefault(k, []).append(fam)
+    return out
+
+
+def _unmeasured_families(states: dict, families: list[str]) -> dict[str, list[str]]:
+    """{state: [family, ...]} for the families that could not be measured."""
+    out: dict[str, list[str]] = {}
+    for fam in families:
+        st = states.get(fam)
+        if st in _UNMEASURED_WORDS:
+            out.setdefault(st, []).append(fam)
+    return out
+
+
+def _unmeasured_text(gaps: dict[str, list[str]]) -> str:
+    return "; ".join(f"{_UNMEASURED_WORDS[st]}: {', '.join(fams)}"
+                     for st, fams in gaps.items())
+
+
+def _empty_kind_cell(player: dict, kind: str, is_pitcher: bool):
+    """The mark for a roster cell with no tag of this kind. '·' when the kind
+    was measured (hovering names any family that was not); a dim '?' when
+    fewer than half of the kind's applicable families were measured, so the
+    empty cell is not a finding. Measured across the 360 portraits, '?' marks
+    385 of 16,526 empty cells among players with a full sample."""
+    states = player.get("tag_states") or {}
+    fams = _families_by_kind(is_pitcher).get(kind, [])
+    gaps = _unmeasured_families(states, fams)
+    if not gaps:
+        return html.Span("·", style={"color": COLORS["border"]})
+    applicable = [states[f] for f in fams
+                  if states.get(f) not in (None, "not_applicable")]
+    measured = sum(st in ("present", "absent") for st in applicable)
+    why = "Not measured — " + _unmeasured_text(gaps) + "."
+    if applicable and measured / len(applicable) < _MIN_MEASURED_SHARE:
+        return html.Span("?", title=why + " Too little was measured to call "
+                         "him ordinary here.",
+                         style={"color": COLORS["subtext"], "fontSize": "0.7rem",
+                                "cursor": "help", "opacity": "0.8"})
+    return html.Span("·", title=why + " Nothing that was measured separates "
+                     "him from the league.",
+                     style={"color": COLORS["border"], "cursor": "help"})
+
+
+def _untagged_label(player: dict, is_pitcher: bool) -> str:
+    """What an untagged player's summary cell says: limited sample (thin
+    profile), not enough evidence (most families unmeasured), or
+    league-average (measured, nothing distinctive)."""
+    if player.get("limited_sample"):
+        return "limited sample"
+    states = player.get("tag_states") or {}
+    fams = [f for f, tags in (PITCHER_TAG_FAMILIES if is_pitcher
+                              else HITTER_TAG_FAMILIES).items()
+            if not tags or any(kind_of(t) != "attribute" for t in tags)]
+    applicable = [states[f] for f in fams if states.get(f) not in (None, "not_applicable")]
+    if applicable:
+        measured = sum(st in ("present", "absent") for st in applicable)
+        if measured / len(applicable) < _MIN_MEASURED_SHARE:
+            return "not enough evidence"
+    return "league-average"
+
+
+def _unit_kind_evidence(portrait: dict, unit: str, kind: str):
+    """(measured share, thin families) of a team unit for one tag kind, from
+    team_identity[unit].family_states; (None, []) when not stored. The share
+    is of the workload each family can apply to."""
+    fs = (((portrait.get("team_identity") or {}).get(unit) or {})
+          .get("family_states") or {})
+    if not fs:
+        return None, []
+    shares, thin = [], []
+    for fam in _families_by_kind(unit != "offense").get(kind, []):
+        d = fs.get(fam)
+        if not d:
+            continue
+        applicable = 1.0 - float(d.get("not_applicable", 0.0))
+        if applicable < 0.05:
+            continue
+        m = (float(d.get("present", 0.0)) + float(d.get("absent", 0.0))) / applicable
+        shares.append(m)
+        if m < _MIN_MEASURED_SHARE:
+            thin.append((fam, m))
+    if not shares:
+        return None, []
+    return sum(shares) / len(shares), thin
+
+
 def _ordinal_short(n: int) -> str:
     """1st / 2nd / 3rd / 4th …"""
     i = int(n)
@@ -3188,6 +3294,19 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
                         (state, kind),
                         (state, "No tag of this kind separates this team "
                                 "from the league."))
+                    # Typical is only a finding where the unit was measured.
+                    if state == "league-typical":
+                        share, thin = _unit_kind_evidence(portrait, unit, kind)
+                        if share is not None and share < _MIN_MEASURED_SHARE:
+                            label = "not enough evidence"
+                            tip = (f"Only {share:.0%} of the eligible workload was "
+                                   "measured for this kind, so no tag surfacing "
+                                   "does not show the team is typical.")
+                        elif share is not None:
+                            tip += f" Measured on {share:.0%} of the eligible workload."
+                            if thin:
+                                tip += " Thin: " + ", ".join(
+                                    f"{f} ({m:.0%})" for f, m in thin) + "."
                     body = html.Span(
                         label, title=tip,
                         style={"color": COLORS["subtext"], "fontSize": "0.72rem",
