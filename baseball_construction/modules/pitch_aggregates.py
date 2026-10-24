@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import collections
 import logging
+import re
+import unicodedata
 from pathlib import Path
 import sys
 
@@ -735,46 +737,97 @@ def frameable_mask(sc: pd.DataFrame) -> pd.Series:
     outside = pd.concat([px.abs() - _FR_W, pz - top, bot - pz], axis=1).max(axis=1)
     return (outside.abs() <= _SHADOW_BAND) & px.notna() & pz.notna()
 
+# Framing is scored on taken pitches near an edge: within this far of a side
+# (ft) or this fraction of the zone's height of its top or bottom. Wider than
+# the frameable_mask shadow band on purpose — scored against Savant's framing
+# runs it agreed best (Spearman 0.977 in 2023, 0.968 in 2025) and stayed
+# reliable (split-half 0.76 / 0.70).
+_FRAMING_EDGE_X = 0.5
+_FRAMING_EDGE_Z = 0.2
+_FRAMING_BIN_X = 1 / 12         # 1 inch
+_FRAMING_BIN_Z = 0.05           # 5% of the zone's height
+
+
+def _expected_called_strike(sc: pd.DataFrame) -> np.ndarray:
+    """
+    League probability that a taken pitch is called a strike, from where it
+    crossed (1-inch horizontal bins x 5%-of-zone-height bins, relative to that
+    batter's zone), the batter's side, and the count — the count as a shift in
+    log-odds fitted after location. Thin bins are shrunk toward 50/50.
+    """
+    xb = np.floor(sc["_px"] / _FRAMING_BIN_X).astype(int)
+    zb = np.floor(sc["_zn"] / _FRAMING_BIN_Z).astype(int)
+    key = pd.MultiIndex.from_arrays([xb, zb, sc["stand"].fillna("R")])
+    cnt = sc["balls"].astype(str) + "-" + sc["strikes"].astype(str)
+    cs = sc["_cs"].to_numpy(dtype=float)
+    by = pd.Series(cs, index=key).groupby(level=[0, 1, 2]).agg(["sum", "size"])
+    rate = ((by["sum"] + 2.5) / (by["size"] + 5)).clip(1e-4, 1 - 1e-4)
+    f = np.log(rate / (1 - rate)).reindex(key).to_numpy()
+    shift = pd.Series(0.0, index=pd.unique(cnt))
+    for _ in range(3):
+        p = 1 / (1 + np.exp(-(f + cnt.map(shift).to_numpy())))
+        shift = shift + pd.Series(cs - p, index=sc.index).groupby(cnt.to_numpy()).mean() * 4
+    return 1 / (1 + np.exp(-(f + cnt.map(shift).to_numpy())))
+
+
 def compute_catcher_framing(statcast: pd.DataFrame, season: int,
                             min_taken: int = 500) -> pd.DataFrame:
     """
-    Framing proxy per catcher, computed from raw pitches (the Savant framing
-    endpoint is broken in pybaseball; this is the same idea from first
-    principles): on TAKEN pitches in the shadow band around the zone edge,
-    how far above/below the league called-strike rate does this catcher sit?
+    Framing per catcher: called strikes above what the league gets on the same
+    pitches, per 100 taken pitches near an edge. Each taken pitch's expected
+    call comes from its location relative to the batter's zone, the batter's
+    side and the count (_expected_called_strike); the catcher is credited with
+    the difference.
+
+    It replaced a proxy — the catcher's raw called-strike rate in a shadow band
+    against one league rate — which could not tell a catcher who framed from
+    one whose pitchers simply threw easier edges. Against Savant's framing runs
+    for qualified catchers, 2023-25: Spearman 0.948-0.977 for this model,
+    0.902-0.935 for the proxy; split-half reliability 0.65-0.78 against
+    0.52-0.70. Pitcher and umpire are not adjusted for (scripts/battery_base.py
+    found nearly all of the signal already belongs to the catcher).
 
     Returns DataFrame:
-        catcher (MLBAM), shadow_taken, cs_rate, league_cs_rate,
-        framing_above (cs_rate − league, in percentage points),
-        framing_pct (percentile among catchers with ≥ min_taken)
+        catcher (MLBAM), shadow_taken (taken pitches near an edge), cs_rate,
+        league_cs_rate (the expected rate on the same pitches),
+        framing_above (strikes above expected per 100 such pitches),
+        framing_pct (percentile among catchers with >= min_taken)
     """
     if season in _FRAMING_CACHE:
         return _FRAMING_CACHE[season]
 
-    sc = statcast[["fielder_2", "description", "plate_x", "plate_z",
-                   "sz_top", "sz_bot"]].copy()
-    sc = sc[sc["description"].isin(["called_strike", "ball"])]
-
-    sc = sc[frameable_mask(sc)]
-
+    sc = statcast[["fielder_2", "description", "plate_x", "plate_z", "sz_top",
+                   "sz_bot", "stand", "balls", "strikes"]].copy()
+    sc = sc[sc["description"].isin(["called_strike", "ball", "blocked_ball"])]
+    sc["_px"] = pd.to_numeric(sc["plate_x"], errors="coerce")
+    pz = pd.to_numeric(sc["plate_z"], errors="coerce")
+    top = _fill_zone(pd.to_numeric(sc["sz_top"], errors="coerce"), ZONE_TOP_LAST_RESORT)
+    bot = _fill_zone(pd.to_numeric(sc["sz_bot"], errors="coerce"), ZONE_BOT_LAST_RESORT)
+    sc["_zn"] = (pz - bot) / (top - bot)            # 0 = bottom edge, 1 = top edge
+    sc = sc.dropna(subset=["_px", "_zn", "fielder_2", "balls", "strikes"])
     sc["_cs"] = sc["description"] == "called_strike"
-    league_rate = float(sc["_cs"].mean())
+    sc["_exp"] = _expected_called_strike(sc)
+
+    edge = (((sc["_px"].abs() - _FR_W).abs() <= _FRAMING_EDGE_X)
+            | ((sc["_zn"] - 1).abs() <= _FRAMING_EDGE_Z)
+            | (sc["_zn"].abs() <= _FRAMING_EDGE_Z))
+    sc = sc[edge]
+    sc["_above"] = sc["_cs"].astype(float) - sc["_exp"]
 
     agg = sc.groupby("fielder_2").agg(
         shadow_taken=("_cs", "count"),
         cs_rate=("_cs", "mean"),
+        league_cs_rate=("_exp", "mean"),
+        framing_above=("_above", "mean"),
     ).reset_index().rename(columns={"fielder_2": "catcher"})
-    agg["league_cs_rate"] = league_rate
-    agg["framing_above"] = (agg["cs_rate"] - league_rate) * 100.0
+    agg["framing_above"] *= 100.0
 
     qual = agg[agg["shadow_taken"] >= min_taken].copy()
     qual["framing_pct"] = qual["framing_above"].rank(pct=True) * 100.0
     agg = agg.merge(qual[["catcher", "framing_pct"]], on="catcher", how="left")
 
     _FRAMING_CACHE[season] = agg
-    log.info("Catcher framing computed — %d catchers (%d qualified), "
-             "league shadow CS rate %.1f%%",
-             len(agg), len(qual), league_rate * 100)
+    log.info("Catcher framing computed — %d catchers (%d qualified)", len(agg), len(qual))
     return agg
 
 
@@ -815,33 +868,69 @@ def load_catcher_poptime(season: int) -> pd.DataFrame:
 
 _ADVANCE_CACHE: dict[int, "pd.DataFrame"] = {}
 
+# A PA's narration opens with the batter's name, after any replay preamble
+# ("Mets challenged (tag play), call on the field was upheld: ").
+_DES_PREAMBLE = re.compile(r"^.*?: ")
+_DES_BATTER = re.compile(
+    r"^(.+?) (?:singles|doubles|triples|homers|walks|strikes out|grounds|flies|"
+    r"lines|pops|hit by pitch|reaches|out on|sacrifice|called out|bunts)\b")
+# "Jose Ramirez out at home on the throw, ..." — one clause per sentence.
+_DES_OUT_AT = re.compile(r"(?:^|\.\s+)([^.]+?) out at (2nd|3rd|home)\b")
+
+
+def _norm_name(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z]", "", s.lower())
+
+
+def _batter_names(finals: pd.DataFrame) -> dict[int, str]:
+    """MLBAM id -> normalised name, read from each batter's own narrations."""
+    des = finals["des"].fillna("").str.replace(_DES_PREAMBLE, "", n=1, regex=True)
+    name = des.str.extract(_DES_BATTER, expand=False)
+    ok = name.notna() & finals["batter"].notna()
+    by = pd.DataFrame({"id": finals.loc[ok, "batter"].astype(int),
+                       "name": name[ok].map(_norm_name)})
+    return by.groupby("id")["name"].agg(lambda x: x.mode().iat[0]).to_dict()
+
+
 def compute_batter_advancement(statcast: pd.DataFrame, season: int) -> pd.DataFrame:
     """
-    Extra-bases-taken per RUNNER, from base-state transitions between
-    consecutive PAs (des narration is only ~26% populated — never use it).
+    Extra-base attempts per RUNNER, from base-state transitions between
+    consecutive PAs plus the play narration for runners thrown out.
 
-    Opportunities pooled across the three standard XBT situations:
-      • runner on 1B, batter singles  → did he reach 3B?
-      • runner on 2B, batter singles  → did he score?
-      • runner on 1B, batter doubles  → did he score?
+    Opportunities pooled across the three standard XBT situations, each with
+    the base the runner is going for:
+      • runner on 1B, batter singles  → 3B
+      • runner on 2B, batter singles  → home
+      • runner on 1B, batter doubles  → home
 
-    A runner "scored" if he appears on no base in the next PA and the
-    half-inning continued with more runs than outs added... ambiguity is
-    expensive, so instead: advancement is credited from where the runner
-    IS next PA; runners absent from the next PA's bases in a continuing
-    half-inning with a run scored on the play are counted as scored
-    (delta home/away score check). PAs that end the half-inning are
-    dropped — conservative denominators beat guessed numerators.
+    Each opportunity resolves to one of:
+      advanced    — on the target base next PA, or off the bases in a
+                    continuing half-inning with a run scored on the play
+      thrown out  — the narration has him "out at" the target base (3rd or
+                    home from 1B on a single). Counted even when that out ended
+                    the half-inning, which the base states alone cannot see
+      held        — on the station base next PA (did not attempt)
+      dropped     — anything else (forced out, pinch-runner swap, ambiguity)
+    attempts = advanced + thrown out. Before thrown-out runners were counted
+    they fell into "dropped", so the old rate scored a runner who was cut down
+    as if the chance never happened.
+
+    Narration (des) is complete on PA-ending pitches. Runner names come from
+    their own PAs (_batter_names); a runner who never batted that season is
+    matched by position — the one candidate who could be out at that base.
 
     Returns per-runner DataFrame:
-      key_mlbam, opps, advances, xbt_rate,
-      first_to_third_opps, first_to_third_n
+      key_mlbam, opps, attempts, advances, thrown_out,
+      attempt_rate (attempts / opps), success_rate (advances / attempts),
+      xbt_rate (advances / opps), first_to_third_opps, first_to_third_n
     """
     if season in _ADVANCE_CACHE:
         return _ADVANCE_CACHE[season]
 
     cols = ["game_pk", "at_bat_number", "pitch_number", "inning", "inning_topbot",
-            "events", "on_1b", "on_2b", "on_3b", "post_bat_score", "bat_score"]
+            "events", "des", "batter", "on_1b", "on_2b", "on_3b",
+            "post_bat_score", "bat_score"]
     have = [c for c in cols if c in statcast.columns]
     sc = statcast[have].copy()
 
@@ -855,16 +944,21 @@ def compute_batter_advancement(statcast: pd.DataFrame, season: int) -> pd.DataFr
     first_state = firsts.set_index(["game_pk", "at_bat_number"])[
         ["on_1b", "on_2b", "on_3b", "inning", "inning_topbot"]]
 
+    has_des = {"des", "batter"} <= set(have)
+    names = _batter_names(finals) if has_des else {}
+
     rows: dict[int, dict] = {}
 
-    def _bump(rid, kind, advanced):
-        r = rows.setdefault(int(rid), {"opps": 0, "advances": 0,
+    def _bump(rid, kind, outcome):
+        """outcome: "adv" | "out" | "held"."""
+        r = rows.setdefault(int(rid), {"opps": 0, "advances": 0, "outs": 0,
                                        "ft_opps": 0, "ft_n": 0})
         r["opps"] += 1
-        r["advances"] += int(advanced)
+        r["advances"] += outcome == "adv"
+        r["outs"] += outcome == "out"
         if kind == "1b_single":
             r["ft_opps"] += 1
-            r["ft_n"] += int(advanced)
+            r["ft_n"] += outcome == "adv"
 
     scored_ok = {"post_bat_score", "bat_score"} <= set(have)
 
@@ -872,59 +966,76 @@ def compute_batter_advancement(statcast: pd.DataFrame, season: int) -> pd.DataFr
         ev = f.events
         if ev not in ("single", "double"):
             continue
-        nxt_key = (f.game_pk, f.at_bat_number + 1)
-        if nxt_key not in first_state.index:
-            continue  # end of half-inning (or data edge) — drop, don't guess
-        nxt = first_state.loc[nxt_key]
-        if nxt["inning"] != f.inning or nxt["inning_topbot"] != f.inning_topbot:
-            continue  # half-inning ended on the play — drop
-
-        nxt_bases = {int(x) for x in (nxt["on_1b"], nxt["on_2b"], nxt["on_3b"])
-                     if pd.notna(x)}
-        runs_scored = (int(f.post_bat_score) - int(f.bat_score)) if scored_ok else 0
-
-        def _resolve(rid, target_base_val, station_base_val):
-            """advanced if on target base next PA; scored counts as advanced;
-            on station base = held; otherwise ambiguous → drop."""
-            rid = int(rid)
-            if pd.notna(target_base_val) and int(target_base_val) == rid:
-                return True
-            if pd.notna(station_base_val) and int(station_base_val) == rid:
-                return False
-            if rid not in nxt_bases and runs_scored > 0:
-                return True   # off the bases in a continuing inning + run(s) home
-            return None       # forced out / pinch-runner / ambiguity — drop
-
+        # (runner, kind, bases where being thrown out = a failed attempt)
+        chances = []
         if ev == "single":
             if pd.notna(f.on_1b):
-                adv = _resolve(f.on_1b, nxt["on_3b"], nxt["on_2b"])
-                if adv is not None:
-                    _bump(f.on_1b, "1b_single", adv)
+                chances.append((int(f.on_1b), "1b_single", {"3rd", "home"}))
             if pd.notna(f.on_2b):
-                adv = _resolve(f.on_2b, None, nxt["on_3b"])
-                # target for 2B runner on a single = home (absent + run scored)
-                rid = int(f.on_2b)
-                if pd.notna(nxt["on_3b"]) and int(nxt["on_3b"]) == rid:
-                    _bump(rid, "2b_single", False)
+                chances.append((int(f.on_2b), "2b_single", {"home"}))
+        elif pd.notna(f.on_1b):
+            chances.append((int(f.on_1b), "1b_double", {"home"}))
+        if not chances:
+            continue
+
+        # Runners the narration has thrown out on the play.
+        thrown: set[int] = set()
+        if has_des and isinstance(f.des, str) and " out at " in f.des:
+            for who, base in _DES_OUT_AT.findall(_DES_PREAMBLE.sub("", f.des, count=1)):
+                surname_only = " " not in who.strip()
+                who = _norm_name(who)
+                cands = [rid for rid, _, bases in chances if base in bases]
+                named = [rid for rid in cands if names.get(rid) == who
+                         or (surname_only and names.get(rid, "").endswith(who))]
+                if named:
+                    thrown.add(named[0])
+                elif len(cands) == 1 and cands[0] not in names:
+                    thrown.add(cands[0])   # never batted — only one could be out there
+
+        nxt_key = (f.game_pk, f.at_bat_number + 1)
+        nxt = first_state.loc[nxt_key] if nxt_key in first_state.index else None
+        if nxt is not None and (nxt["inning"] != f.inning
+                                or nxt["inning_topbot"] != f.inning_topbot):
+            nxt = None   # half-inning ended on the play
+        nxt_bases = set() if nxt is None else {
+            int(x) for x in (nxt["on_1b"], nxt["on_2b"], nxt["on_3b"]) if pd.notna(x)}
+        runs_scored = (int(f.post_bat_score) - int(f.bat_score)) if scored_ok else 0
+
+        for rid, kind, _ in chances:
+            if rid in thrown:
+                _bump(rid, kind, "out")
+                continue
+            if nxt is None:
+                continue          # inning over and not thrown out — can't tell, drop
+            on3 = pd.notna(nxt["on_3b"]) and int(nxt["on_3b"]) == rid
+            on2 = pd.notna(nxt["on_2b"]) and int(nxt["on_2b"]) == rid
+            if kind == "1b_single":
+                if on3:
+                    _bump(rid, kind, "adv")
+                elif on2:
+                    _bump(rid, kind, "held")
                 elif rid not in nxt_bases and runs_scored > 0:
-                    _bump(rid, "2b_single", True)
-        elif ev == "double":
-            if pd.notna(f.on_1b):
-                rid = int(f.on_1b)
-                if pd.notna(nxt["on_3b"]) and int(nxt["on_3b"]) == rid:
-                    _bump(rid, "1b_double", False)
+                    _bump(rid, kind, "adv")   # off the bases + run(s) home
+            else:   # target is home; holding means stopping at 3B
+                if on3:
+                    _bump(rid, kind, "held")
                 elif rid not in nxt_bases and runs_scored > 0:
-                    _bump(rid, "1b_double", True)
+                    _bump(rid, kind, "adv")
 
     out = pd.DataFrame([
-        {"key_mlbam": rid, "opps": r["opps"], "advances": r["advances"],
-         "xbt_rate": r["advances"] / r["opps"] if r["opps"] else float("nan"),
+        {"key_mlbam": rid, "opps": r["opps"],
+         "attempts": r["advances"] + r["outs"],
+         "advances": r["advances"], "thrown_out": r["outs"],
          "first_to_third_opps": r["ft_opps"], "first_to_third_n": r["ft_n"]}
         for rid, r in rows.items()
-    ])
+    ], columns=["key_mlbam", "opps", "attempts", "advances", "thrown_out",
+                "first_to_third_opps", "first_to_third_n"])
+    out["attempt_rate"] = out["attempts"] / out["opps"]
+    out["success_rate"] = out["advances"] / out["attempts"].where(out["attempts"] > 0)
+    out["xbt_rate"] = out["advances"] / out["opps"]
     _ADVANCE_CACHE[season] = out
-    log.info("Batter advancement — %d runners, %d opportunities",
-             len(out), int(out["opps"].sum()) if not out.empty else 0)
+    log.info("Batter advancement — %d runners, %d opportunities, %d thrown out",
+             len(out), int(out["opps"].sum()), int(out["thrown_out"].sum()))
     return out
 
 

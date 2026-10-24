@@ -66,7 +66,13 @@ sys.path.insert(0, str(_HERE))
 # 23: the per-swing whiff rate is Whiff_pct (was SwStr_pct, a different rate's
 # name), and an arsenal's out_pitch carries swstr_pct (was whiff_pct). Whiffs
 # include foul tips, as Savant counts them.
-PORTRAIT_SCHEMA_VERSION = 23
+# 24: players carry tag_states — per tag family, whether the tag is present,
+# measured and not distinctive (absent), or unmeasured and why — and team
+# identity units carry population_coverage and family_states beside
+# trait_density. Catchers are three populations (framing, blocking, pop time)
+# instead of one. Framing is location- and count-adjusted; extra base taker
+# ranks attempts.
+PORTRAIT_SCHEMA_VERSION = 24
 
 from ingest import (
     pull_statcast_range,
@@ -2199,10 +2205,12 @@ _TUNNEL_ROTATION_SHARE = 0.50
 POP_ALL = "all"
 
 TAG_POPULATION: dict[str, str] = {
-    # catcher craft — only catchers with a qualifying sample
-    "elite framer": "catchers", "poor framer": "catchers",
-    "good blocker": "catchers", "bad blocker": "catchers",
-    "quick pop":    "catchers",
+    # catcher craft — only catchers with a reading for THAT skill. One shared
+    # `catchers` population let pop time alone qualify a catcher for the
+    # framing denominator (2025: 89 rows in it, 77 with a framing reading).
+    "elite framer": "catchers_framing", "poor framer": "catchers_framing",
+    "good blocker": "catchers_blocking", "bad blocker": "catchers_blocking",
+    "quick pop":    "catchers_pop",
     # fielding — needs an OAA / arm-strength reading (DHs and most catchers
     # have neither)
     "elite defender":      "fielders_oaa",
@@ -2772,8 +2780,12 @@ def _hitter_populations(
         v = sm.get(key)
         return v is not None and not (isinstance(v, float) and np.isnan(v))
 
-    if catching:
-        pops.append("catchers")
+    c = catching or {}
+    for key, pop in (("framing_pct", "catchers_framing"),
+                     ("blocking_pct", "catchers_blocking"),
+                     ("pop_pct", "catchers_pop")):
+        if c.get(key) is not None and not (isinstance(c[key], float) and np.isnan(c[key])):
+            pops.append(pop)
     if _has("OAA"):
         pops.append("fielders_oaa")
     if _has("ArmStrength"):
@@ -2842,6 +2854,287 @@ def _pitcher_populations(
     if runner_control:
         pops.append("runner_control")
     return pops
+
+
+# ---------------------------------------------------------------------------
+# Tag states — what a missing tag means
+# ---------------------------------------------------------------------------
+# Tags are positive assertions, so an untagged player used to read as an
+# ordinary one whatever the reason: measured and unremarkable, too few pitches
+# to say, no reading at all, or a skill he has no occasion to show. Each
+# player now carries one state per tag FAMILY (the tags that read one
+# measurement — elite/poor framer is framing):
+#
+#   present              a tag in the family fired
+#   absent               every applicable tag in the family could have fired
+#                        and none did: measured, not distinctive
+#   insufficient_sample  there is a reading, but below a gate's sample floor
+#                        or a pool's qualifying minimum
+#   missing_data         no reading (includes Savant leaderboards that list
+#                        qualified players only — sprint speed, OAA, arm,
+#                        blocking, pop time, tempo — whose cutoffs we can't see)
+#   not_applicable       no tag in the family can apply to him (catcher craft
+#                        for a non-catcher, starter workload for a reliever,
+#                        steal success for a player who never ran)
+#
+# A family is `absent` only when ALL its applicable tags were evaluable:
+# a 100-PA hitter can be checked for `high-K` but not `rarely strikes out`, so
+# his strikeout family is insufficient_sample, not "measured and typical".
+# States are computed from the stored traits and gate_inputs only, so
+# rederive_traits recomputes them exactly as a build would.
+TAG_STATES = ("present", "absent", "insufficient_sample", "missing_data",
+              "not_applicable")
+
+HITTER_TAG_FAMILIES: dict[str, tuple[str, ...]] = {
+    "handedness":     ("left-handed hitter", "right-handed hitter", "switch hitter"),
+    "power":          ("power bat", "plus power", "weak contact"),
+    "gap power":      ("gap hitter",),
+    "strikeouts":     ("high-K", "rarely strikes out"),
+    "walks":          ("walk machine",),
+    "chase":          ("patient", "free swinger"),
+    "zone hunting":   ("zone hunter",),
+    "first-pitch swings": ("aggressive",),
+    "direction":      ("pull-heavy", "oppo bat"),
+    "trajectory":     ("air-ball bat", "ground-ball bat"),
+    "speed":          ("elite speed", "fast", "station-to-station"),
+    "steal attempts": ("high steal attempts", "low steal attempts"),
+    "steal success":  ("high steal rate", "low steal rate"),
+    "extra bases":    ("extra base taker",),
+    "fielding":       ("elite defender", "plus defender", "defensive liability"),
+    "arm":            ("cannon arm",),
+    "framing":        ("elite framer", "poor framer"),
+    "blocking":       ("good blocker", "bad blocker"),
+    "pop time":       ("quick pop",),
+    "platoon":        ("platoon liability", "reverse split"),
+    "playing time":   ("everyday player",),
+    "versatility":    ("super-utility",),
+}
+
+PITCHER_TAG_FAMILIES: dict[str, tuple[str, ...]] = {
+    "handedness":      ("left-handed pitcher", "right-handed pitcher"),
+    "arm slot":        ("over-the-top", "sidearm", "submarine"),
+    "release width":   ("wide release",),
+    "extension":       ("deep extension", "short extension"),
+    "velocity":        ("elite velo", "plus velo", "soft tosser"),
+    "fastball":        ("ride four-seam", "sinker-baller", "cutter-primary"),
+    "arsenal depth":   ("deep arsenal", "two-pitch"),
+    "knuckleball":     ("knuckleballer",),
+    "out pitch":       (),          # "<pitch> out pitch", matched by suffix
+    "spin efficiency": ("high spin efficiency",),
+    "tunneling":       ("tunneler",),
+    "whiffs vs velo":  ("whiffs above velo",),
+    "pitch sequencing": ("unpredictable", "patterned"),
+    "count shifting":  ("count-shifter", "steady mix"),
+    "first-pitch strikes": ("first-pitch attacker",),
+    "tempo":           ("quick pitcher", "slow pitcher"),
+    "strikeouts":      ("bat-misser", "pitch-to-contact"),
+    "ground balls":    ("ground-baller", "fly-ball prone"),
+    "contact quality": ("contact suppressor",),
+    "control":         ("elite control", "plus control", "walk prone"),
+    "runner control":  ("controls runners",),
+    "platoon":         ("platoon-vulnerable", "reverse split", "platoon specialist"),
+    "starter workload": ("workhorse", "short-outing starter"),
+    "reliever usage":  ("heavy usage", "multi-inning reliever"),
+    "leverage":        ("high-leverage arm", "mop-up duty"),
+    "swing role":      ("swingman",),
+}
+
+# Pitcher tags read from a league pool the pitcher must qualify for
+# (gate_inputs.pool_rows); a missing row means too few pitches.
+_PITCHER_TAG_POOL: dict[str, str] = {
+    **dict.fromkeys(["unpredictable", "patterned", "count-shifter", "steady mix"],
+                    "league_sequencing"),
+    "first-pitch attacker": "league_discipline",
+    "whiffs above velo":    "league_discipline",
+    "tunneler":             "league_tunnel",
+    "high spin efficiency": "league_spin",
+}
+_ARSENAL_TAGS = {"ride four-seam", "sinker-baller", "cutter-primary", "deep arsenal",
+                 "two-pitch", "knuckleballer"}
+_ROLE_POPS = {"starters", "relievers"}
+
+
+def _is_num(v) -> bool:
+    return v is not None and not (isinstance(v, float) and np.isnan(v))
+
+
+def _hitter_populations_from_inputs(gi: dict) -> list[str]:
+    """_hitter_populations from a profile's stored gate_inputs."""
+    return _hitter_populations(
+        sprint_raw=gi.get("sprint_speed_raw"),
+        season_metrics=gi.get("season_metrics") or {},
+        catching=gi.get("catching"),
+        advancement=gi.get("advancement"),
+        splits=gi.get("splits"),
+        positions=gi.get("positions"),
+        pa=int(gi.get("pa") or 0),
+        metrics=gi.get("metrics") or {},
+        attempt_rate_pct=gi.get("attempt_rate_pct"),
+        attempts=int(gi.get("sb") or 0) + int(gi.get("cs") or 0),
+    )
+
+
+def _pitcher_populations_from_inputs(gi: dict, is_starter: bool) -> list[str]:
+    """_pitcher_populations from stored gate_inputs (mechanics membership is
+    the pitcher's mechanics pool row)."""
+    pops = [POP_ALL, "starters" if is_starter else "relievers"]
+    if (gi.get("pool_rows") or {}).get("league_mechanics") is not None:
+        pops.append("mechanics")
+    if gi.get("tempo"):
+        pops.append("tempo")
+    if gi.get("splits"):
+        pops.append("splits_qual")
+    if gi.get("runner_control"):
+        pops.append("runner_control")
+    return pops
+
+
+def _family_state(tags: tuple, fired: set, evaluate) -> str:
+    """Fold per-tag states into one family state. `evaluate(tag)` returns
+    "ok", "not_applicable", "insufficient_sample" or "missing_data"."""
+    if fired & set(tags):
+        return "present"
+    states = [evaluate(t) for t in tags]
+    states = [st for st in states if st != "not_applicable"]
+    if not states:
+        return "not_applicable"
+    if all(st == "ok" for st in states):
+        return "absent"
+    return ("insufficient_sample" if "insufficient_sample" in states
+            else "missing_data")
+
+
+def hitter_tag_states(traits: list[dict], gi: dict) -> dict[str, str]:
+    """State of every hitter tag family for one profile (see TAG_STATES)."""
+    from reliability import tag_supported
+    gi = gi or {}
+    fired = {t.get("tag") for t in traits or []}
+    pops = set(_hitter_populations_from_inputs(gi))
+    pa = gi.get("pa")
+    catching = gi.get("catching") or {}
+    detail = (gi.get("positions") or {}).get("pos_detail") or {}
+    caught = bool(catching) or "C" in detail
+    attempts = int(gi.get("sb") or 0) + int(gi.get("cs") or 0)
+
+    def evaluate(tag: str) -> str:
+        pop = TAG_POPULATION.get(tag, POP_ALL)
+        if pop in pops:
+            return "ok" if tag_supported(tag, pa) else "insufficient_sample"
+        if pop.startswith("catchers_") and not caught:
+            return "not_applicable"
+        if pop == "steal_attempts" and attempts == 0:
+            return "not_applicable"
+        if pop == "catchers_framing":
+            return ("insufficient_sample" if catching.get("framing_taken")
+                    else "missing_data")
+        if pop in ("pa200", "steal_opps", "steal_attempts", "xbt", "splits_qual"):
+            return "insufficient_sample"
+        return "missing_data"
+
+    return {fam: _family_state(tags, fired, evaluate)
+            for fam, tags in HITTER_TAG_FAMILIES.items()}
+
+
+def pitcher_tag_states(traits: list[dict], gi: dict, is_starter: bool,
+                       arsenal_profile: Optional[dict]) -> dict[str, str]:
+    """State of every pitcher tag family for one profile (see TAG_STATES)."""
+    from reliability import tag_supported
+    gi = gi or {}
+    fired = {t.get("tag") for t in traits or []}
+    pops = set(_pitcher_populations_from_inputs(gi, is_starter))
+    n = gi.get("bf_total") if gi.get("bf_total") is not None else gi.get("bf")
+    pool_rows = gi.get("pool_rows") or {}
+    metrics = gi.get("metrics") or {}
+
+    def evaluate(tag: str) -> str:
+        pop = TAG_POPULATION.get(tag, POP_ALL)
+        if pop in _ROLE_POPS and pop not in pops:
+            return "not_applicable"
+        if pop not in pops:
+            return "missing_data" if pop == "tempo" else "insufficient_sample"
+        pool = _PITCHER_TAG_POOL.get(tag)
+        if pool and pool_rows.get(pool) is None:
+            return "insufficient_sample"
+        if tag in _ARSENAL_TAGS and not arsenal_profile:
+            return "insufficient_sample"
+        if tag in ("elite velo", "plus velo", "soft tosser") \
+                and not _is_num(metrics.get("avg_velo_pct")):
+            return "missing_data"
+        return "ok" if tag_supported(tag, n) else "insufficient_sample"
+
+    out = {}
+    for fam, tags in PITCHER_TAG_FAMILIES.items():
+        if fam == "out pitch":
+            if any(t and t.endswith(" out pitch") for t in fired):
+                out[fam] = "present"
+            elif not arsenal_profile:
+                out[fam] = "insufficient_sample"
+            else:
+                out[fam] = ("absent" if tag_supported("any out pitch", n)
+                            else "insufficient_sample")
+            continue
+        out[fam] = _family_state(tags, fired, evaluate)
+    return out
+
+
+def _population_coverage(players: list[dict], weight_key: str) -> dict[str, float]:
+    """Share of a unit's workload in each tag population — the coverage that
+    goes beside a conditional trait_density. A tag's density is its share of
+    the eligible workload; this says how much of the unit that eligible
+    workload is."""
+    pop_w: dict[str, float] = {}
+    total = 0.0
+    for pl in players:
+        w = float(pl.get(weight_key) or 0)
+        if w <= 0:
+            continue
+        total += w
+        for pop in (pl.get("populations") or [POP_ALL]):
+            pop_w[pop] = pop_w.get(pop, 0.0) + w
+    if total <= 0:
+        return {}
+    return {pop: round(w / total, 4) for pop, w in sorted(pop_w.items())}
+
+
+def _family_state_shares(players: list[dict], weight_key: str) -> dict[str, dict[str, float]]:
+    """Workload share of a unit in each state, per tag family. Where `absent`
+    is thin, a missing tag says little about the unit — the obstacle was
+    coverage, not typicality."""
+    acc: dict[str, dict[str, float]] = {}
+    total = 0.0
+    for pl in players:
+        w = float(pl.get(weight_key) or 0)
+        states = pl.get("tag_states")
+        if w <= 0 or not states:
+            continue
+        total += w
+        for fam, st in states.items():
+            d = acc.setdefault(fam, {})
+            d[st] = d.get(st, 0.0) + w
+    if total <= 0:
+        return {}
+    return {fam: {st: round(v / total, 4) for st, v in d.items()}
+            for fam, d in acc.items()}
+
+
+def attach_tag_states(hitters: list[dict], starters: list[dict],
+                      bullpen_arms: list[dict]) -> None:
+    """Set `populations` and `tag_states` on every profile from its traits and
+    gate_inputs. Shared by the build and rederive_traits, so a replay of the
+    gates moves the states with the tags."""
+    for h in hitters or []:
+        gi = h.get("gate_inputs")
+        if gi:
+            h["populations"] = _hitter_populations_from_inputs(gi)
+            h["tag_states"] = hitter_tag_states(h.get("traits") or [], gi)
+    for group, is_starter in ((starters, True), (bullpen_arms, False)):
+        for p in group or []:
+            gi = p.get("gate_inputs")
+            if gi:
+                st = gi.get("is_starter", is_starter)
+                p["populations"] = _pitcher_populations_from_inputs(gi, st)
+                p["tag_states"] = pitcher_tag_states(
+                    p.get("traits") or [], gi, st, p.get("arsenal_profile"))
 
 
 def _trait_density(arms: list[dict], weight_key: str = "bf") -> dict[str, float]:
@@ -2974,6 +3267,18 @@ def _build_team_identity(
         density = _trait_density(bullpen_arms)
         if density:
             identity.setdefault("bullpen", {})["trait_density"] = density
+
+    # Coverage beside every density: how much of the unit each population
+    # is, and per tag family how much of the workload was measured at all.
+    for unit, players, wkey in (("offense", hitter_profiles, "pa"),
+                                ("rotation", starters, "bf"),
+                                ("bullpen", bullpen_arms or [], "bf")):
+        if identity.get(unit, {}).get("trait_density") is None:
+            continue
+        identity[unit]["population_coverage"] = _population_coverage(players, wkey)
+        shares = _family_state_shares(players, wkey)
+        if shares:
+            identity[unit]["family_states"] = shares
 
     # ── Fit: rotation vs defense, bullpen complement ────────────────────────
     rotation_mech = identity["rotation"].get("out_mechanism")
@@ -3600,11 +3905,15 @@ def build_team_portrait(
         _adv = compute_batter_advancement(statcast, season)
         if not _adv.empty:
             qual = _adv[_adv["opps"] >= 10].copy()
-            qual["xbt_pct"] = qual["xbt_rate"].rank(pct=True) * 100.0
+            # Ranked on how often he goes; whether he makes it is evidence.
+            qual["xbt_pct"] = qual["attempt_rate"].rank(pct=True) * 100.0
             pctm = dict(zip(qual["key_mlbam"], qual["xbt_pct"]))
             for r in _adv.itertuples():
                 _advancement_map[int(r.key_mlbam)] = {
-                    "opps": int(r.opps), "advances": int(r.advances),
+                    "opps": int(r.opps), "attempts": int(r.attempts),
+                    "advances": int(r.advances),
+                    "thrown_out": int(r.thrown_out),
+                    "attempt_rate": float(r.attempt_rate),
                     "xbt_rate": float(r.xbt_rate),
                     "xbt_pct": pctm.get(r.key_mlbam),
                     "first_to_third_n": int(r.first_to_third_n),
@@ -3629,11 +3938,13 @@ def build_team_portrait(
         from pitch_aggregates import compute_catcher_framing, load_catcher_poptime
         _fr = compute_catcher_framing(statcast, season)
         for r in _fr.itertuples():
+            # Every catcher's edge-pitch count, so an unranked one reads as
+            # too few pitches (tag_states) rather than as no data.
+            entry = {"framing_taken": int(r.shadow_taken)}
             if pd.notna(getattr(r, "framing_pct", None)):
-                _catcher_map[int(r.catcher)] = {
-                    "framing_pct":   float(r.framing_pct),
-                    "framing_above": float(r.framing_above),
-                }
+                entry.update({"framing_pct":   float(r.framing_pct),
+                              "framing_above": float(r.framing_above)})
+            _catcher_map[int(r.catcher)] = entry
         _pop = load_catcher_poptime(season)
         for r in _pop.itertuples():
             _catcher_map.setdefault(int(r.catcher), {}).update(
@@ -3746,6 +4057,7 @@ def build_team_portrait(
     coverage = _data_coverage(philosophy_metrics)
 
     # ── 14b. Team identity synthesis ────────────────────────────────────────
+    attach_tag_states(hitter_profiles, starters, bullpen_arms)
     team_identity: dict = {}
     try:
         team_identity = _build_team_identity(

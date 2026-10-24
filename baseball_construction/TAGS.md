@@ -44,12 +44,12 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `fast` | H | athleticism | 1,568 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, station-to-station |
 | `high spin efficiency` | P | deception | 941 | all | 100 (spin_efficiency) | — |
 | `plus velo` | P | arsenal | 1,338 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, soft tosser |
-| `quick pop` | H | catcher | 135 | catchers | — (a Savant leaderboard that publishes qualified players only) | — |
+| `quick pop` | H | catcher | 135 | catchers_pop | — (a Savant leaderboard that publishes qualified players only) | — |
 | `ride four-seam` | P | arsenal | 2,219 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `soft tosser` | P | arsenal | 870 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, plus velo |
 | `station-to-station` | H | athleticism | 722 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, fast |
 
-## behavior  ·  32 tags, 22,046 firings
+## behavior  ·  32 tags, 22,044 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
@@ -60,7 +60,7 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `curveball out pitch` | P | arsenal | 321 | all | — | — |
 | `cutter-primary` | P | arsenal | 499 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `deep arsenal` | P | arsenal | 1,436 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | two-pitch |
-| `extra base taker` | H | running-game | 803 | xbt | — (its gate carries a purpose-built floor: 10 advancement chances) | — |
+| `extra base taker` | H | running-game | 801 | xbt | — (its gate carries a purpose-built floor: 10 advancement chances) | — |
 | `first-pitch attacker` | P | sequencing | 723 | all | 75 (FPS_pct) | — |
 | `forkball out pitch` | P | arsenal | 8 | all | — | — |
 | `free swinger` | H | approach | 1,030 | chase | 50 (OSwing_pct) | patient |
@@ -86,21 +86,21 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `unpredictable` | P | sequencing | 738 | all | — (the sequencing pool requires 300 pitches) | — |
 | `zone hunter` | H | approach | 1,028 | all | 50 (OSwing_pct) | — |
 
-## result  ·  29 tags, 22,747 firings
+## result  ·  29 tags, 22,807 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `bad blocker` | H | catcher | 88 | catchers | — (a Savant leaderboard that publishes qualified players only) | good blocker |
+| `bad blocker` | H | catcher | 88 | catchers_blocking | — (a Savant leaderboard that publishes qualified players only) | good blocker |
 | `bat-misser` | P | outcome | 1,538 | all | 75 (K_pct_pitch) | pitch-to-contact |
 | `contact suppressor` | P | outcome | 1,254 | all | 100 (HardHit_allowed) | — |
 | `controls runners` | P | running-game | 391 | runner_control | — (its gate carries a purpose-built floor: 100 runner opportunities) | — |
 | `defensive liability` | H | fielding | 304 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | elite defender, plus defender |
 | `elite control` | P | outcome | 665 | all | 75 (BB_pct_pitch) | plus control, walk prone |
 | `elite defender` | H | fielding | 159 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, plus defender |
-| `elite framer` | H | catcher | 134 | catchers | — (framing requires 500 taken pitches near the edge) | poor framer |
+| `elite framer` | H | catcher | 163 | catchers_framing | — (framing requires 500 taken pitches near the edge) | poor framer |
 | `fly-ball prone` | P | outcome | 480 | all | 100 (GB_pct_pitch) | — |
 | `gap hitter` | H | bat | 533 | spray | 150 (ISO) | — |
-| `good blocker` | H | catcher | 97 | catchers | — (a Savant leaderboard that publishes qualified players only) | bad blocker |
+| `good blocker` | H | catcher | 97 | catchers_blocking | — (a Savant leaderboard that publishes qualified players only) | bad blocker |
 | `ground-baller` | P | outcome | 1,620 | all | 100 (GB_pct_pitch) | — |
 | `high steal rate` | H | running-game | 722 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | low steal rate |
 | `high-K` | H | bat-to-ball | 708 | all | 30 (K_pct) | rarely strikes out |
@@ -111,7 +111,7 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `plus control` | P | outcome | 1,160 | all | 75 (BB_pct_pitch) | elite control, walk prone |
 | `plus defender` | H | fielding | 272 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, elite defender |
 | `plus power` | H | bat | 1,172 | all | 100 (HardHit_pct) | power bat, weak contact |
-| `poor framer` | H | catcher | 124 | catchers | — (framing requires 500 taken pitches near the edge) | elite framer |
+| `poor framer` | H | catcher | 155 | catchers_framing | — (framing requires 500 taken pitches near the edge) | elite framer |
 | `power bat` | H | bat | 1,071 | all | 100 (HardHit_pct) | plus power, weak contact |
 | `rarely strikes out` | H | bat-to-ball | 348 | pa200 | — (its gate carries a purpose-built floor: 200 PA) | high-K |
 | `reverse split` | HP | platoon | 1,505 | splits_qual | — (its gate carries a purpose-built floor: 50 PA/BF on each side) | — |

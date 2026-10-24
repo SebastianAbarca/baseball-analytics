@@ -26,7 +26,7 @@ pass on the machine that has the frames makes every portrait self-contained.
 
 WHAT IT REWRITES
 ----------------
-    players[*].traits, .spectrum, .populations, .limited_sample
+    players[*].traits, .spectrum, .populations, .tag_states, .limited_sample
     team_identity          (trait densities are recomputed from the new tags)
     build_fingerprint      (stamped to its season's current pools and gates)
     gate_fingerprint       (stamped to the current gates)
@@ -176,7 +176,10 @@ def _rederive_portrait(portrait: dict, frames: dict) -> tuple[dict, collections.
             for t in before - after:
                 delta[f"-{t}"] += 1
 
-    # Team identity is a pure aggregation of the tags, so it has to follow.
+    # States and populations read the tags and gate inputs; then team
+    # identity, a pure aggregation of them, has to follow.
+    tp.attach_tag_states(players.get("hitters") or [], players.get("starters") or [],
+                         players.get("bullpen_arms") or [])
     try:
         portrait["team_identity"] = tp._build_team_identity(
             players.get("hitters") or [],
