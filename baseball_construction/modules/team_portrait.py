@@ -3600,11 +3600,15 @@ def build_team_portrait(
         _adv = compute_batter_advancement(statcast, season)
         if not _adv.empty:
             qual = _adv[_adv["opps"] >= 10].copy()
-            qual["xbt_pct"] = qual["xbt_rate"].rank(pct=True) * 100.0
+            # Ranked on how often he goes; whether he makes it is evidence.
+            qual["xbt_pct"] = qual["attempt_rate"].rank(pct=True) * 100.0
             pctm = dict(zip(qual["key_mlbam"], qual["xbt_pct"]))
             for r in _adv.itertuples():
                 _advancement_map[int(r.key_mlbam)] = {
-                    "opps": int(r.opps), "advances": int(r.advances),
+                    "opps": int(r.opps), "attempts": int(r.attempts),
+                    "advances": int(r.advances),
+                    "thrown_out": int(r.thrown_out),
+                    "attempt_rate": float(r.attempt_rate),
                     "xbt_rate": float(r.xbt_rate),
                     "xbt_pct": pctm.get(r.key_mlbam),
                     "first_to_third_n": int(r.first_to_third_n),

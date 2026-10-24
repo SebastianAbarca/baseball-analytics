@@ -133,7 +133,7 @@ GOOD_BLOCKER_PCT   = 85.0   # blocks above average percentile
 BAD_BLOCKER_PCT    = 15.0
 
 # Baserunning advancement (extra bases taken on hits; base-state derived)
-XBT_TAKER_PCT      = 85.0   # xbt_rate percentile among qualified runners
+XBT_TAKER_PCT      = 85.0   # attempt-rate percentile among qualified runners
 XBT_MIN_OPPS       = 10
 
 # Versatility
@@ -341,19 +341,21 @@ def build_hitter_traits(
                                  f"{sb} of {attempts} ({succ:.0%}) — "
                                  "caught often"))
 
-    # `extra base taker` is a BEHAVIOR, not a result: runners thrown out
-    # advancing are dropped as ambiguous by compute_batter_advancement, so the
-    # rate measures willingness to go, with failures censored.
+    # `extra base taker` is a BEHAVIOR: ranked on how often he tries for the
+    # extra base (made it or thrown out, compute_batter_advancement); how
+    # often he makes it is shown as evidence, not gated on.
     adv = advancement or {}
     if (adv.get("xbt_pct") is not None and adv.get("opps", 0) >= XBT_MIN_OPPS
             and float(adv["xbt_pct"]) >= XBT_TAKER_PCT):
+        att, made = adv.get("attempts", 0), adv.get("advances", 0)
         ft_n, ft_o = adv.get("first_to_third_n", 0), adv.get("first_to_third_opps", 0)
         ft = f" — took 3rd on {ft_n}/{ft_o} singles" if ft_o else ""
         traits.append(_trait("extra base taker", "running-game",
-                             adv.get("xbt_rate"), adv["xbt_pct"],
-                             f"{adv.get('advances', 0)} extra bases on "
+                             adv.get("attempt_rate"), adv["xbt_pct"],
+                             f"went for the extra base on {att} of "
                              f"{adv.get('opps', 0)} chances "
-                             f"({adv['xbt_pct']:.0f}th pct){ft}"))
+                             f"({adv['xbt_pct']:.0f}th pct), made it {made} "
+                             f"of {att}{ft}"))
 
     # ── batted-ball direction ──────────────────────────────────────────────
     pull = gm.get("Pull_pct")
@@ -440,9 +442,10 @@ def _catcher_traits(catching: Optional[dict]) -> list[dict]:
     """
     Catcher-craft tags. `catching` is present only for players who caught a
     qualifying number of taken pitches:
-      framing_pct — percentile among qualified catchers of shadow-zone
-                    called-strike rate above league expectation
-      framing_above — raw pp above league (for evidence)
+      framing_pct — percentile among qualified catchers of called strikes
+                    above expected on edge pitches (expected from location,
+                    batter side and count — compute_catcher_framing)
+      framing_above — strikes above expected per 100 edge pitches (evidence)
       pop_pct     — pop time percentile among catchers (lower time = better,
                     so the QUICK gate is a LOW percentile)
     """
@@ -452,15 +455,15 @@ def _catcher_traits(catching: Optional[dict]) -> list[dict]:
     fr = c.get("framing_pct")
     if fr is not None and not (isinstance(fr, float) and np.isnan(fr)):
         above = c.get("framing_above")
-        detail = (f" ({above:+.1f} pp vs league on edge pitches)"
+        detail = (f" ({above:+.1f} strikes per 100 edge pitches vs expected)"
                   if above is not None else "")
         if float(fr) >= ELITE_FRAMER_PCT:
             out.append(_trait("elite framer", "catcher", fr, fr,
-                              f"shadow-zone strike-stealing {fr:.0f}th pct "
+                              f"strikes above expected {fr:.0f}th pct "
                               f"among catchers{detail}"))
         elif float(fr) <= POOR_FRAMER_PCT:
             out.append(_trait("poor framer", "catcher", fr, fr,
-                              f"shadow-zone strike rate {fr:.0f}th pct "
+                              f"strikes above expected {fr:.0f}th pct "
                               f"among catchers{detail}"))
 
     bl = c.get("blocking_pct")
