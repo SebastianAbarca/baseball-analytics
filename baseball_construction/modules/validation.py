@@ -1840,6 +1840,10 @@ def v26_team_comps() -> Result:
       3. every team gets style and deployment comps, the deployment one from
          its own features — identical usage, different hitters, is a top
          deployment comp and not a top style comp
+      4. explanations: every comp feature has a phrase, and each phrase points
+         the way its percentile does — where team_portrait's rank-invert
+         table says a high percentile is FEWER (K%, walks and hard contact
+         allowed), the "high" phrase must say fewer/less
     """
     import sys as _sys
     import numpy as np
@@ -1880,9 +1884,30 @@ def v26_team_comps() -> Result:
     if not np.isnan(f[("power", "Barrel_pct_pct", "mean")]):
         errors.append("a metric measured for one hitter still counted")
 
+    import team_portrait as tp
+    invert = {**tp.BATTING_RANK_INVERT, **tp.PITCHING_RANK_INVERT}
+    feats = {k for doms in (ts.HITTER_DOMAINS, ts.PITCHER_DOMAINS)
+             for items in doms.values() for _, k in items}
+    missing = sorted(feats - set(ts.PHRASES))
+    if missing:
+        errors.append(f"comp features with no phrase: {missing}")
+    checked = 0
+    for key, (_, hi, lo) in ts.PHRASES.items():
+        base = key[:-4] if key.endswith("_pct") else key
+        if base not in invert:
+            continue
+        checked += 1
+        says_fewer = hi.split()[0] in ("fewer", "less")
+        if says_fewer != invert[base]:
+            errors.append(f"{key}: high reads '{hi}' but rank-invert is {invert[base]}")
+    ex = league["T00"]["neighbours"]["offense"][0]
+    if not isinstance(ex.get("shared"), list):
+        errors.append("comps carry no explanation")
+
     passed = not errors
     detail = ("identical rosters comp at 1.00; thin coverage excluded; "
-              "deployment comp kept separate" if passed else "; ".join(errors))
+              f"deployment comp kept separate; {checked} phrase directions match "
+              "the rank tables" if passed else "; ".join(errors))
     return passed, detail
 
 
