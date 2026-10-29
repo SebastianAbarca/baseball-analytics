@@ -39,7 +39,7 @@ from typing import Optional
 
 import numpy as np
 
-METHOD = "hybrid-v1"
+METHOD = "hybrid-v1"   # explanations do not change the comps, so no bump
 MIN_COVERAGE = 0.5
 TAIL_HI, TAIL_LO = 80.0, 20.0
 TOP_N = 3
@@ -70,6 +70,70 @@ PITCHER_DOMAINS: dict[str, list[tuple[str, str]]] = {
                   ("pool:league_sequencing", "entropy_ratio_pct"),
                   ("pool:league_sequencing", "count_shift_pct")],
 }
+# What a HIGH value of each feature means for a team, and what a low one
+# means — (name, high, low). Percentile directions follow the rank-invert
+# tables in team_portrait (K% and walks/hard contact allowed are inverted:
+# a high percentile is FEWER of them); V26 checks the two agree, so a phrase
+# cannot say the opposite of the number behind it.
+PHRASES: dict[str, tuple[str, str, str]] = {
+    # hitters
+    "Barrel_pct_pct":   ("barrels", "more barrels", "fewer barrels"),
+    "HardHit_pct_pct":  ("hard contact", "more hard contact", "less hard contact"),
+    "ISO_pct":          ("isolated power", "more isolated power", "less isolated power"),
+    "EV_avg_pct":       ("exit velocity", "higher exit velocity", "lower exit velocity"),
+    "K_pct_pct":        ("strikeouts", "fewer strikeouts", "more strikeouts"),
+    "Contact_pct_pct":  ("contact", "more contact", "less contact"),
+    "Whiff_pct_pct":    ("whiffs", "more whiffs", "fewer whiffs"),
+    "OSwing_pct_pct":   ("chasing", "more chasing", "less chasing"),
+    "ZSwing_pct_pct":   ("zone swings", "more zone swings", "fewer zone swings"),
+    "BB_pct_pct":       ("walks", "more walks", "fewer walks"),
+    "FPS_pct_pct":      ("first-pitch swings", "more first-pitch swings", "fewer first-pitch swings"),
+    "Pull_pct_pct":     ("pulled balls", "more pulled balls", "fewer pulled balls"),
+    "Oppo_pct_pct":     ("opposite-field balls", "more opposite-field balls", "fewer opposite-field balls"),
+    "BatGB_pct_pct":    ("ground balls", "more ground balls", "fewer ground balls"),
+    "GapTend_pct_pct":  ("gap hits", "more gap hits", "fewer gap hits"),
+    "sprint_speed_pct": ("speed", "faster runners", "slower runners"),
+    "attempt_rate_pct": ("steal attempts", "more steal attempts", "fewer steal attempts"),
+    "xbt_pct":          ("extra-base attempts", "more extra-base attempts", "fewer extra-base attempts"),
+    # pitchers
+    "avg_velo_pct":         ("velocity", "more velocity", "less velocity"),
+    "AvgSpinRate_pct":      ("spin", "more spin", "less spin"),
+    "Whiff_pct_pitch_pct":  ("whiffs", "more whiffs", "fewer whiffs"),
+    "SwStr_per_velo_pct":   ("whiffs for their velocity", "more whiffs than velocity predicts",
+                             "fewer whiffs than velocity predicts"),
+    "K_pct_pitch_pct":      ("strikeouts", "more strikeouts", "fewer strikeouts"),
+    "BB_pct_pitch_pct":     ("walks", "fewer walks", "more walks"),
+    "GB_pct_pitch_pct":     ("ground balls", "more ground balls", "fewer ground balls"),
+    "HardHit_allowed_pct":  ("hard contact allowed", "less hard contact allowed",
+                             "more hard contact allowed"),
+    "Zone_pct_pct":         ("zone rate", "more pitches in the zone", "fewer pitches in the zone"),
+    "FirstPitchStrike_pct": ("first-pitch strikes", "more first-pitch strikes", "fewer first-pitch strikes"),
+    "CSW_pct_pct":          ("called and swinging strikes", "more called and swinging strikes",
+                             "fewer called and swinging strikes"),
+    "TunnelScore_pct":      ("tunneling", "better tunneling", "weaker tunneling"),
+    "spin_efficiency_pct":  ("spin efficiency", "more efficient spin", "less efficient spin"),
+    "extension_pct":        ("extension", "longer extension", "shorter extension"),
+    "ArsenalDiversity_pct": ("arsenal depth", "deeper arsenals", "shallower arsenals"),
+    "entropy_ratio_pct":    ("sequencing", "less predictable sequencing", "more predictable sequencing"),
+    "count_shift_pct":      ("count-dependent mixing", "more count-dependent mixes", "steadier mixes"),
+    # deployment
+    "top9_share":           ("lineup stability", "a more fixed lineup", "a more rotated lineup"),
+    "bench_share":          ("bench time", "more bench playing time", "less bench playing time"),
+    "positions_per_player": ("position switching", "more position switching", "less position switching"),
+    "platoon_spread":       ("platooning", "more platooning", "less platooning"),
+    "top5_share":           ("rotation stability", "a more stable rotation", "more starters in the mix"),
+    "bf_per_start":         ("start length", "longer starts", "shorter starts"),
+    "starters_used":        ("starters used", "more starters used", "fewer starters used"),
+    "top3_share":           ("bullpen concentration", "a more top-heavy bullpen", "a more spread-out bullpen"),
+    "bf_per_game":          ("relief outing length", "longer relief outings", "shorter relief outings"),
+    "leverage_spread":      ("leverage roles", "sharper leverage roles", "flatter leverage roles"),
+    "arms_used":            ("relievers used", "more relievers used", "fewer relievers used"),
+}
+# Explanations name at most this many shared traits, one per domain, each
+# standing out by at least MIN_Z for both teams.
+EXPLAIN_N = 3
+MIN_Z = 0.5
+
 # unit -> (players key, weight key, domains)
 UNITS = {
     "offense":  ("hitters",      "pa", HITTER_DOMAINS),
@@ -163,10 +227,11 @@ def deployment_features(players: list[dict], unit: str) -> dict[tuple, float]:
     return out
 
 
-def _standardise(feats: dict[str, dict], budget: bool) -> tuple[list[str], np.ndarray]:
-    """Teams x features, z-scored across teams; with `budget`, each domain's
-    features share one unit of weight (1/sqrt(n) each, so a domain's squared
-    contribution is the same however many metrics it has)."""
+def _standardise(feats: dict[str, dict], budget: bool):
+    """(teams, keys, Z, w): teams x features z-scored across teams, and the
+    per-feature weight. With `budget`, each domain's features share one unit
+    of weight (1/sqrt(n) each, so a domain's squared contribution is the same
+    however many metrics it has); similarity is computed on Z * w."""
     keys = sorted({k for f in feats.values() for k in f})
     teams = sorted(feats)
     X = np.array([[feats[t].get(k, np.nan) for k in keys] for t in teams], float)
@@ -174,10 +239,41 @@ def _standardise(feats: dict[str, dict], budget: bool) -> tuple[list[str], np.nd
         mu, sd = np.nanmean(X, 0), np.nanstd(X, 0)
     sd[~(sd > 0)] = np.nan
     Z = (X - mu) / sd
+    w = np.ones(len(keys))
     if budget:
         per = collections.Counter(k[0] for k in keys)
-        Z = Z * np.array([1 / np.sqrt(per[k[0]]) for k in keys])
-    return teams, Z
+        w = np.array([1 / np.sqrt(per[k[0]]) for k in keys])
+    return teams, keys, Z, w
+
+
+def explain(keys: list, w: np.ndarray, a: np.ndarray, b: np.ndarray) -> dict:
+    """
+    Why two units are close: the metrics on which BOTH stand out the same
+    way (|z| >= MIN_Z for each), ranked by what they add to the similarity,
+    one per domain; and the metric that most pulls them apart. Reads each
+    metric's team MEAN — the tails move the score but have no plain-words
+    reading. `a`, `b` are unweighted z rows. Returns
+    {"shared": [phrase, ...], "differ": metric name or None}.
+    """
+    rows = []
+    for i, k in enumerate(keys):
+        if len(k) == 3 and k[2] != "mean":
+            continue
+        metric, za, zb = k[1], a[i], b[i]
+        if metric in PHRASES and np.isfinite(za) and np.isfinite(zb):
+            rows.append((za * zb * w[i] ** 2, metric, k[0], za, zb))
+    shared, used = [], set()
+    for c, metric, dom, za, zb in sorted(rows, key=lambda r: -r[0]):
+        if len(shared) >= EXPLAIN_N or c <= 0:
+            break
+        if min(abs(za), abs(zb)) < MIN_Z or (dom in used and dom != "deployment"):
+            continue
+        _, hi, lo = PHRASES[metric]
+        shared.append(hi if za > 0 else lo)
+        used.add(dom)
+    worst = min(rows, key=lambda r: r[0], default=None)
+    differ = PHRASES[worst[1]][0] if worst is not None and worst[0] < 0 else None
+    return {"shared": shared, "differ": differ}
 
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
@@ -230,20 +326,24 @@ def compute_positions(league: dict[str, dict], players: dict[str, dict]) -> None
         return
     for unit, (grp, wkey, domains) in UNITS.items():
         style = {t: style_features(players[t].get(grp) or [], wkey, domains) for t in teams}
-        order, Z = _standardise(style, budget=True)
-        sims = _similarities(order, Z)
+        order, keys, Z, w = _standardise(style, budget=True)
+        sims = _similarities(order, Z * w)
         uq = _uniqueness(sims)
         dep = {t: deployment_features(players[t].get(grp) or [], unit) for t in teams}
-        d_order, DZ = _standardise(dep, budget=False)
-        d_sims = _similarities(d_order, DZ)
+        d_order, d_keys, DZ, dw = _standardise(dep, budget=False)
+        d_sims = _similarities(d_order, DZ * dw)
         for t in teams:
             near = sorted(sims[t].items(), key=lambda kv: -kv[1])[:TOP_N]
+            i = order.index(t)
             league[t].setdefault("neighbours", {})[unit] = [
-                {"team": o, "similarity": round(s, 4)} for o, s in near]
+                {"team": o, "similarity": round(s, 4),
+                 **explain(keys, w, Z[i], Z[order.index(o)])} for o, s in near]
             league[t].setdefault("uniqueness", {})[unit] = uq.get(t, {})
             d_near = sorted(d_sims.get(t, {}).items(), key=lambda kv: -kv[1])[:TOP_N]
+            di = d_order.index(t)
             league[t].setdefault("deployment_neighbours", {})[unit] = [
-                {"team": o, "similarity": round(s, 4)} for o, s in d_near]
+                {"team": o, "similarity": round(s, 4),
+                 **explain(d_keys, dw, DZ[di], DZ[d_order.index(o)])} for o, s in d_near]
     league["_similarity"] = {
         "method": METHOD, "min_coverage": MIN_COVERAGE, "tails": [TAIL_LO, TAIL_HI],
         "domains": {u: {d: [k for _, k in items] for d, items in doms.items()}

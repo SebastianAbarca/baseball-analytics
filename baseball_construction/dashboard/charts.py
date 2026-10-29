@@ -2987,6 +2987,17 @@ def kind_legend(title: str | None = None):
                     style={"lineHeight": "1.6"})
 
 
+def _comp_why(comp: dict) -> str:
+    """Hover text for one comp: what the two units share, and where they
+    differ most. Empty for league files from before explanations existed."""
+    parts = []
+    if comp.get("shared"):
+        parts.append("Both: " + ", ".join(comp["shared"]) + ".")
+    if comp.get("differ"):
+        parts.append(f"Most different on {comp['differ']}.")
+    return " ".join(parts)
+
+
 def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
     """The numbers behind the one-word comp strength."""
     top = near[0] if near else {}
@@ -3223,18 +3234,26 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
         uq = (pos.get("uniqueness") or {}).get(unit) or {}
         if not near:
             return fallback
-        names = ", ".join(x.get("team", "") for x in near[:2])
+        # Each name carries why it is a comp (team_similarity.explain).
+        name_spans = []
+        for i, x in enumerate(near[:2]):
+            if i:
+                name_spans.append(", ")
+            why = _comp_why(x)
+            name_spans.append(html.Span(x.get("team", ""), title=why,
+                                        style={"cursor": "help"} if why else None))
+        names = html.Span(name_spans)
         # Qualify the comparison rather than answer a different question. The
         # word is banded against this unit's own spread of best-comp
         # similarities; the exact figure and that spread ride on the hover, so
         # the headline stays readable without hiding the number.
         band = uq.get("band")
         if not band:
-            return f"Plays like {names}"
+            return html.Span(["Plays like ", names])
         word = {"close": "close comp", "fair": "fair comp",
                 "loose": "loose comp"}.get(band, band)
         return html.Span([
-            f"Plays like {names} · ",
+            "Plays like ", names, " · ",
             html.Span(word, title=_comp_tooltip(unit, near, uq),
                       style={"borderBottom": "1px dotted currentColor",
                              "cursor": "help"}),
@@ -3244,16 +3263,27 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
     # (team_similarity: deployment carries little year to year, so mixing it
     # in would blur the style comp). It gets its own quiet line.
     def _with_usage(unit: str, sub):
-        dep = ((position or {}).get("deployment_neighbours") or {}).get(unit) or []
-        if not dep:
-            return sub
-        used = html.Div(
-            "Used like " + ", ".join(x.get("team", "") for x in dep[:2]),
-            title=("Closest by deployment — workload concentration, starts and "
-                   "leverage — at " + ", ".join(f"{x.get('team')} {x.get('similarity', 0):.2f}"
-                                                for x in dep[:3])),
-            style={"cursor": "help"})
-        return html.Div([html.Div(sub), used]) if sub else used
+        pos = position or {}
+        lines = [html.Div(sub)] if sub else []
+        # What the unit shares with its closest comp, in words — the
+        # comparison is over dozens of features, so name the few that carry it.
+        top = ((pos.get("neighbours") or {}).get(unit) or [None])[0]
+        if top and top.get("shared"):
+            lines.append(html.Div(
+                f"Shared with {top.get('team')}: " + " · ".join(top["shared"]),
+                title=_comp_why(top)))
+        dep = (pos.get("deployment_neighbours") or {}).get(unit) or []
+        if dep:
+            why = (" — " + ", ".join(dep[0]["shared"])) if dep[0].get("shared") else ""
+            lines.append(html.Div(
+                "Used like " + ", ".join(x.get("team", "") for x in dep[:2]) + why,
+                title=("Closest by deployment — workload concentration, starts and "
+                       "leverage — at " + ", ".join(f"{x.get('team')} {x.get('similarity', 0):.2f}"
+                                                    for x in dep[:3])),
+                style={"cursor": "help"}))
+        if not lines:
+            return None
+        return lines[0] if len(lines) == 1 else html.Div(lines)
 
     cols = dbc.Row([
         _identity_col("Offense",  _headline("offense"),
