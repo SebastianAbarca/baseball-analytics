@@ -262,9 +262,13 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
         "HR_FB_pct_pct":  0.10,
         "EV_avg_pct":     0.10,
     }
-    # K_pct_raw is the non-inverted K% percentile (higher = more strikeouts).
-    # The spectrum code inverts it below (100 - val) so higher raw K% → lower contact score.
-    contact_weights = {"Contact_pct_pct": 0.25, "K_pct_raw_pct": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
+    # K_pct_raw_pct is the non-inverted K% percentile (higher = more
+    # strikeouts); it is inverted below so more Ks means a lower contact score.
+    # The on-base term read `OBP_ISO_gap_pct`, a key nothing ever produced, so
+    # its 0.10 weight was always dropped; OBP_SLG_gap_pct (on-base minus
+    # slugging, "on-base outweighs power") is the stored measure it meant.
+    contact_weights = {"Contact_pct_pct": 0.25, "K_pct_raw_pct": 0.20, "AVG_pct": 0.20,
+                       "OBP_SLG_gap_pct": 0.10}
 
     # Power score: weighted sum of power metrics (missing → 0 weight)
     power_sum = power_w = 0.0

@@ -350,7 +350,7 @@ def v5_hitter_archetypes() -> Result:
         "Contact_pct_pct":   20.0,
         "K_pct_pct":         80.0,
         "AVG_pct":       25.0,
-        "OBP_ISO_gap_pct": 30.0,
+        "OBP_SLG_gap_pct": 30.0,
     }
     result = classify_spectrum(power_metrics)
     # Spectrum type may be "Power" or a sub-label depending on score ranges
