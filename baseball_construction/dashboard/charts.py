@@ -769,7 +769,7 @@ def hitter_plane(portrait: dict) -> go.Figure:
     pts = []
     for h in hitters:
         m = (h.get("gate_inputs") or {}).get("metrics") or {}
-        power, contact, result = m.get("ISO"), m.get("Contact_pct"), m.get("xwOBA")
+        power, contact, result = m.get("ISO_pct"), m.get("Contact_pct_pct"), m.get("xwOBA_pct")
         if power is None or contact is None:
             continue
         pts.append((h, float(power), float(contact),
@@ -1147,11 +1147,11 @@ _ARCHETYPE_AFFINITIES: list[tuple[str, list[str], list[str]]] = [
     (
         "TTO",
         ["Power", "Walk Rate"],
-        ["Contact"],           # TTO loves Ks → invert Contact (Contact = inv K%)
+        ["Avoids Ks"],         # TTO strikes out: invert the fewer-Ks percentile
     ),
     (
         "Contact",
-        ["Contact", "Contact Rate", "Contact-First"],
+        ["Avoids Ks", "Contact Rate", "Contact-First"],
         [],
     ),
     (
@@ -1299,7 +1299,7 @@ _PLAYER_METRIC_GROUPS = {
     "Hard Hit":     "Offense",
     "Quality":      "Offense",
     "Walk Rate":    "Patience",
-    "Contact":      "Contact",
+    "Avoids Ks":    "Contact",
     "Contact Rate": "Contact",
     "Contact-First":"Contact",
     "Aggression":   "Approach",
@@ -4941,7 +4941,7 @@ def compare_tag_matrix(rows: list[dict]):
 # Percentile axes, in a deliberate order: what the player brings, then what
 # happens as a result. Hitters and pitchers share no axis at all, which is why
 # a comparison cannot mix the two sides.
-_CMP_AXES_H = ["Power", "Hard Hit", "Barrel Rate", "Contact", "Contact Rate",
+_CMP_AXES_H = ["Power", "Hard Hit", "Barrel Rate", "Avoids Ks", "Contact Rate",
                "Walk Rate", "Zone Swing", "Aggression", "Speed", "Quality",
                "Contact-First"]
 _CMP_AXES_P = ["avg_velo_pct", "K_pct_pct", "Whiff_pct_pct", "CSW_pct_pct",

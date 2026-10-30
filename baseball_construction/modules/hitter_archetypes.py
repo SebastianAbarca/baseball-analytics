@@ -32,12 +32,12 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 COMPLETE_THRESHOLDS: dict[str, float] = {
-    "xwOBA":    70.0,   # overall expected offensive quality
-    "OBP":      70.0,   # on-base ability
-    "ISO":      70.0,   # real power
-    "BB_pct":   65.0,   # plate discipline
-    "Barrel_pct": 65.0, # consistent hard contact quality
-    "AVG":      75.0,   # batting average — output is king. Replaces Contact_pct:
+    "xwOBA_pct":    70.0,   # overall expected offensive quality
+    "OBP_pct":      70.0,   # on-base ability
+    "ISO_pct":      70.0,   # real power
+    "BB_pct_pct":   65.0,   # plate discipline
+    "Barrel_pct_pct": 65.0, # consistent hard contact quality
+    "AVG_pct":      75.0,   # batting average — output is king. Replaces Contact_pct:
                         # Contact% measures process (swing contact rate) but doesn't
                         # guarantee useful contact. AVG measures actual results.
 }
@@ -47,15 +47,15 @@ COMPLETE_THRESHOLDS: dict[str, float] = {
 COMPLETE_K_CEILING = 0.30
 
 TTO_THRESHOLDS: dict[str, float] = {
-    "K_pct_raw": 55.0,   # above average K rate (non-inverted pct — higher = more Ks)
-    "BB_pct":    65.0,   # clearly above average walks
-    "ISO":       65.0,   # clearly above average power
+    "K_pct_raw_pct": 55.0,   # above average K rate (non-inverted pct — higher = more Ks)
+    "BB_pct_pct":    65.0,   # clearly above average walks
+    "ISO_pct":       65.0,   # clearly above average power
 }
 
 # Aggressive modifier — high FPS AND high chase rate (2-gate, no BB requirement)
 AGGRESSIVE_THRESHOLDS: dict[str, float] = {
-    "FPS_pct":    65.0,   # first-pitch swing % > 65th pct
-    "OSwing_pct": 60.0,   # chase rate > 60th pct
+    "FPS_pct_pct":    65.0,   # first-pitch swing % > 65th pct
+    "OSwing_pct_pct": 60.0,   # chase rate > 60th pct
 }
 
 # Speed tiers (raw ft/sec thresholds)
@@ -63,9 +63,6 @@ SPEED_ELITE_THRESHOLD   = 29.0   # ft/sec — top ~10%
 SPEED_FAST_THRESHOLD    = 28.0   # ft/sec — top ~35%
 SPEED_AVERAGE_THRESHOLD = 26.5   # ft/sec — above slow
 
-# Lucky / Unlucky (LuckDelta = xwOBA − wOBA percentile, positive = unlucky)
-LUCKY_THRESHOLD   = 25.0   # bottom 25% luck delta → luckier than expected
-UNLUCKY_THRESHOLD = 75.0   # top 25% luck delta → unluckier than expected
 
 # Contact Quality (composite of Barrel_pct + HardHit_pct percentiles)
 CONTACT_QUALITY_PLUS_THRESHOLD   = 70.0  # top 30% → "Plus Contact"
@@ -260,14 +257,14 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
     # HR_FB_pct and EV_90_pct from the original spec were never in our data.
     power_weights   = {
         "ISO_pct":    0.35,
-        "Barrel_pct": 0.25,
-        "HardHit_pct":0.20,
-        "HR_FB_pct":  0.10,
-        "EV_avg":     0.10,
+        "Barrel_pct_pct": 0.25,
+        "HardHit_pct_pct":0.20,
+        "HR_FB_pct_pct":  0.10,
+        "EV_avg_pct":     0.10,
     }
     # K_pct_raw is the non-inverted K% percentile (higher = more strikeouts).
     # The spectrum code inverts it below (100 - val) so higher raw K% → lower contact score.
-    contact_weights = {"Contact_pct": 0.25, "K_pct_raw": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
+    contact_weights = {"Contact_pct_pct": 0.25, "K_pct_raw_pct": 0.20, "AVG_pct": 0.20, "OBP_ISO_gap_pct": 0.10}
 
     # Power score: weighted sum of power metrics (missing → 0 weight)
     power_sum = power_w = 0.0
@@ -283,7 +280,7 @@ def compute_spectrum(metrics: dict[str, float]) -> Optional[float]:
         v = metrics.get(k)
         if v is None or np.isnan(float(v)):
             continue
-        val = (100.0 - float(v)) if k == "K_pct_raw" else float(v)
+        val = (100.0 - float(v)) if k == "K_pct_raw_pct" else float(v)
         contact_sum += val * w
         contact_w   += w
 
@@ -428,26 +425,6 @@ def compute_speed_tier(sprint_speed_raw: Optional[float]) -> Optional[str]:
     return "Slow"
 
 
-def compute_lucky_unlucky(metrics: dict[str, float]) -> Optional[str]:
-    """
-    Lucky / Unlucky modifier based on xwOBA − wOBA percentile rank.
-
-    LuckDelta = xwOBA − wOBA (from est_woba_minus_woba_diff in FG batting CSV).
-    After cross-player normalization, higher percentile = more unlucky.
-
-    Returns 'Lucky' | 'Unlucky' | None.
-    Only fires for players with Statcast coverage (LuckDelta available).
-    """
-    luck = metrics.get("LuckDelta")
-    if luck is None:
-        return None
-    if float(luck) <= LUCKY_THRESHOLD:
-        return "Lucky"
-    if float(luck) >= UNLUCKY_THRESHOLD:
-        return "Unlucky"
-    return None
-
-
 def compute_contact_quality(metrics: dict[str, float]) -> Optional[str]:
     """
     Contact Quality tier based on Barrel% and Hard Hit% percentile ranks.
@@ -457,8 +434,8 @@ def compute_contact_quality(metrics: dict[str, float]) -> Optional[str]:
 
     Returns 'Plus Contact' | 'Weak Contact' | None (average or no data).
     """
-    barrel   = metrics.get("Barrel_pct")
-    hard_hit = metrics.get("HardHit_pct")
+    barrel   = metrics.get("Barrel_pct_pct")
+    hard_hit = metrics.get("HardHit_pct_pct")
 
     if barrel is None and hard_hit is None:
         return None
@@ -483,8 +460,8 @@ def compute_plate_discipline(metrics: dict[str, float]) -> Optional[str]:
     Returns 'Elite Discipline' | 'Disciplined' | 'Free Swinger' | None (average).
     Skips Average to reduce label clutter.
     """
-    bb_pct   = metrics.get("BB_pct")     # already percentile-ranked
-    oswing   = metrics.get("OSwing_pct") # higher = chases more (bad)
+    bb_pct   = metrics.get("BB_pct_pct")     # already percentile-ranked
+    oswing   = metrics.get("OSwing_pct_pct") # higher = chases more (bad)
 
     if bb_pct is None:
         return None
@@ -524,8 +501,8 @@ def compute_table_setter(
     Captures: Myles Straw, Tommy Edman, early-career Altuve types.
     A Complete Hitter would have ISO > 45 and thus NOT be a Table Setter.
     """
-    obp = metrics.get("OBP")   # stripped from OBP_pct after normalization
-    iso = metrics.get("ISO")   # stripped from ISO_pct after normalization
+    obp = metrics.get("OBP_pct")
+    iso = metrics.get("ISO_pct")
 
     if obp is None or iso is None:
         return False
@@ -551,7 +528,7 @@ def compute_plus_power(metrics: dict[str, float]) -> bool:
     Caller is responsible for checking primary archetype before applying
     (suppressed for T1, T2, T5 in build_hitter_profile).
     """
-    iso = metrics.get("ISO")   # stripped from ISO_pct after normalization
+    iso = metrics.get("ISO_pct")
     if iso is None:
         return False
     return float(iso) >= PLUS_POWER_ISO_THRESHOLD
@@ -576,8 +553,8 @@ def compute_gap_hitter(metrics: dict[str, float]) -> bool:
 
     Requires Statcast spray chart data (hc_x/hc_y); returns False if unavailable.
     """
-    xb  = metrics.get("XB_pct")
-    gap = metrics.get("GapTend_pct")
+    xb  = metrics.get("XB_pct_pct")
+    gap = metrics.get("GapTend_pct_pct")
     if xb is None or gap is None:
         return False
     return float(xb) >= GAP_HITTER_XB_THRESHOLD and float(gap) >= GAP_HITTER_GAP_THRESHOLD
@@ -695,7 +672,6 @@ def build_hitter_profile(
     # fires — Gap Hitter is the spray-confirmed, more specific label.
     plus_power       = compute_plus_power(metrics) if (is_contact and not gap_hitter) else False
     speed_tier       = compute_speed_tier(sprint_speed_raw)
-    lucky_unlucky    = compute_lucky_unlucky(metrics)
     contact_quality  = compute_contact_quality(metrics)
     plate_discipline = compute_plate_discipline(metrics)
     table_setter     = compute_table_setter(metrics, sprint_speed_raw)
@@ -709,7 +685,7 @@ def build_hitter_profile(
     if is_complete:
         # T1 gates: Barrel% ≥ 65, Contact% ≥ 55, BB% ≥ 65
         # Implied → suppress Gap Hitter, Plus Contact, Disciplined
-        # Keep: speed, Lucky/Unlucky, Aggressive, Elite Discipline, Disruptive
+        # Keep: speed, Aggressive, Elite Discipline, Disruptive
         gap_hitter = False
         if contact_quality == "Plus Contact":
             contact_quality = None
@@ -720,7 +696,7 @@ def build_hitter_profile(
     elif is_tto:
         # T2 gates: K% ≥ 55 (no contact implied), BB% ≥ 65 (discipline implied)
         # Implied → suppress Weak Contact, Disciplined
-        # Keep: speed, Lucky/Unlucky, Elite Discipline, Aggressive, Disruptive
+        # Keep: speed, Elite Discipline, Aggressive, Disruptive
         if contact_quality == "Weak Contact":
             contact_quality = None
         if plate_discipline == "Disciplined":
@@ -734,7 +710,6 @@ def build_hitter_profile(
             "gap_hitter":       gap_hitter,
             "plus_power":       plus_power,
             "speed":            speed_tier,
-            "lucky_unlucky":    lucky_unlucky,
             "contact_quality":  contact_quality,
             "plate_discipline": plate_discipline,
             "table_setter":     table_setter,
