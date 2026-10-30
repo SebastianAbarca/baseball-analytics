@@ -1071,13 +1071,17 @@ def _classify_hitters(
         if pd.isna(player_id):
             continue
 
-        # Era percentiles, one key each: the ranked column's name
-        # (metric_contracts). This used to also store every key with "_pct"
-        # stripped, so `K_pct` meant the K% percentile while `K` was the raw
-        # rate and `ISO`, `AVG`, `SB` were percentiles under raw names.
+        # Era percentiles, one key each: the ranked column's name, and only
+        # columns metric_contracts declares as percentiles — a "_pct" suffix
+        # is not enough, since raw rates carry one too (BB_pct is the walk
+        # rate, BB_pct_pct its rank). This used to store every "_pct" column
+        # and its stripped twin, so `BB_pct` was the raw rate or the
+        # percentile depending on column order, `K` was the raw K rate, and
+        # `ISO`, `AVG`, `SB` were percentiles under raw names.
+        from metric_contracts import lookup as _contract
         metrics: dict[str, float] = {}
         for col in team_bat.columns:
-            if col.endswith("_pct"):
+            if col.endswith("_pct") and _contract("H.metrics", col) is not None:
                 val = row.get(col)
                 if val is not None and not pd.isna(val):
                     metrics[col] = float(val)
@@ -1942,9 +1946,10 @@ def _compute_projected_profile(
 
         row = prior_map[pid]
         metrics: dict[str, float] = {}
+        from metric_contracts import lookup as _contract
         for col in pct_cols_prior:
             val = row.get(col)
-            if val is not None and not pd.isna(val):
+            if val is not None and not pd.isna(val) and _contract("H.metrics", col) is not None:
                 metrics[col] = float(val)
 
         k_ni = row.get("K_pct_raw_pct_noninv")
