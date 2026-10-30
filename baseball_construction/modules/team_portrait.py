@@ -2727,10 +2727,17 @@ def _hitter_populations(
     from hitter_traits import (PLATOON_MIN_PA, RARELY_K_MIN_PA, XBT_MIN_OPPS,
                                STEAL_RATE_MIN_ATTEMPTS)
 
+    from metric_contracts import lookup as _contract
     pops = [POP_ALL]
     sm = season_metrics or {}
 
+    # Both lookups refuse a name metric_contracts does not declare. A stale
+    # name does not fail on its own — it reads as "no value" and quietly
+    # empties a population; schema 25's rename did exactly that to chase and
+    # spray until this check existed.
     def _has(key: str) -> bool:
+        if _contract("H.season", key) is None:
+            raise KeyError(f"undeclared season percentile {key!r}")
         v = sm.get(key)
         return v is not None and not (isinstance(v, float) and np.isnan(v))
 
@@ -2756,12 +2763,14 @@ def _hitter_populations(
     m = metrics or {}
 
     def _hasm(key: str) -> bool:
+        if _contract("H.metrics", key) is None:
+            raise KeyError(f"undeclared era percentile {key!r}")
         v = m.get(key)
         return v is not None and not (isinstance(v, float) and np.isnan(v))
 
-    if _hasm("OSwing_pct"):
+    if _hasm("OSwing_pct_pct"):
         pops.append("chase")
-    if _hasm("XB_pct") and _hasm("GapTend_pct"):
+    if _hasm("XB_pct_pct") and _hasm("GapTend_pct_pct"):
         pops.append("spray")
     if attempt_rate_pct is not None and not (
             isinstance(attempt_rate_pct, float) and np.isnan(attempt_rate_pct)):
