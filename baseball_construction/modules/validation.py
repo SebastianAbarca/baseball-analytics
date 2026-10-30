@@ -58,6 +58,7 @@ NEEDS = {
     "V20": "this machine's league caches",
     "V21": "this machine's fg_batting roots",
     "V22": "the database",
+    "V27": "this machine's portraits",
 }
 
 
@@ -1912,6 +1913,117 @@ def v26_team_comps() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V27 — Percentile contracts
+# ---------------------------------------------------------------------------
+
+def _portrait_scopes(p: dict):
+    """(scope, values dict) for every player value group in a portrait."""
+    for h in (p.get("players") or {}).get("hitters") or []:
+        gi = h.get("gate_inputs") or {}
+        yield "H.metrics", gi.get("metrics")
+        yield "H.season", gi.get("season_metrics")
+        yield "H.catching", gi.get("catching")
+        yield "H.adv", gi.get("advancement")
+        yield "H.gi", {k: gi.get(k) for k in ("attempt_rate_pct", "sprint_speed_raw")}
+    for grp in ("starters", "bullpen_arms"):
+        for x in (p.get("players") or {}).get(grp) or []:
+            gi = x.get("gate_inputs") or {}
+            yield "P.metrics", gi.get("metrics")
+            yield "P.tempo", gi.get("tempo")
+            yield "P.rc", gi.get("runner_control")
+            for frame, row in (gi.get("pool_rows") or {}).items():
+                yield f"P.pool.{frame}", row
+
+
+def v27_percentile_contracts() -> Result:
+    """
+    Every number a portrait stores is declared (metric_contracts): either a
+    percentile — with what it ranks, its cohort and which way is up — or a
+    raw value with its unit. Across every portrait on this machine:
+      1. no undeclared numeric key, in any player value group
+      2. every declared percentile stays within 0–100
+      3. each percentile points the way its contract says: where its raw
+         value is stored beside it, the within-season rank correlation is
+         positive for a plain percentile and negative for an inverted one,
+         |rho| >= 0.9 every season (season cohorts re-rank each year, so
+         pooling seasons would blur a correct direction)
+      4. the rank tables team_portrait uses ARE the contracts', and the comp
+         phrases (team_similarity) agree with the contract's direction
+    """
+    import collections
+    import json
+    import sys as _sys
+    import numpy as np
+    from scipy.stats import spearmanr
+    import metric_contracts as mc
+    import team_portrait as tp
+    from ingest import PROCESSED_DIR
+
+    errors: list[str] = []
+    undeclared: collections.Counter = collections.Counter()
+    out_of_range: collections.Counter = collections.Counter()
+    pairs: dict[tuple, list] = collections.defaultdict(list)
+    files = sorted((PROCESSED_DIR / "portraits").glob("*_*.json"))
+    for f in files:
+        p = json.loads(f.read_text())
+        season = p.get("season")
+        for scope, vals in _portrait_scopes(p):
+            for k, v in (vals or {}).items():
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+                    continue
+                c = mc.lookup(scope, k)
+                if c is None:
+                    if k not in mc.RAW.get(scope, {}):
+                        undeclared[(scope, k)] += 1
+                    continue
+                if not -1e-9 <= v <= 100 + 1e-9:
+                    out_of_range[(scope, k)] += 1
+                if k == c.key and c.raw:
+                    r = (vals or {}).get(c.raw)
+                    if isinstance(r, (int, float)) and r == r:
+                        pairs[(scope, k, season)].append((v, r))
+    if undeclared:
+        errors.append(f"undeclared keys: {sorted(undeclared)[:8]}")
+    if out_of_range:
+        errors.append(f"percentiles outside 0-100: {sorted(out_of_range)[:8]}")
+    checked: set = set()
+    for (scope, k, season), xs in pairs.items():
+        if len(xs) < 30:
+            continue
+        a = np.array(xs, float)
+        rho = spearmanr(a[:, 0], a[:, 1])[0]
+        c = mc.lookup(scope, k)
+        want = -1 if c.inverted else 1
+        checked.add((scope, k))
+        if not np.isfinite(rho) or rho * want < 0.9:
+            errors.append(f"{scope}:{k} {season} rho {rho:+.2f} vs raw {c.raw} "
+                          f"({'inverted' if c.inverted else 'plain'})")
+
+    if tp.BATTING_RANK_INVERT != mc.rank_invert("H.metrics") \
+            or tp.PITCHING_RANK_INVERT != mc.rank_invert("P.metrics"):
+        errors.append("team_portrait rank tables differ from the contracts")
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import team_similarity as ts
+    lower = ("fewer", "less")
+    for key, (_, hi, _lo) in ts.PHRASES.items():
+        c = next((mc.lookup(s, key) for s in mc.SCOPES if mc.lookup(s, key)), None)
+        if c is None:
+            pool = {"spin_efficiency_pct": "P.pool.league_spin",
+                    "extension_pct": "P.pool.league_mechanics",
+                    "entropy_ratio_pct": "P.pool.league_sequencing",
+                    "count_shift_pct": "P.pool.league_sequencing"}.get(key)
+            c = mc.lookup(pool, key) if pool else None
+        if c is not None and (hi.split()[0] in lower) != (c.high.split()[0] in lower):
+            errors.append(f"comp phrase '{hi}' disagrees with contract '{c.high}' for {key}")
+
+    passed = not errors
+    detail = (f"{len(files)} portraits: every numeric key declared, percentiles in range, "
+              f"{len(checked)} directions confirmed against raw values every season"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1942,6 +2054,7 @@ TESTS = [
     ("V24", "Steal-attempt ranks league-wide", v24_league_steal_ranks),
     ("V25", "Tag states and framing",          v25_tag_states_and_framing),
     ("V26", "Team comps from measurements",    v26_team_comps),
+    ("V27", "Percentile contracts",            v27_percentile_contracts),
 ]
 
 

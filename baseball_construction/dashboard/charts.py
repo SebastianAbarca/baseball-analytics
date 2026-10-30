@@ -26,6 +26,7 @@ sys.path.insert(0, str(_HERE.parent / "modules"))
 # holding only attributes that fire regardless of sample.
 from team_portrait import (kind_of, HITTER_TAG_FAMILIES,  # noqa: E402
                            PITCHER_TAG_FAMILIES)
+from metric_contracts import describe_display  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Strike zone geometry
@@ -1376,15 +1377,19 @@ def player_metrics_radar(portrait: dict, selected_ids: list[str]) -> go.Figure:
         labels_closed = labels + [labels[0]]
         values_closed = values + [values[0]]
 
+        # What each percentile ranks and against whom (metric_contracts).
+        about = [describe_display(m) or "" for m in labels_closed]
         traces.append(go.Scatterpolar(
             r=values_closed,
             theta=labels_closed,
+            customdata=about,
             fill="toself",
             fillcolor=_hex_to_rgba(color, 0.12),
             line=dict(color=color, width=2),
             marker=dict(size=5, color=color),
             name=f"{name} ({arc})",
-            hovertemplate="<b>%{theta}</b><br>Percentile: <b>%{r:.0f}</b><extra></extra>",
+            hovertemplate="<b>%{theta}</b><br>Percentile: <b>%{r:.0f}</b>"
+                          "<br>%{customdata}<extra></extra>",
         ))
 
     if not traces:
@@ -1463,7 +1468,9 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
             x=vals,
             orientation="h",
             marker_color=color,
-            hovertemplate="<b>%{y}</b><br>%{x:.0f}th percentile<extra></extra>",
+            customdata=[describe_display(m) or "" for m in all_metrics],
+            hovertemplate="<b>%{y}</b><br>%{x:.0f}th percentile"
+                          "<br>%{customdata}<extra></extra>",
         ))
 
     fig = go.Figure(traces)

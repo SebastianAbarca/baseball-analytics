@@ -292,39 +292,17 @@ PITCHING_COL_MAP: dict[str, str] = {
 # it that way. Pitchers rank so that a high pct is good for the pitcher on
 # every outcome (K, BB, contact quality, FIP); shape and usage metrics (GB%,
 # zone%, velocity, spin) rank raw.
-BATTING_RANK_INVERT: dict[str, bool] = {
-    "K_pct": True,          # higher pct = fewer strikeouts
-    "BB_pct": False, "HardHit_pct": False, "sprint_speed": False,
-    "Whiff_pct": False, "OSwing_pct": False, "xwOBA": False,
-    "Barrel_pct": False, "xBA": False, "xSLG": False, "ISO": False,
-    "OBP": False, "AVG": False, "PA": False, "EV_avg": False, "SB": False,
-    "CS": False, "SLG": False, "BatGB_pct": False, "FPS_pct": False,
-    "PitchesPerPA": False, "WAR_bat": False, "ZSwing_pct": False,
-    "Contact_pct": False, "LuckDelta": False, "XB_pct": False,
-    "GapTend_pct": False, "Pull_pct": False, "Oppo_pct": False,
-    "HR_FB_pct": False, "OBP_SLG_gap": False,
-}
-
-PITCHING_RANK_INVERT: dict[str, bool] = {
-    "K_pct_pitch": False,
-    "BB_pct_pitch": True,      # higher pct = fewer walks
-    "HardHit_allowed": True,   # higher pct = less hard contact allowed
-    "Barrel_allowed": True,    # higher pct = fewer barrels allowed
-    "xwOBA_allowed": True,
-    "FIP": True,
-    "BF": False, "Whiff_pct_pitch": False, "avg_velo": False, "GS": False,
-    "GB_pct_pitch": False, "Zone_pct": False, "CSW_pct": False,
-    "PitchesPerBF": False, "WAR_pitch": False, "AvgSpinRate": False,
-    "ArsenalDiversity": False,
-}
+# Both tables are DERIVED from metric_contracts, where each percentile also
+# states its cohort and what a high rank means; validation V27 checks every
+# stored percentile against those contracts.
+from metric_contracts import rank_invert as _rank_invert  # noqa: E402
+BATTING_RANK_INVERT: dict[str, bool] = _rank_invert("H.metrics")
+PITCHING_RANK_INVERT: dict[str, bool] = _rank_invert("P.metrics")
 
 # Curated percentile keys shown on pitcher cards (starters AND relievers —
 # the two carry an identical schema)
-_PITCHER_DISPLAY_KEYS = [
-    "avg_velo_pct", "K_pct_pct", "Whiff_pct_pct",
-    "GB_pct_pct", "HardHit_allowed_pct",
-    "Barrel_allowed_pct", "CSW_pct_pct", "BB_pct_pct",
-]
+from metric_contracts import PITCHER_DISPLAY as _PITCHER_DISPLAY  # noqa: E402
+_PITCHER_DISPLAY_KEYS = list(_PITCHER_DISPLAY)
 
 # Internal normalized key → pitcher_archetypes.py expected key
 _PITCHER_KEY_REMAP: dict[str, str] = {
@@ -1238,19 +1216,10 @@ def _classify_hitters(
         # Store curated percentile metrics for the interactive player chart.
         # Each raw_key is the exact key that _classify_hitters puts in `metrics`
         # (the col.removesuffix("_pct") form OR the full col name — both present).
-        _DISPLAY_KEYS = [
-            ("ISO_pct",           "Power"),          # ISO_pct → ISO percentile
-            ("BB_pct_pct",        "Walk Rate"),       # BB_pct_pct → BB% percentile
-            ("K_pct_pct",         "Contact"),         # K_pct_pct → K% pct (inverted → higher = better)
-            ("xwOBA_pct",         "Quality"),         # xwOBA_pct → xwOBA percentile
-            ("sprint_speed_pct",  "Speed"),           # sprint_speed_pct → speed percentile
-            ("OBP_SLG_gap_pct",   "Contact-First"),   # OBP_SLG_gap_pct → gap percentile
-            ("FPS_pct_pct",       "Aggression"),      # FPS_pct_pct → first-pitch swing% pct
-            ("ZSwing_pct_pct",    "Zone Swing"),      # ZSwing_pct_pct → zone swing% pct
-            ("Contact_pct_pct",   "Contact Rate"),    # Contact_pct_pct → contact rate pct
-            ("HardHit_pct_pct",   "Hard Hit"),        # HardHit_pct_pct → hard-hit% pct
-            ("Barrel_pct_pct",    "Barrel Rate"),     # Barrel_pct_pct → barrel% pct
-        ]
+        # The labels and the keys behind them live in metric_contracts, so
+        # the dashboard can say what each one ranks.
+        from metric_contracts import HITTER_DISPLAY as _HD
+        _DISPLAY_KEYS = [(key, label) for label, key in _HD.items()]
         profile["metrics_pct"] = {
             label: float(metrics[raw_key])
             for raw_key, label in _DISPLAY_KEYS
