@@ -78,7 +78,11 @@ sys.path.insert(0, str(_HERE))
 # as the era percentiles (`K_pct_raw` → `K_pct_raw_pct`, `OAA` → `OAA_pct`,
 # `SprintSpeed` → `sprint_speed_pct`). Luck and the within-team spin and
 # tunnel percentiles are gone. The "Contact" card label is "Avoids Ks".
-PORTRAIT_SCHEMA_VERSION = 25
+# 26: pitcher metrics drop the pitcher_archetypes aliases (`K_pct_pct` for
+# `K_pct_pitch_pct`, likewise Whiff, BB, GB) and the raw Zone_pct / CSW_pct
+# fractions; only declared percentiles remain. Pitcher card and Scout keys
+# follow (`K_pct_pitch_pct` …).
+PORTRAIT_SCHEMA_VERSION = 26
 
 from ingest import (
     pull_statcast_range,
@@ -307,14 +311,6 @@ PITCHING_RANK_INVERT: dict[str, bool] = _rank_invert("P.metrics")
 from metric_contracts import PITCHER_DISPLAY as _PITCHER_DISPLAY  # noqa: E402
 _PITCHER_DISPLAY_KEYS = list(_PITCHER_DISPLAY)
 
-# Internal normalized key → pitcher_archetypes.py expected key
-_PITCHER_KEY_REMAP: dict[str, str] = {
-    "K_pct_pitch_pct":     "K_pct_pct",
-    "Whiff_pct_pitch_pct": "Whiff_pct_pct",
-    "BB_pct_pitch_pct":    "BB_pct_pct",
-    "GB_pct_pitch_pct":    "GB_pct_pct",   # P3 / P4 threshold
-    "CSW_pct_pct":         "CSW_pct_pct",  # identity — already correct name
-}
 
 
 # ---------------------------------------------------------------------------
@@ -1326,10 +1322,13 @@ def _classify_pitchers(
         if splits is not None and _share is not None and not pd.isna(_share):
             splits = {**splits, "same_hand_bf_share": float(_share)}
 
-        # Build metrics dict from _pct columns (strip trailing _pct for key names)
+        # Era percentiles under their one name, declared ones only — raw
+        # columns end in "_pct" too (Zone_pct, CSW_pct are fractions) and
+        # used to land here beside the percentiles (metric_contracts).
+        from metric_contracts import lookup as _contract
         metrics: dict[str, float] = {}
         for col in team_pit.columns:
-            if col.endswith("_pct"):
+            if col.endswith("_pct") and _contract("P.metrics", col) is not None:
                 val = row.get(col)
                 if val is not None and not (isinstance(val, float) and np.isnan(val)):
                     metrics[col] = float(val)   # keep full _pct name for archetypes
@@ -1353,16 +1352,11 @@ def _classify_pitchers(
         _attach_pct(league_discipline, "swstr_per_velo_pct",     "SwStr_per_velo_pct")
         _attach_pct(league_discipline, "first_pitch_strike_pct", "FirstPitchStrike_pct")
 
-        # Remap internal keys to what pitcher_archetypes.py expects
-        for old_key, new_key in _PITCHER_KEY_REMAP.items():
-            if old_key in metrics:
-                metrics[new_key] = metrics[old_key]
-
         # HardHit_allowed_pct / Barrel_allowed_pct are already "higher =
         # better" — ranked inverted in _normalize_pitching (PITCHING_RANK_INVERT).
         # K_inv_pct: P3 scoring uses low-K as a signal (ground-ball style, not strikeout).
-        if "K_pct_pct" in metrics:
-            metrics["K_inv_pct"] = 100.0 - metrics["K_pct_pct"]
+        if "K_pct_pitch_pct" in metrics:
+            metrics["K_inv_pct"] = 100.0 - metrics["K_pct_pitch_pct"]
 
         # Starter vs reliever: GS / G fraction only — more starts than relief appearances.
         # G (total appearances) is stored in Supabase after the schema update.

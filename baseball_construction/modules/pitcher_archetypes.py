@@ -60,7 +60,7 @@ P1_MIN = {"avg_velo_pct": 60.0}
 # P2 — Craft Strikeout: min thresholds + velocity CEILING
 # Whiff_pct is scored but NOT a hard gate (it can be missing from DB).
 # K_pct is the primary gate; if K% is very high (>=65) SwStr absence is excused.
-P2_MIN          = {"K_pct_pct": 55.0}   # SwStr removed from hard gate
+P2_MIN          = {"K_pct_pitch_pct": 55.0}   # SwStr removed from hard gate
 P2_SWSTR_MIN    = 55.0                   # soft floor: if present, must be >= this OR K% >= 65
 P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 
@@ -70,7 +70,7 @@ P2_VELO_CEILING = 65.0   # avg_velo_pct must be AT OR BELOW this
 # HardHit_allowed_pct is ranked inverted (higher = better suppressor; see
 # team_portrait.PITCHING_RANK_INVERT);
 # it drives the score rather than a binary ceiling gate.
-P3_MIN      = {"GB_pct_pct": 35.0}
+P3_MIN      = {"GB_pct_pitch_pct": 35.0}
 P3_K_CEILING = 65.0   # K_pct_pct must be AT OR BELOW — GB craftsmen are not K pitchers
 P3_K_CEILING_SOFT = 75.0   # raised ceiling when GB% is elite (see P3_ELITE_GB below)
 P3_ELITE_GB = 85.0         # GB% at/above this excuses a borderline-high K% —
@@ -78,18 +78,18 @@ P3_ELITE_GB = 85.0         # GB% at/above this excuses a borderline-high K% —
                            # a razor-thin miss on the K ceiling (e.g. K%=65.3 vs 65.0)
 
 # P4 — Stuff to Contact: min thresholds + K% CEILING
-P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pct": 38.0}
+P4_MIN       = {"avg_velo_pct": 55.0, "GB_pct_pitch_pct": 38.0}
 P4_K_CEILING = 65.0      # K_pct_pct must be AT OR BELOW
 
 # P5 — Power Contact: elite GB% + above-avg velo + above-avg K (Framber Valdez type)
 # These pitchers get Ks alongside extreme ground balls — not a "craftsman" per se.
 # Higher GB floor (65th) distinguishes from P4; no K ceiling unlike P3/P4.
-P5_MIN = {"avg_velo_pct": 55.0, "GB_pct_pct": 65.0, "K_pct_pct": 55.0}
+P5_MIN = {"avg_velo_pct": 55.0, "GB_pct_pitch_pct": 65.0, "K_pct_pitch_pct": 55.0}
 
 # P6 — Finesse Control: exceptional command + low K + below-avg velo (Kyle Hendricks type)
 # Pitchers who survive through precision location, not stuff or groundballs.
 # The single hard gate is command (BB_pct_pct is inverted: higher = fewer walks = better).
-P6_MIN         = {"BB_pct_pct": 70.0}   # must have excellent command (top-30% low-walk rate)
+P6_MIN         = {"BB_pct_pitch_pct": 70.0}   # must have excellent command (top-30% low-walk rate)
 P6_K_CEILING   = 50.0                   # below-average K rate (not a strikeout pitcher)
 P6_VELO_CEILING = 60.0                  # below-average velocity (not a power pitcher)
 
@@ -109,8 +109,8 @@ PITCHER_CONFIDENCE_CEILING = 0.35
 # were aces via opposite styles — Ace is layered on top, not a competing type.
 ACE_SCORE_THRESHOLD     = 78.0   # winning archetype's composite score floor
 ACE_DOMINANCE_KEYS      = [
-    "K_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
-    "Whiff_pct_pct", "GB_pct_pct", "CSW_pct_pct",
+    "K_pct_pitch_pct", "BB_pct_pitch_pct", "HardHit_allowed_pct",
+    "Whiff_pct_pitch_pct", "GB_pct_pitch_pct", "CSW_pct_pct",
 ]
 ACE_ELITE_TRAIT_PCT     = 80.0   # a trait counts as "elite" at/above this percentile
 ACE_MIN_ELITE_TRAITS    = 2      # need 2+ elite traits — guards against one big number
@@ -203,8 +203,8 @@ def _blend_confidence(margin: float, score: Optional[float]) -> float:
 def _score_p1(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "stuff_composite_pct":  0.30,  # pre-computed: (velo + spin + spin_eff) blend
-        "K_pct_pct":            0.25,
-        "Whiff_pct_pct":        0.20,
+        "K_pct_pitch_pct":            0.25,
+        "Whiff_pct_pitch_pct":        0.20,
         "CSW_pct_pct":          0.15,
         "HardHit_allowed_pct":  0.10,  # inverted rank: higher = better at preventing hard contact
     }
@@ -246,7 +246,7 @@ def _score_p2(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "TunnelScore_pct":      0.25,
         "SwStr_per_velo_pct":   0.20,  # whiff rate adjusted for velocity
-        "K_pct_pct":            0.15,
+        "K_pct_pitch_pct":            0.15,
         "FirstPitchStrike_pct": 0.15,
     }
     score, _ = _weighted_score(metrics, weights)
@@ -269,9 +269,9 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
         return None
 
     # Soft SwStr check: if present, must be >= 55 unless K% >= 65
-    swstr_val = metrics.get("Whiff_pct_pct")
+    swstr_val = metrics.get("Whiff_pct_pitch_pct")
     if swstr_val is not None and not (isinstance(swstr_val, float) and np.isnan(swstr_val)):
-        if swstr_val < P2_SWSTR_MIN and metrics.get("K_pct_pct", 0) < 65.0:
+        if swstr_val < P2_SWSTR_MIN and metrics.get("K_pct_pitch_pct", 0) < 65.0:
             return None  # Both SwStr and K% are below threshold
 
     score = _score_p2(metrics)
@@ -293,10 +293,10 @@ def classify_p2(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p3(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "GB_pct_pct":          0.35,
+        "GB_pct_pitch_pct":          0.35,
         "HardHit_allowed_pct": 0.25,  # inverted rank: higher = better at preventing hard contact
         "Barrel_allowed_pct":  0.20,  # inverted rank: higher = better at preventing barrels
-        "BB_pct_pct":          0.10,  # (already inverted: higher = fewer walks)
+        "BB_pct_pitch_pct":          0.10,  # (already inverted: higher = fewer walks)
         "K_inv_pct":           0.10,  # (100 - K_pct_pct) — low K confirms GB type
     }
     score, _ = _weighted_score(metrics, weights)
@@ -320,12 +320,12 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
     """
     # K% ceiling — ground-ball craftsmen are not high-strikeout pitchers,
     # unless their groundball rate is so elite it defines them regardless.
-    gb_val = metrics.get("GB_pct_pct")
+    gb_val = metrics.get("GB_pct_pitch_pct")
     k_ceiling = P3_K_CEILING
     if gb_val is not None and not (isinstance(gb_val, float) and np.isnan(gb_val)):
         if float(gb_val) >= P3_ELITE_GB:
             k_ceiling = P3_K_CEILING_SOFT
-    if not _below_ceiling(metrics, "K_pct_pct", k_ceiling):
+    if not _below_ceiling(metrics, "K_pct_pitch_pct", k_ceiling):
         return None
 
     passes, margin = _meets_thresholds(metrics, P3_MIN)
@@ -352,9 +352,9 @@ def classify_p3(metrics: dict[str, float]) -> Optional[dict]:
 def _score_p4(metrics: dict[str, float]) -> Optional[float]:
     weights = {
         "avg_velo_pct":        0.25,
-        "GB_pct_pct":          0.25,
+        "GB_pct_pitch_pct":          0.25,
         "HardHit_allowed_pct": 0.25,  # inverted rank: higher = better at preventing hard contact
-        "K_pct_pct":           0.15,  # moderate — not a strikeout pitcher
+        "K_pct_pitch_pct":           0.15,  # moderate — not a strikeout pitcher
         "Barrel_allowed_pct":  0.10,  # inverted rank: higher = better at preventing barrels
     }
     score, _ = _weighted_score(metrics, weights)
@@ -365,7 +365,7 @@ def classify_p4(metrics: dict[str, float]) -> Optional[dict]:
     """
     Stuff to Contact — above-avg velo + GB%, K% <= 65th.
     """
-    if not _below_ceiling(metrics, "K_pct_pct", P4_K_CEILING):
+    if not _below_ceiling(metrics, "K_pct_pitch_pct", P4_K_CEILING):
         return None
 
     passes, margin = _meets_thresholds(metrics, P4_MIN)
@@ -391,9 +391,9 @@ def classify_p4(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p5(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "GB_pct_pct":          0.35,  # defining trait — elite ground-ball rate
+        "GB_pct_pitch_pct":          0.35,  # defining trait — elite ground-ball rate
         "avg_velo_pct":        0.25,  # velocity powers the sinker
-        "K_pct_pct":           0.20,  # above-avg Ks distinguish from P3 craftsmen
+        "K_pct_pitch_pct":           0.20,  # above-avg Ks distinguish from P3 craftsmen
         "HardHit_allowed_pct": 0.20,  # quality of contact suppressed
     }
     score, _ = _weighted_score(metrics, weights)
@@ -429,7 +429,7 @@ def classify_p5(metrics: dict[str, float]) -> Optional[dict]:
 
 def _score_p6(metrics: dict[str, float]) -> Optional[float]:
     weights = {
-        "BB_pct_pct":          0.40,  # command is the defining trait (inverted: high = few walks)
+        "BB_pct_pitch_pct":          0.40,  # command is the defining trait (inverted: high = few walks)
         "Zone_pct_pct":        0.25,  # zone rate as secondary command signal
         "HardHit_allowed_pct": 0.20,  # suppresses hard contact without Ks
         "K_inv_pct":           0.15,  # low K confirms the style (K_inv = 100 - K_pct_pct)
@@ -449,7 +449,7 @@ def classify_p6(metrics: dict[str, float]) -> Optional[dict]:
         return None
 
     # K ceiling — strikeout pitchers are not P6
-    if not _below_ceiling(metrics, "K_pct_pct", P6_K_CEILING):
+    if not _below_ceiling(metrics, "K_pct_pitch_pct", P6_K_CEILING):
         return None
 
     # Command hard gate — must have truly excellent walk avoidance
@@ -493,7 +493,7 @@ def classify_starter(metrics: dict[str, float]) -> dict:
     # P2 not eligible if avg_velo > 65th AND K% > 65th (both route to P1)
     if not (
         metrics.get("avg_velo_pct", 0) > 65
-        and metrics.get("K_pct_pct",  0) > 65
+        and metrics.get("K_pct_pitch_pct",  0) > 65
     ):
         p2 = classify_p2(metrics)
         if p2:
@@ -568,7 +568,7 @@ def compute_command_profile(metrics: dict[str, float]) -> str:
     Good:  BB_pct_pct ≥ 65th  (above-average command)
     Poor:  BB_pct_pct < 30th  (lots of walks)
     """
-    bb = metrics.get("BB_pct_pct")
+    bb = metrics.get("BB_pct_pitch_pct")
 
     if bb is None:
         return "Average"
@@ -783,8 +783,8 @@ def build_bullpen_profile(
         "platoon_balance":    {"Platoon_bal_pct":      1.0},
         "leverage_structure": {"LevWPA_conc_pct":      1.0},
         # out_mechanism scored separately (K vs GB comparison)
-        "K_out_mechanism":    {"K_pct_pct":            1.0},
-        "GB_out_mechanism":   {"GB_pct_pct":           1.0},
+        "K_out_mechanism":    {"K_pct_pitch_pct":            1.0},
+        "GB_out_mechanism":   {"GB_pct_pitch_pct":           1.0},
     }
 
     scores: dict[str, Optional[float]] = {}

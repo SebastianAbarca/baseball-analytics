@@ -1630,9 +1630,9 @@ def bullpen_detail_table(portrait: dict) -> go.Figure:
         bfs.append(str(arm.get("bf") or "—"))
         wars.append(_fmt(arm.get("war"), 1))
         velos.append(_fmt(m.get("avg_velo_pct")))
-        ks.append(_fmt(m.get("K_pct_pct")))
-        whiffs.append(_fmt(m.get("Whiff_pct_pct")))
-        gbs.append(_fmt(m.get("GB_pct_pct")))
+        ks.append(_fmt(m.get("K_pct_pitch_pct")))
+        whiffs.append(_fmt(m.get("Whiff_pct_pitch_pct")))
+        gbs.append(_fmt(m.get("GB_pct_pitch_pct")))
         hcs.append(_fmt(m.get("HardHit_allowed_pct")))
 
         shown = [t["tag"] for t in traits]
@@ -4944,13 +4944,13 @@ def compare_tag_matrix(rows: list[dict]):
 _CMP_AXES_H = ["Power", "Hard Hit", "Barrel Rate", "Avoids Ks", "Contact Rate",
                "Walk Rate", "Zone Swing", "Aggression", "Speed", "Quality",
                "Contact-First"]
-_CMP_AXES_P = ["avg_velo_pct", "K_pct_pct", "Whiff_pct_pct", "CSW_pct_pct",
-               "GB_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
+_CMP_AXES_P = ["avg_velo_pct", "K_pct_pitch_pct", "Whiff_pct_pitch_pct", "CSW_pct_pct",
+               "GB_pct_pitch_pct", "BB_pct_pitch_pct", "HardHit_allowed_pct",
                "Barrel_allowed_pct"]
 _CMP_AXIS_LABEL = {
-    "avg_velo_pct": "Velocity", "K_pct_pct": "Strikeouts",
-    "Whiff_pct_pct": "Swing & miss", "CSW_pct_pct": "CSW",
-    "GB_pct_pct": "Ground balls", "BB_pct_pct": "Walks allowed",
+    "avg_velo_pct": "Velocity", "K_pct_pitch_pct": "Strikeouts",
+    "Whiff_pct_pitch_pct": "Swing & miss", "CSW_pct_pct": "CSW",
+    "GB_pct_pitch_pct": "Ground balls", "BB_pct_pitch_pct": "Walks allowed",
     "HardHit_allowed_pct": "Hard hit allowed",
     "Barrel_allowed_pct": "Barrels allowed",
 }

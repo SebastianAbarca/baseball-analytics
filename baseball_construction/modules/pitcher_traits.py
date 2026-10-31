@@ -549,8 +549,8 @@ WALK_PRONE_PCT        = 15.0
 # Ace badge: composite mean of the dominance keys plus ≥2 independently
 # elite traits — same spirit as pitcher_archetypes.compute_ace_tier but
 # computed directly from metrics (no archetype score needed).
-ACE_KEYS            = ["K_pct_pct", "BB_pct_pct", "HardHit_allowed_pct",
-                       "Whiff_pct_pct", "GB_pct_pct", "CSW_pct_pct"]
+ACE_KEYS            = ["K_pct_pitch_pct", "BB_pct_pitch_pct", "HardHit_allowed_pct",
+                       "Whiff_pct_pitch_pct", "GB_pct_pitch_pct", "CSW_pct_pct"]
 ACE_COMPOSITE_MIN   = 70.0
 ACE_ELITE_TRAIT_PCT = 80.0
 ACE_MIN_ELITE       = 2
@@ -562,10 +562,15 @@ def outcome_traits(metrics: Optional[dict]) -> list[dict]:
     m = metrics or {}
 
     def _get(key):
+        # A name metric_contracts does not declare is a bug, not a missing
+        # value: a stale key reads as None and the gate silently never fires.
+        from metric_contracts import lookup
+        if lookup("P.metrics", key) is None:
+            raise KeyError(f"undeclared pitcher percentile {key!r}")
         v = m.get(key)
         return None if v is None or (isinstance(v, float) and np.isnan(v)) else float(v)
 
-    k = _get("K_pct_pct")
+    k = _get("K_pct_pitch_pct")
     if k is not None:
         if k >= BAT_MISSER_PCT:
             traits.append(_trait("bat-misser", "outcome", k, k,
@@ -575,7 +580,7 @@ def outcome_traits(metrics: Optional[dict]) -> list[dict]:
                                  f"strikeout rate {k:.0f}th pct — outs come "
                                  "from the defense"))
 
-    gb = _get("GB_pct_pct")
+    gb = _get("GB_pct_pitch_pct")
     if gb is not None:
         if gb >= GROUND_BALLER_PCT:
             traits.append(_trait("ground-baller", "outcome", gb, gb,
@@ -592,7 +597,7 @@ def outcome_traits(metrics: Optional[dict]) -> list[dict]:
                              f"hard-hit suppression {hh:.0f}th pct"
                              + (f", barrel suppression {br:.0f}th" if br is not None else "")))
 
-    bb = _get("BB_pct_pct")   # inverted: higher = fewer walks
+    bb = _get("BB_pct_pitch_pct")   # inverted: higher = fewer walks
     if bb is not None:
         if bb >= COMMAND_ELITE_PCT:
             traits.append(_trait("elite control", "outcome", bb, bb,
