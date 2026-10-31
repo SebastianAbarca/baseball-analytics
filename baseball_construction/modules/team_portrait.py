@@ -72,7 +72,13 @@ sys.path.insert(0, str(_HERE))
 # trait_density. Catchers are three populations (framing, blocking, pop time)
 # instead of one. Framing is location- and count-adjusted; extra base taker
 # ranks attempts.
-PORTRAIT_SCHEMA_VERSION = 24
+# 25: one name per percentile (metric_contracts). Hitter metrics no longer
+# carry "_pct"-stripped aliases or raw duplicates (`ISO` → `ISO_pct`,
+# `BB_pct` → `BB_pct_pct`, `K` dropped); season_metrics use the same names
+# as the era percentiles (`K_pct_raw` → `K_pct_raw_pct`, `OAA` → `OAA_pct`,
+# `SprintSpeed` → `sprint_speed_pct`). Luck and the within-team spin and
+# tunnel percentiles are gone. The "Contact" card label is "Avoids Ks".
+PORTRAIT_SCHEMA_VERSION = 25
 
 from ingest import (
     pull_statcast_range,
@@ -231,9 +237,6 @@ BATTING_COL_MAP: dict[str, str] = {
     "war":              "WAR_bat",
     "zone_swing_pct":   "ZSwing_pct",
     "contact_pct":      "Contact_pct",
-    # Luck delta: xwOBA − wOBA (positive = unlucky, negative = lucky)
-    # Comes from FG batting CSV column est_woba_minus_woba_diff
-    "est_woba_minus_woba_diff": "LuckDelta",
     # Spray chart metrics (computed from Statcast hc_x/hc_y)
     "xb_pct":    "XB_pct",       # (2B + 3B) / BIP — gap contact rate
     "gap_pct":   "GapTend_pct",  # fraction of BIP 15–30° from centre (the alleys)
@@ -890,21 +893,6 @@ def _normalize_batting(batting_pool: pd.DataFrame, team_bat: pd.DataFrame) -> pd
     if "K_pct" in full.columns and "K_pct" in team.columns:
         team["K_pct_raw_pct"] = _pool_rank(full["K_pct"], team["K_pct"], invert=False)
 
-    # LuckDelta_pct: normalize xwOBA−wOBA gap from the full batting pool,
-    # then map to team players by key_mlbam (team_bat may not have this column
-    # since it comes from the DB rather than the FG batting CSV).
-    if "LuckDelta" in full.columns and full["LuckDelta"].notna().sum() > 1:
-        try:
-            from ingest import normalize_percentile as _np
-            luck_valid   = full[full["LuckDelta"].notna()].copy()
-            luck_pcts    = _np(luck_valid["LuckDelta"])  # higher = more unlucky
-            luck_map     = dict(zip(luck_valid["key_mlbam"], luck_pcts))
-            team["LuckDelta_pct"] = team["key_mlbam"].map(
-                lambda x: luck_map.get(int(x)) if pd.notna(x) else None
-            )
-        except Exception:
-            pass
-
     return team
 
 
@@ -1083,19 +1071,20 @@ def _classify_hitters(
         if pd.isna(player_id):
             continue
 
-        # Build metrics dict from _pct columns.
-        # Populate both the stripped key AND the original key so that
-        # archetype functions which use either convention get a hit.
-        # e.g. ISO_pct → both "ISO" (for TTO/Complete thresholds)
-        #                  AND "ISO_pct" (for spectrum power keys)
+        # Era percentiles, one key each: the ranked column's name, and only
+        # columns metric_contracts declares as percentiles — a "_pct" suffix
+        # is not enough, since raw rates carry one too (BB_pct is the walk
+        # rate, BB_pct_pct its rank). This used to store every "_pct" column
+        # and its stripped twin, so `BB_pct` was the raw rate or the
+        # percentile depending on column order, `K` was the raw K rate, and
+        # `ISO`, `AVG`, `SB` were percentiles under raw names.
+        from metric_contracts import lookup as _contract
         metrics: dict[str, float] = {}
         for col in team_bat.columns:
-            if col.endswith("_pct"):
+            if col.endswith("_pct") and _contract("H.metrics", col) is not None:
                 val = row.get(col)
                 if val is not None and not pd.isna(val):
-                    fval = float(val)
-                    metrics[col.removesuffix("_pct")] = fval  # K_pct_pct→K_pct, ISO_pct→ISO
-                    metrics[col] = fval                        # also keep ISO_pct, AVG_pct
+                    metrics[col] = float(val)
 
         # Raw sprint speed (ft/sec) for Speed modifier hard threshold.
         # sprint_speed is ft/s from Savant's sprint leaderboard, DB or CSV.
@@ -1363,9 +1352,6 @@ def _classify_pitchers(
         _attach_pct(league_tunnel, "tunnel_score_pct",    "TunnelScore_pct")
         _attach_pct(league_discipline, "swstr_per_velo_pct",     "SwStr_per_velo_pct")
         _attach_pct(league_discipline, "first_pitch_strike_pct", "FirstPitchStrike_pct")
-        # Within-team percentiles (legacy keys; not consumed by archetypes)
-        _attach_pct(spin_pitcher,      "spin_efficiency_pct", "spin_efficiency_team_pct")
-        _attach_pct(tunneling_pitcher, "tunnel_score_pct",    "tunnel_score_team_pct")
 
         # Remap internal keys to what pitcher_archetypes.py expects
         for old_key, new_key in _PITCHER_KEY_REMAP.items():
@@ -1960,18 +1946,17 @@ def _compute_projected_profile(
 
         row = prior_map[pid]
         metrics: dict[str, float] = {}
+        from metric_contracts import lookup as _contract
         for col in pct_cols_prior:
             val = row.get(col)
-            if val is not None and not pd.isna(val):
-                fval = float(val)
-                metrics[col.removesuffix("_pct")] = fval
-                metrics[col] = fval
+            if val is not None and not pd.isna(val) and _contract("H.metrics", col) is not None:
+                metrics[col] = float(val)
 
         k_ni = row.get("K_pct_raw_pct_noninv")
         if k_ni is not None and not pd.isna(k_ni):
-            metrics["K_pct_raw"] = float(k_ni)
-        if "BB_pct" in metrics:
-            metrics["BB_inv_pct"] = 100.0 - metrics["BB_pct"]
+            metrics["K_pct_raw_pct"] = float(k_ni)
+        if "BB_pct_pct" in metrics:
+            metrics["BB_inv_pct"] = 100.0 - metrics["BB_pct_pct"]
 
         sprint  = row.get("sprint_speed")
         k_raw   = row.get("k_rate")
@@ -2742,10 +2727,17 @@ def _hitter_populations(
     from hitter_traits import (PLATOON_MIN_PA, RARELY_K_MIN_PA, XBT_MIN_OPPS,
                                STEAL_RATE_MIN_ATTEMPTS)
 
+    from metric_contracts import lookup as _contract
     pops = [POP_ALL]
     sm = season_metrics or {}
 
+    # Both lookups refuse a name metric_contracts does not declare. A stale
+    # name does not fail on its own — it reads as "no value" and quietly
+    # empties a population; schema 25's rename did exactly that to chase and
+    # spray until this check existed.
     def _has(key: str) -> bool:
+        if _contract("H.season", key) is None:
+            raise KeyError(f"undeclared season percentile {key!r}")
         v = sm.get(key)
         return v is not None and not (isinstance(v, float) and np.isnan(v))
 
@@ -2755,9 +2747,9 @@ def _hitter_populations(
                      ("pop_pct", "catchers_pop")):
         if c.get(key) is not None and not (isinstance(c[key], float) and np.isnan(c[key])):
             pops.append(pop)
-    if _has("OAA"):
+    if _has("OAA_pct"):
         pops.append("fielders_oaa")
-    if _has("ArmStrength"):
+    if _has("ArmStrength_pct"):
         pops.append("fielders_arm")
     if sprint_raw is not None:
         pops.append("speed")
@@ -2771,12 +2763,14 @@ def _hitter_populations(
     m = metrics or {}
 
     def _hasm(key: str) -> bool:
+        if _contract("H.metrics", key) is None:
+            raise KeyError(f"undeclared era percentile {key!r}")
         v = m.get(key)
         return v is not None and not (isinstance(v, float) and np.isnan(v))
 
-    if _hasm("OSwing_pct"):
+    if _hasm("OSwing_pct_pct"):
         pops.append("chase")
-    if _hasm("XB_pct") and _hasm("GapTend_pct"):
+    if _hasm("XB_pct_pct") and _hasm("GapTend_pct_pct"):
         pops.append("spray")
     if attempt_rate_pct is not None and not (
             isinstance(attempt_rate_pct, float) and np.isnan(attempt_rate_pct)):
@@ -3509,22 +3503,25 @@ def build_team_portrait(
     # TAG GATES rank within the current season so a tag means "distinctive vs
     # this year's peers" and incidence doesn't drift with the run environment
     # (e.g. `high-K` firing on 32% of hitters in a high-K era).
-    # Columns get a `_szn` suffix; _classify_hitters routes them to the gates.
-    # raw_col = pre-rename batting_full column; key = hitter_traits gate key.
+    # Columns get a `_szn` suffix; _classify_hitters routes them to the gates
+    # as season_metrics, under the SAME names as the era percentiles — the
+    # dict says the cohort, the key says the metric (metric_contracts), and
+    # hitter_traits lets a season rank override the era one key by key.
+    # raw_col = pre-rename batting_full column; key = the percentile's name.
     _SEASON_TAG_METRICS = [
         # (batting_full col, gate key,   invert)
-        ("k_rate",       "K_pct_raw",  False),  # higher = more Ks
-        ("bb_rate",      "BB_pct",     False),
-        ("chase_pct",    "OSwing_pct", False),  # higher = chases more
-        ("fps_pct",      "FPS_pct",    False),
-        ("iso",          "ISO",        False),
-        ("ba",           "AVG",        False),
-        ("obp",          "OBP",        False),
-        ("brl_percent",  "Barrel_pct", False),
-        ("hard_hit_percent", "HardHit_pct", False),
-        ("gb_pct",       "BatGB_pct",  False),  # batter GB% (air/ground tags)
-        ("sprint_speed", "SprintSpeed", False),  # station-to-station gate
-        ("swing_discrim","SwingDiscrim", False), # zone-hunter gate
+        ("k_rate",       "K_pct_raw_pct",  False),  # higher = more Ks
+        ("bb_rate",      "BB_pct_pct",     False),
+        ("chase_pct",    "OSwing_pct_pct", False),  # higher = chases more
+        ("fps_pct",      "FPS_pct_pct",    False),
+        ("iso",          "ISO_pct",        False),
+        ("ba",           "AVG_pct",        False),
+        ("obp",          "OBP_pct",        False),
+        ("brl_percent",  "Barrel_pct_pct", False),
+        ("hard_hit_percent", "HardHit_pct_pct", False),
+        ("gb_pct",       "BatGB_pct_pct",  False),  # batter GB% (air/ground tags)
+        ("sprint_speed", "sprint_speed_pct", False),  # station-to-station gate
+        ("swing_discrim","SwingDiscrim_pct", False), # zone-hunter gate
     ]
     def _first_col(frame: pd.DataFrame, col: str) -> Optional[pd.Series]:
         """Column as Series; first occurrence if the rename created duplicates."""
@@ -3557,29 +3554,21 @@ def build_team_portrait(
     # had the player for 25 games did not make an everyday player of them.
     try:
         _pa_col = _col(team_bat_raw, "pa", "PA")
-        team_bat["PAvol_szn"] = _pool_rank(
+        team_bat["PAvol_pct_szn"] = _pool_rank(
             bat_stints["pa"], pd.to_numeric(team_bat_raw[_pa_col], errors="coerce")).values
     except Exception as exc:
         log.warning("Stint PA rank failed: %s", exc)
 
-    # LuckDelta_szn — the query_batting frame lacks the Savant luck column,
-    # but the history pool carries it. Filter the pool to THIS season (the
-    # old era map leaked other seasons' values via dict overwrite — a 2023
-    # portrait was reading a player's 2024 luck), rank within the season,
-    # then map to team players by MLBAM ID.
-    # NOTE on sign: `est_woba_minus_woba_diff` is empirically wOBA − xwOBA
-    # (Abreu 2023: woba .295, xwoba .315, diff −.020) — POSITIVE means the
-    # results OUTRAN the contact quality → high percentile = lucky.
     # Pool-sourced season ranks — these columns live in the history pool
     # (Savant CSV path), not in query_batting. Rank within THIS season's
-    # slice and map to team players by MLBAM ID.
-    #   LuckDelta    — wOBA − xwOBA (positive = lucky; see sign note above)
+    # slice (filtering the pool to it: an era map once leaked other seasons'
+    # values via dict overwrite) and map to team players by MLBAM ID.
     #   OAA          — outs above average (fielding family)
     #   ArmStrength  — throwing arm (fielding family)
+    # (Luck — wOBA − xwOBA — was ranked here too; its tags are retired.)
     _POOL_SEASON_METRICS = [
-        ("est_woba_minus_woba_diff", "LuckDelta"),
-        ("oaa",                      "OAA"),
-        ("arm_strength",             "ArmStrength"),
+        ("oaa",                      "OAA_pct"),
+        ("arm_strength",             "ArmStrength_pct"),
     ]
     try:
         _lp = batting_pool

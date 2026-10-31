@@ -292,12 +292,12 @@ def v5_hitter_archetypes() -> Result:
     #                              Barrel_pct≥65, AVG≥75
     # K% raw ceiling: > 0.30 disqualifies
     complete_metrics = {
-        "xwOBA":      80.0,
-        "OBP":        80.0,
-        "ISO":        75.0,
-        "BB_pct":     70.0,
-        "Barrel_pct": 70.0,
-        "AVG":        78.0,
+        "xwOBA_pct":      80.0,
+        "OBP_pct":        80.0,
+        "ISO_pct":        75.0,
+        "BB_pct_pct":     70.0,
+        "Barrel_pct_pct": 70.0,
+        "AVG_pct":        78.0,
         "k_rate_raw": 0.20,   # well below 0.30 ceiling
     }
     result = classify_complete(complete_metrics)
@@ -307,7 +307,7 @@ def v5_hitter_archetypes() -> Result:
         errors.append(f"Complete Hitter: got type={result['type']}")
 
     # ── Complete Hitter fails when AVG below threshold ─────────────────────
-    low_avg = {**complete_metrics, "AVG": 60.0}   # below 75 threshold
+    low_avg = {**complete_metrics, "AVG_pct": 60.0}   # below 75 threshold
     result = classify_complete(low_avg)
     if result is not None:
         errors.append("Complete Hitter with AVG=60 should fail, but passed")
@@ -325,9 +325,9 @@ def v5_hitter_archetypes() -> Result:
     # margins: K=(85-55)/100=0.30, BB=(85-65)/100=0.20, ISO=(85-65)/100=0.20
     # raw_conf = mean(0.30,0.20,0.20) = 0.233 → disp_conf=66 ≥ 30 ✓
     tto_metrics = {
-        "K_pct_raw": 85.0,   # threshold 55 — well above
-        "BB_pct":    85.0,   # threshold 65 — well above
-        "ISO":       85.0,   # threshold 65 — well above
+        "K_pct_raw_pct": 85.0,   # threshold 55 — well above
+        "BB_pct_pct":    85.0,   # threshold 65 — well above
+        "ISO_pct":       85.0,   # threshold 65 — well above
     }
     result = classify_tto(tto_metrics)
     if result is None:
@@ -336,7 +336,7 @@ def v5_hitter_archetypes() -> Result:
         errors.append(f"TTO type: expected 'Three True Outcomes', got {result['type']}")
 
     # ── TTO fails when K% below threshold ─────────────────────────────────
-    low_k_tto = {**tto_metrics, "K_pct_raw": 40.0}   # below 55 threshold
+    low_k_tto = {**tto_metrics, "K_pct_raw_pct": 40.0}   # below 55 threshold
     result = classify_tto(low_k_tto)
     if result is not None:
         errors.append("TTO with K_pct_raw=40 should fail (below threshold), but passed")
@@ -344,13 +344,13 @@ def v5_hitter_archetypes() -> Result:
     # ── Spectrum: pure power profile ──────────────────────────────────────
     power_metrics = {
         "ISO_pct":       90.0,
-        "HR_FB_pct":     85.0,
-        "Barrel_pct":    88.0,
+        "HR_FB_pct_pct":     85.0,
+        "Barrel_pct_pct":    88.0,
         "EV_90_pct":     80.0,
-        "Contact_pct":   20.0,
-        "K_pct":         80.0,
+        "Contact_pct_pct":   20.0,
+        "K_pct_pct":         80.0,
         "AVG_pct":       25.0,
-        "OBP_ISO_gap_pct": 30.0,
+        "OBP_SLG_gap_pct": 30.0,
     }
     result = classify_spectrum(power_metrics)
     # Spectrum type may be "Power" or a sub-label depending on score ranges
@@ -374,7 +374,7 @@ def v5_hitter_archetypes() -> Result:
             errors.append(f"build_hitter_profile missing key: {key}")
     # Verify modifier keys match current implementation
     expected_mods = {"aggressive", "gap_hitter", "plus_power", "speed",
-                     "lucky_unlucky", "contact_quality", "plate_discipline",
+                     "contact_quality", "plate_discipline",
                      "table_setter", "disruptiveness"}
     actual_mods = set(profile.get("modifiers", {}).keys())
     missing_mods = expected_mods - actual_mods

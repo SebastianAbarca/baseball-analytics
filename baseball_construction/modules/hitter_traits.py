@@ -195,8 +195,8 @@ def build_hitter_traits(
     # The spectrum is still computed and returned as a continuous field, but
     # nothing is tagged off its tails any more.
     spectrum = compute_spectrum(metrics)
-    iso = gm.get("ISO")
-    vals = [float(v) for v in (gm.get("Barrel_pct"), gm.get("HardHit_pct")) if v is not None]
+    iso = gm.get("ISO_pct")
+    vals = [float(v) for v in (gm.get("Barrel_pct_pct"), gm.get("HardHit_pct_pct")) if v is not None]
     contact = float(np.mean(vals)) if vals else None
     iso_note = f" (ISO {iso:.0f}th pct)" if iso is not None else ""
     power_bat = contact is not None and contact >= POWER_BAT_CONTACT
@@ -220,11 +220,11 @@ def build_hitter_traits(
     # This also closes the ceiling's null hole: HR/FB is absent for ~2 of 3
     # hitters, and `hrfb is None` skipped the power check entirely. ISO is
     # known far more often, so power_bat now carries that case.
-    hrfb = gm.get("HR_FB_pct")
+    hrfb = gm.get("HR_FB_pct_pct")
     gap_hitter = (not power_bat) and compute_gap_hitter(gm) and (
         hrfb is None or float(hrfb) <= GAP_HITTER_HRFB_CEILING)
     if gap_hitter:
-        xb = gm.get("XB_pct")
+        xb = gm.get("XB_pct_pct")
         traits.append(_trait("gap hitter", "bat", xb, xb,
                              "spray-confirmed extra-base production into the "
                              "gaps, without home-run power"
@@ -237,7 +237,7 @@ def build_hitter_traits(
 
     # ── bat: weak contact (no `hard contact` counterpart — see above) ──────
     if compute_contact_quality(gm) == "Weak Contact":
-        vals = [v for v in [gm.get("Barrel_pct"), gm.get("HardHit_pct")]
+        vals = [v for v in [gm.get("Barrel_pct_pct"), gm.get("HardHit_pct_pct")]
                 if v is not None]
         comp = float(np.mean(vals)) if vals else None
         traits.append(_trait("weak contact", "bat", comp, comp,
@@ -248,12 +248,12 @@ def build_hitter_traits(
     # swinger` are DECISIONS read from chase rate alone. The old composite
     # mixed the two, which is why free swinger fired on 30% of the league and
     # 60% of high-K hitters despite chase and K being uncorrelated.
-    bb = gm.get("BB_pct")
+    bb = gm.get("BB_pct_pct")
     if bb is not None and float(bb) >= WALK_MACHINE_PCT:
         traits.append(_trait("walk machine", "approach", bb, bb,
                              f"walk rate {bb:.0f}th pct"))
 
-    chase = gm.get("OSwing_pct")   # higher = chases more
+    chase = gm.get("OSwing_pct_pct")   # higher = chases more
     if chase is not None and not (isinstance(chase, float) and np.isnan(chase)):
         if float(chase) <= PATIENT_CHASE_PCT:
             traits.append(_trait("patient", "approach", chase, chase,
@@ -271,7 +271,7 @@ def build_hitter_traits(
     # and Brandon Belt in two, while Javier Baez sits at the bottom twice.
     # Distinct from `patient`, which is chase alone and says nothing about
     # whether the hitter then does damage on the strikes he does swing at.
-    discrim = gm.get("SwingDiscrim")
+    discrim = gm.get("SwingDiscrim_pct")
     if (discrim is not None and not (isinstance(discrim, float) and np.isnan(discrim))
             and float(discrim) >= ZONE_HUNTER_PCT):
         traits.append(_trait("zone hunter", "approach", discrim, discrim,
@@ -279,7 +279,7 @@ def build_hitter_traits(
                              "attacks strikes and lays off balls"))
 
     # ── bat-to-ball ────────────────────────────────────────────────────────
-    k = gm.get("K_pct_raw")
+    k = gm.get("K_pct_raw_pct")
     if k is not None and float(k) >= HIGH_K_PCT:
         traits.append(_trait("high-K", "bat-to-ball", k, k,
                              f"strikeout rate {k:.0f}th pct (more Ks than "
@@ -291,7 +291,7 @@ def build_hitter_traits(
                              "elite bat-to-ball"))
 
     if compute_aggressive(gm):
-        fps = gm.get("FPS_pct")
+        fps = gm.get("FPS_pct_pct")
         traits.append(_trait("aggressive", "approach", fps, fps,
                              "attacks first pitches and expands the zone "
                              "(high FPS% + high chase%)"))
@@ -304,7 +304,7 @@ def build_hitter_traits(
     elif speed == "Fast":
         traits.append(_trait("fast", "athleticism", sprint_speed_raw, None,
                              f"{sprint_speed_raw:.1f} ft/s sprint speed (top ~35%)"))
-    _spd_szn = (season_metrics or {}).get("SprintSpeed")
+    _spd_szn = (season_metrics or {}).get("sprint_speed_pct")
     if (_spd_szn is not None and not (isinstance(_spd_szn, float) and np.isnan(_spd_szn))
             and float(_spd_szn) <= STATION_SPEED_PCT):
         traits.append(_trait("station-to-station", "athleticism",
@@ -358,15 +358,15 @@ def build_hitter_traits(
                              f"of {att}{ft}"))
 
     # ── batted-ball direction ──────────────────────────────────────────────
-    pull = gm.get("Pull_pct")
+    pull = gm.get("Pull_pct_pct")
     if pull is not None and float(pull) >= PULL_HEAVY_PCT:
         traits.append(_trait("pull-heavy", "batted-ball", pull, pull,
                              f"pull-side BIP rate {pull:.0f}th pct"))
-    oppo = gm.get("Oppo_pct")
+    oppo = gm.get("Oppo_pct_pct")
     if oppo is not None and float(oppo) >= OPPO_BAT_PCT:
         traits.append(_trait("oppo bat", "batted-ball", oppo, oppo,
                              f"opposite-field BIP rate {oppo:.0f}th pct"))
-    bat_gb = gm.get("BatGB_pct")
+    bat_gb = gm.get("BatGB_pct_pct")
     if bat_gb is not None:
         if float(bat_gb) <= AIR_BALL_GB_PCT:
             traits.append(_trait("air-ball bat", "batted-ball", bat_gb, bat_gb,
@@ -381,7 +381,7 @@ def build_hitter_traits(
     traits.extend(_platoon_traits(splits))
 
     # ── fielding (season OAA / arm strength percentiles) ───────────────────
-    oaa = (season_metrics or {}).get("OAA")
+    oaa = (season_metrics or {}).get("OAA_pct")
     if oaa is not None and not (isinstance(oaa, float) and np.isnan(oaa)):
         if float(oaa) >= ELITE_DEFENDER_PCT:
             traits.append(_trait("elite defender", "fielding", oaa, oaa,
@@ -392,7 +392,7 @@ def build_hitter_traits(
         elif float(oaa) <= DEF_LIABILITY_PCT:
             traits.append(_trait("defensive liability", "fielding", oaa, oaa,
                                  f"outs above average {oaa:.0f}th pct"))
-    arm = (season_metrics or {}).get("ArmStrength")
+    arm = (season_metrics or {}).get("ArmStrength_pct")
     if (arm is not None and not (isinstance(arm, float) and np.isnan(arm))
             and float(arm) >= CANNON_ARM_PCT):
         traits.append(_trait("cannon arm", "fielding", arm, arm,
@@ -412,7 +412,7 @@ def build_hitter_traits(
                              f"innings — {shown}"))
 
     # ── role / availability ────────────────────────────────────────────────
-    _pa_szn = (season_metrics or {}).get("PAvol")
+    _pa_szn = (season_metrics or {}).get("PAvol_pct")
     if (_pa_szn is not None and not (isinstance(_pa_szn, float) and np.isnan(_pa_szn))
             and float(_pa_szn) >= EVERYDAY_PA_PCT):
         _pa_t = pa_team if pa_team is not None else pa

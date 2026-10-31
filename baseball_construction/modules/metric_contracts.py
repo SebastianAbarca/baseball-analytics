@@ -5,21 +5,22 @@ A percentile is only a number until three things are said about it: WHAT was
 ranked (the raw quantity and its unit), AGAINST WHOM (the cohort), and WHICH
 WAY (whether a high rank means more of the thing or less). Those facts used
 to live in three places — the rank-invert tables, the column names, and the
-gates that read them — and the names lie in both directions:
+gates that read them — and the names lied: a hitter's `K` was the raw
+strikeout rate while `K_pct` was its percentile, `ISO` and `AVG` were
+percentiles under raw names, and `season_metrics["K_pct_raw"]` was a season
+rank while `metrics["K_pct_raw"]` was an era one.
 
-  * in a hitter's `metrics`, `K` is the raw strikeout rate (0.236) while
-    `K_pct` and `K_pct_pct` are the same ERA percentile, inverted (high =
-    fewer strikeouts); `ISO`, `AVG`, `SB`, `PA` are percentiles too
-  * in a hitter's `season_metrics`, `BB_pct` is a THIS-SEASON percentile, and
-    `K_pct_raw` is the season percentile while `metrics["K_pct_raw"]` is the
-    era one
-  * in a pitcher's `metrics`, `Zone_pct` and `CSW_pct` are raw fractions
-    while every other key is a percentile
+Since schema 25 a percentile has ONE name: the ranked column's, which is
+`{metric}_pct` (`ISO_pct`, `BB_pct_pct`, `K_pct_raw_pct`). The scope it is
+stored in says the cohort — `metrics` era, `season_metrics` this season —
+and the same metric keeps the same name in both. The rank tables in
+team_portrait are derived from here, and validation V27 checks every numeric
+key in every portrait against it: declared, in range, and pointing the way
+it says (against the raw values where both are stored).
 
-This module declares each one. Nothing here renames anything: the rank
-tables in team_portrait are derived from it, and validation V27 checks every
-numeric key in every portrait against it — declared, in range, and pointing
-the way it says (against the raw values where both are stored).
+Still to do: pitcher `metrics` keeps the pitcher_archetypes aliases
+(`K_pct_pct` for `K_pct_pitch_pct` …) and two raw fractions (`Zone_pct`,
+`CSW_pct`) among its percentiles.
 
 COHORTS name the population a rank is taken in. Era cohorts pool every
 finished Statcast season plus the portrait's own (ingest.era_pool_seasons);
@@ -40,7 +41,6 @@ COHORTS: dict[str, str] = {
     "season_discipline": "this season's pitchers with 150+ pitches (first-pitch rate: 50+ first pitches)",
     "season_tunnel": "this season's pitchers with 10+ qualifying pitch pairs",
     "season_spin": "this season's pitchers, by pitch type (10+ of a type)",
-    "team_pitchers": "this team's pitchers only",
     "savant_qualified": "players on Baseball Savant's qualified leaderboard this season",
     "season_framing": "this season's catchers with 500+ taken pitches near the edge",
     "season_steal_opps": "this season's hitters with 50+ times on base, league-wide",
@@ -81,33 +81,40 @@ SCOPES = {
 
 
 def _h_era(stem: str, label: str, high: str, inverted: bool = False,
-           raw: Optional[str] = None, ranks: Optional[str] = None) -> Percentile:
-    """An era hitter percentile: stored as `{stem}_pct` with the stripped
-    `{stem}` as an alias (team_portrait._classify_hitters keeps both)."""
+           ranks: Optional[str] = None) -> Percentile:
+    """An era hitter percentile, stored as `{stem}_pct`."""
     return Percentile("H.metrics", f"{stem}_pct", label, "era_hitters", high,
-                      inverted, raw, ranks or stem, (stem,))
+                      inverted, None, ranks or stem)
+
+
+def _h_szn(stem: str, label: str, high: str, cohort: str = "season_hitters") -> Percentile:
+    """A this-season hitter percentile: the same name as its era twin."""
+    return Percentile("H.season", f"{stem}_pct", label, cohort, high)
 
 
 PERCENTILES: list[Percentile] = [
     # ── hitters, era (team_portrait._normalize_batting) ────────────────────
-    _h_era("K_pct", "strikeout rate", "fewer strikeouts", inverted=True, raw="K"),
+    # The two K% percentiles keep a raw pair: k_rate_raw, so V27 still sees
+    # the inverted one point down.
+    Percentile("H.metrics", "K_pct_pct", "strikeout rate", "era_hitters", "fewer strikeouts",
+               inverted=True, raw="k_rate_raw", ranks="K_pct"),
     # ranked separately (not through the rank table) for the TTO classifier
     Percentile("H.metrics", "K_pct_raw_pct", "strikeout rate", "era_hitters", "more strikeouts",
-               raw="K", aliases=("K_pct_raw",)),
-    _h_era("BB_pct", "walk rate", "more walks", raw="BB"),
-    _h_era("HardHit_pct", "hard-hit rate", "more hard contact", raw="HardHit"),
-    _h_era("Barrel_pct", "barrel rate", "more barrels", raw="Barrel"),
-    _h_era("Whiff_pct", "whiff rate per swing", "more whiffs", raw="Whiff"),
-    _h_era("OSwing_pct", "chase rate", "more chasing", raw="OSwing"),
-    _h_era("ZSwing_pct", "zone swing rate", "more zone swings", raw="ZSwing"),
-    _h_era("Contact_pct", "contact rate per swing", "more contact", raw="Contact"),
-    _h_era("FPS_pct", "first-pitch swing rate", "more first-pitch swings", raw="FPS"),
-    _h_era("BatGB_pct", "ground-ball rate", "more ground balls", raw="BatGB"),
-    _h_era("Pull_pct", "pull rate", "more pulled balls", raw="Pull"),
-    _h_era("Oppo_pct", "opposite-field rate", "more opposite-field balls", raw="Oppo"),
-    _h_era("GapTend_pct", "gap tendency", "more gap hits", raw="GapTend"),
-    _h_era("XB_pct", "extra-base hit rate per ball in play", "more extra-base hits", raw="XB"),
-    _h_era("HR_FB_pct", "home runs per fly ball", "more home runs per fly ball", raw="HR_FB"),
+               raw="k_rate_raw"),
+    _h_era("BB_pct", "walk rate", "more walks"),
+    _h_era("HardHit_pct", "hard-hit rate", "more hard contact"),
+    _h_era("Barrel_pct", "barrel rate", "more barrels"),
+    _h_era("Whiff_pct", "whiff rate per swing", "more whiffs"),
+    _h_era("OSwing_pct", "chase rate", "more chasing"),
+    _h_era("ZSwing_pct", "zone swing rate", "more zone swings"),
+    _h_era("Contact_pct", "contact rate per swing", "more contact"),
+    _h_era("FPS_pct", "first-pitch swing rate", "more first-pitch swings"),
+    _h_era("BatGB_pct", "ground-ball rate", "more ground balls"),
+    _h_era("Pull_pct", "pull rate", "more pulled balls"),
+    _h_era("Oppo_pct", "opposite-field rate", "more opposite-field balls"),
+    _h_era("GapTend_pct", "gap tendency", "more gap hits"),
+    _h_era("XB_pct", "extra-base hit rate per ball in play", "more extra-base hits"),
+    _h_era("HR_FB_pct", "home runs per fly ball", "more home runs per fly ball"),
     _h_era("ISO", "isolated power", "more isolated power"),
     _h_era("AVG", "batting average", "higher average"),
     _h_era("OBP", "on-base percentage", "higher on-base percentage"),
@@ -123,24 +130,22 @@ PERCENTILES: list[Percentile] = [
     _h_era("CS", "times caught stealing", "caught more often"),
     _h_era("PitchesPerPA", "pitches seen per PA", "more pitches per PA"),
     _h_era("OBP_SLG_gap", "OBP minus SLG", "on-base outweighs power"),
-    _h_era("LuckDelta", "wOBA minus xwOBA", "results outran contact quality"),
     # ── hitters, season (tag gates; the _szn columns) ──────────────────────
-    Percentile("H.season", "K_pct_raw", "strikeout rate", "season_hitters", "more strikeouts"),
-    Percentile("H.season", "BB_pct", "walk rate", "season_hitters", "more walks"),
-    Percentile("H.season", "OSwing_pct", "chase rate", "season_hitters", "more chasing"),
-    Percentile("H.season", "FPS_pct", "first-pitch swing rate", "season_hitters", "more first-pitch swings"),
-    Percentile("H.season", "ISO", "isolated power", "season_hitters", "more isolated power"),
-    Percentile("H.season", "AVG", "batting average", "season_hitters", "higher average"),
-    Percentile("H.season", "OBP", "on-base percentage", "season_hitters", "higher on-base percentage"),
-    Percentile("H.season", "Barrel_pct", "barrel rate", "season_hitters", "more barrels"),
-    Percentile("H.season", "HardHit_pct", "hard-hit rate", "season_hitters", "more hard contact"),
-    Percentile("H.season", "BatGB_pct", "ground-ball rate", "season_hitters", "more ground balls"),
-    Percentile("H.season", "SprintSpeed", "sprint speed", "season_hitters", "faster"),
-    Percentile("H.season", "SwingDiscrim", "zone swing minus chase", "season_hitters", "better swing decisions"),
-    Percentile("H.season", "LuckDelta", "wOBA minus xwOBA", "season_hitters", "results outran contact quality"),
-    Percentile("H.season", "OAA", "outs above average", "savant_qualified", "better defense"),
-    Percentile("H.season", "ArmStrength", "throwing arm strength", "savant_qualified", "stronger arm"),
-    Percentile("H.season", "PAvol", "plate appearances with this team", "season_stints", "more playing time"),
+    _h_szn("K_pct_raw", "strikeout rate", "more strikeouts"),
+    _h_szn("BB_pct", "walk rate", "more walks"),
+    _h_szn("OSwing_pct", "chase rate", "more chasing"),
+    _h_szn("FPS_pct", "first-pitch swing rate", "more first-pitch swings"),
+    _h_szn("ISO", "isolated power", "more isolated power"),
+    _h_szn("AVG", "batting average", "higher average"),
+    _h_szn("OBP", "on-base percentage", "higher on-base percentage"),
+    _h_szn("Barrel_pct", "barrel rate", "more barrels"),
+    _h_szn("HardHit_pct", "hard-hit rate", "more hard contact"),
+    _h_szn("BatGB_pct", "ground-ball rate", "more ground balls"),
+    _h_szn("sprint_speed", "sprint speed", "faster"),
+    _h_szn("SwingDiscrim", "zone swing minus chase", "better swing decisions"),
+    _h_szn("OAA", "outs above average", "better defense", "savant_qualified"),
+    _h_szn("ArmStrength", "throwing arm strength", "stronger arm", "savant_qualified"),
+    _h_szn("PAvol", "plate appearances with this team", "more playing time", "season_stints"),
     # ── hitters, other ranks ───────────────────────────────────────────────
     Percentile("H.gi", "attempt_rate_pct", "steal attempts per time on base", "season_steal_opps", "runs more"),
     Percentile("H.adv", "xbt_pct", "extra-base attempts per chance", "season_xbt",
@@ -190,9 +195,6 @@ PERCENTILES: list[Percentile] = [
                "season_discipline", "more whiffs than velocity predicts"),
     Percentile("P.metrics", "FirstPitchStrike_pct", "first-pitch strike rate", "season_discipline",
                "more first-pitch strikes"),
-    Percentile("P.metrics", "spin_efficiency_team_pct", "spin efficiency", "team_pitchers",
-               "more efficient spin"),
-    Percentile("P.metrics", "tunnel_score_team_pct", "tunnel score", "team_pitchers", "better tunneling"),
     Percentile("P.pool.league_mechanics", "arm_angle_pct", "arm angle", "season_mechanics",
                "higher arm slot", raw="arm_angle"),
     Percentile("P.pool.league_mechanics", "extension_pct", "release extension", "season_mechanics",
@@ -225,16 +227,7 @@ PERCENTILES: list[Percentile] = [
 # Numeric keys that are NOT percentiles, by scope, with what they are. V27
 # requires every numeric key in a portrait to be in PERCENTILES or here.
 RAW: dict[str, dict[str, str]] = {
-    "H.metrics": {
-        "K": "strikeout rate (fraction of PA)", "k_rate_raw": "strikeout rate (fraction of PA)",
-        "BB": "walk rate (fraction of PA)", "Barrel": "barrels per batted ball",
-        "HardHit": "hard-hit balls per batted ball", "BatGB": "ground balls per batted ball",
-        "Contact": "contact per swing", "Whiff": "whiffs per swing", "FPS": "first-pitch swing rate",
-        "OSwing": "swings at pitches outside the zone", "ZSwing": "swings at pitches in the zone",
-        "Pull": "pulled share of batted balls", "Oppo": "opposite-field share",
-        "GapTend": "gap share of batted balls", "XB": "extra-base hits per ball in play",
-        "HR_FB": "home runs per fly ball",
-    },
+    "H.metrics": {"k_rate_raw": "strikeout rate (fraction of PA)"},
     "H.adv": {"opps": "count", "attempts": "count", "advances": "count", "thrown_out": "count",
               "attempt_rate": "fraction", "xbt_rate": "fraction",
               "first_to_third_n": "count", "first_to_third_opps": "count"},
@@ -267,11 +260,10 @@ RAW: dict[str, dict[str, str]] = {
 
 
 # The curated percentiles a player card charts (profile["metrics_pct"]),
-# display label -> the metrics key it shows. Hitter labels predate these
-# contracts: "Contact" is the inverted STRIKEOUT percentile (fewer Ks), not
-# contact rate, which is "Contact Rate" — the hover says which.
+# display label -> the metrics key it shows. "Avoids Ks" is the inverted
+# strikeout percentile; it was labelled "Contact" beside "Contact Rate".
 HITTER_DISPLAY: dict[str, str] = {
-    "Power": "ISO_pct", "Walk Rate": "BB_pct_pct", "Contact": "K_pct_pct",
+    "Power": "ISO_pct", "Walk Rate": "BB_pct_pct", "Avoids Ks": "K_pct_pct",
     "Quality": "xwOBA_pct", "Speed": "sprint_speed_pct",
     "Contact-First": "OBP_SLG_gap_pct", "Aggression": "FPS_pct_pct",
     "Zone Swing": "ZSwing_pct_pct", "Contact Rate": "Contact_pct_pct",
