@@ -621,8 +621,8 @@ def comp_require_options(side):
 )
 def comp_render(key, min_vol, require):
     """
-    Nearest player-seasons by tag profile — the League Identity Board's
-    mechanism one level down, computed per request rather than stored.
+    Nearest player-seasons by their measurements — the team comps' method one
+    level down, computed per request rather than stored.
     """
     if not key:
         return charts.comp_results(None, [])

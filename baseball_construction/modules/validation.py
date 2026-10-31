@@ -2037,6 +2037,72 @@ def v27_percentile_contracts() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V28 — Player comp vectors
+# ---------------------------------------------------------------------------
+
+def v28_player_comp_vectors() -> Result:
+    """
+    Offline (team_similarity.player_vector, which publish writes to
+    scout_players.vec for the scout_comps cosine):
+      1. every comp feature is a percentile metric_contracts declares, in the
+         scope its source reads
+      2. release geometry stays out of the pitcher vector (an attribute)
+      3. a player at the league midpoint on everything is the zero vector, and
+         two identical players are at cosine 1.0
+      4. each domain carries the same total weight however many metrics it has
+    """
+    import sys as _sys
+    import numpy as np
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import team_similarity as ts
+    import metric_contracts as mc
+
+    errors = []
+    scope = {("H", "m"): "H.metrics", ("P", "m"): "P.metrics",
+             ("H", "gi"): "H.gi", ("H", "adv"): "H.adv"}
+    for side, doms in ts.PLAYER_DOMAINS.items():
+        for items in doms.values():
+            for src, key in items:
+                sc = scope.get((side, src)) or (f"P.pool.{src[5:]}" if src.startswith("pool:") else None)
+                if sc is None or mc.lookup(sc, key) is None:
+                    errors.append(f"{side} comp feature {src}:{key} is not a declared percentile")
+    p_keys = {k for items in ts.PLAYER_DOMAINS["P"].values() for _, k in items}
+    if "extension_pct" in p_keys:
+        errors.append("release extension is in the pitcher comp vector")
+
+    def player(side, pct):
+        m, pools = {}, {}
+        for items in ts.PLAYER_DOMAINS[side].values():
+            for src, key in items:
+                if src == "m":
+                    m[key] = pct
+                elif src.startswith("pool:"):
+                    pools.setdefault(src[5:], {})[key] = pct
+        gi = {"metrics": m, "pool_rows": pools, "attempt_rate_pct": pct,
+              "advancement": {"xbt_pct": pct}}
+        return {"gate_inputs": gi}
+
+    for side in ("H", "P"):
+        mid = ts.player_vector(player(side, 50.0), side)
+        if any(abs(v) > 1e-9 for v in mid.values()):
+            errors.append(f"{side}: a midpoint player is not the zero vector")
+        hi = ts.player_vector(player(side, 90.0), side)
+        a = np.array(list(hi.values()))
+        if abs(a @ a / (np.linalg.norm(a) ** 2) - 1) > 1e-9:
+            errors.append(f"{side}: identical players are not at cosine 1")
+        for dom, items in ts.PLAYER_DOMAINS[side].items():
+            sq = sum(hi[k] ** 2 for _, k in items if k in hi)
+            if abs(sq - 0.8 ** 2) > 1e-3:      # vectors are rounded to 5 places
+                errors.append(f"{side} {dom}: squared weight {sq:.3f}, not one domain's share")
+
+    passed = not errors
+    detail = (f"{sum(len(i) for d in ts.PLAYER_DOMAINS.values() for i in d.values())} declared features; "
+              "geometry excluded; midpoint = zero vector; equal weight per domain"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -2068,6 +2134,7 @@ TESTS = [
     ("V25", "Tag states and framing",          v25_tag_states_and_framing),
     ("V26", "Team comps from measurements",    v26_team_comps),
     ("V27", "Percentile contracts",            v27_percentile_contracts),
+    ("V28", "Player comp vectors",             v28_player_comp_vectors),
 ]
 
 
