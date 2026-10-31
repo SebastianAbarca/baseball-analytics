@@ -448,6 +448,8 @@ def _archetype_guide_card() -> dbc.Card:
                 "no tags come off the spectrum — a ratio cannot describe a hitter "
                 "who is moderate in both, which is where doubles hitters live",
                 "kept as a continuous field for the Scout search band",
+                "blank for hitters under 100 PA — the ratio is undefined when "
+                "both power and contact are near zero",
             ],
             "examples": "0 = Arraez · 100 = Gallo · doubles hitters sit near the middle",
         },

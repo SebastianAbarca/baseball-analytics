@@ -381,6 +381,19 @@ def v5_hitter_archetypes() -> Result:
     if missing_mods:
         errors.append(f"modifiers missing keys: {missing_mods}")
 
+    # ── Spectrum is blank on a limited sample (hitter_traits) ─────────────
+    # Power / (power + contact) is undefined for a hitter with neither; under
+    # LIMITED_SAMPLE_PA the spectrum is left out rather than reported.
+    from hitter_traits import build_hitter_traits
+    from reliability import LIMITED_SAMPLE_PA
+    nothing = {"ISO_pct": 0.0, "AVG_pct": 0.0, "K_pct_raw_pct": 100.0, "OBP_SLG_gap_pct": 100.0}
+    _, spec_thin = build_hitter_traits(metrics=nothing, pa=LIMITED_SAMPLE_PA - 60)
+    _, spec_full = build_hitter_traits(metrics=complete_metrics, pa=LIMITED_SAMPLE_PA * 4)
+    if spec_thin is not None:
+        errors.append(f"spectrum on a {LIMITED_SAMPLE_PA - 60}-PA hitter: {spec_thin}")
+    if spec_full is None:
+        errors.append("no spectrum on a full-season hitter")
+
     passed = len(errors) == 0
     detail = "all cases correct" if passed else "; ".join(errors)
     return passed, detail

@@ -193,8 +193,14 @@ def build_hitter_traits(
 
     # ── bat: power (barrel + hard-hit — the process, not ISO) ─────────────
     # The spectrum is still computed and returned as a continuous field, but
-    # nothing is tagged off its tails any more.
+    # nothing is tagged off its tails any more. Blank on a limited sample: it
+    # is power / (power + contact), undefined when both are near zero, and
+    # those hitters are exactly the ones without enough PA — a pitcher batting
+    # .000 with no extra bases read 99.7 ("extreme power") before the on-base
+    # fix and 1.7 ("extreme contact") after, and neither meant anything.
     spectrum = compute_spectrum(metrics)
+    if pa is not None and pa < LIMITED_SAMPLE_PA:
+        spectrum = None
     iso = gm.get("ISO_pct")
     vals = [float(v) for v in (gm.get("Barrel_pct_pct"), gm.get("HardHit_pct_pct")) if v is not None]
     contact = float(np.mean(vals)) if vals else None
