@@ -82,7 +82,13 @@ sys.path.insert(0, str(_HERE))
 # `K_pct_pitch_pct`, likewise Whiff, BB, GB) and the raw Zone_pct / CSW_pct
 # fractions; only declared percentiles remain. Pitcher card and Scout keys
 # follow (`K_pct_pitch_pct` …).
-PORTRAIT_SCHEMA_VERSION = 26
+# 27: philosophy_metrics read the percentiles by their own names: no
+# K_inv_pct / BB_pitch_inv_pct (both inverted an already-inverted rank), no
+# TeamK / AvgVelo / GB aliases, and the staff's whiff rate is the staff's.
+# Team aggregates average declared percentiles only. Philosophy names
+# describe the roster: "Control and Contact Management", "Arsenal Variety and
+# Matchup Usage", "Defense and Park Support", "Young, Team-Controlled Roster".
+PORTRAIT_SCHEMA_VERSION = 27
 
 from ingest import (
     pull_statcast_range,
@@ -938,7 +944,11 @@ def _aggregate_team_batting(team_bat: pd.DataFrame) -> dict[str, Optional[float]
     if total_w == 0:
         return result
 
-    pct_cols = [c for c in team_bat.columns if c.endswith("_pct")]
+    # Declared percentiles only: raw rates end in "_pct" too (HR_FB_pct is a
+    # rate), and averaged in here they were read downstream as percentiles.
+    from metric_contracts import lookup as _contract
+    pct_cols = [c for c in team_bat.columns
+                if c.endswith("_pct") and _contract("H.metrics", c) is not None]
     for col in pct_cols:
         vals = pd.to_numeric(team_bat[col], errors="coerce")
         valid_mask = vals.notna()
@@ -985,7 +995,9 @@ def _aggregate_team_pitching(team_pit: pd.DataFrame) -> dict[str, Optional[float
     if total_w == 0:
         return result
 
-    pct_cols = [c for c in team_pit.columns if c.endswith("_pct")]
+    from metric_contracts import lookup as _contract
+    pct_cols = [c for c in team_pit.columns
+                if c.endswith("_pct") and _contract("P.metrics", c) is not None]
     for col in pct_cols:
         vals = pd.to_numeric(team_pit[col], errors="coerce")
         valid_mask = vals.notna()
@@ -1598,39 +1610,20 @@ def _build_philosophy_metrics(
         v = metrics.get(key)
         return (100.0 - v) if v is not None else None
 
-    # Caller-inverted keys expected by philosophy.py
-    metrics["K_inv_pct"]             = _inv("K_pct_pct")
+    # Caller-inverted keys: each inverts a PLAIN percentile (metric_contracts),
+    # never one that is already inverted. K_inv_pct and BB_pitch_inv_pct did
+    # exactly that and are gone — philosophy reads K_pct_pct / K_pct_raw_pct
+    # and BB_pct_pitch_pct directly.
     metrics["Sprint_inv_pct"]        = _inv("sprint_speed_pct")
     metrics["PitchesPerPA_inv_pct"]  = _inv("PitchesPerPA_pct")
     metrics["BB_inv_pct"]            = _inv("BB_pct_pct")
-    metrics["BB_inv_pct"]            = _inv("BB_pct_pct")
 
     # ── Pitching metrics ──────────────────────────────────────────────────
+    # Pitcher percentiles have their own names (K_pct_pitch_pct, not K_pct_pct),
+    # so nothing here can be shadowed by the batting average of the same name
+    # — which is how "staff whiff rate" used to read the hitters' whiff rate.
     for key, val in team_pitching_agg.items():
-        if key not in metrics:
-            metrics[key] = val
-
-    # Aliases for case-convention mismatches between internal and philosophy keys
-    metrics["SprintSpeed_pct"] = metrics.get("sprint_speed_pct")
-    metrics["AvgVelo_pct"]     = metrics.get("avg_velo_pct")
-
-    # Rename for philosophy dimension B (team-level pitching keys)
-    for raw, phil in [
-        ("K_pct_pitch_pct",    "TeamK_pct_pct"),
-        ("Whiff_pct_pitch_pct","Whiff_pct_pct"),
-        ("HardHit_allowed_pct","HardHit_allowed_pct"),
-    ]:
-        if raw in metrics and phil not in metrics:
-            metrics[phil] = metrics[raw]
-
-    # Pitcher GB% — used in B2 (GB_pct_pct) and B4 (GB_pitch_pct)
-    pitcher_gb = metrics.get("GB_pct_pitch_pct")
-    if pitcher_gb is not None:
-        metrics.setdefault("GB_pct_pct",  pitcher_gb)
-        metrics.setdefault("GB_pitch_pct", pitcher_gb)
-
-    # Inverted pitching keys
-    metrics["BB_pitch_inv_pct"] = _inv("BB_pct_pitch_pct")
+        metrics.setdefault(key, val)
 
     # ── Park factor ───────────────────────────────────────────────────────
     if park and "pitcher_friendly" in park:
@@ -1640,9 +1633,9 @@ def _build_philosophy_metrics(
     if tunneling_team and "tunnel_score_team_pct" in tunneling_team:
         metrics["TunnelScore_pct"] = tunneling_team["tunnel_score_team_pct"]
 
-    # ── CSW% — prefer Statcast-derived; fall back to SwStr approximation ──
-    if "CSW_pct_pct" not in metrics and "Whiff_pct_pct" in metrics:
-        metrics["CSW_pct_pct"] = metrics["Whiff_pct_pct"]
+    # ── CSW% — prefer Statcast-derived; fall back to the staff's whiff rate ──
+    if "CSW_pct_pct" not in metrics and "Whiff_pct_pitch_pct" in metrics:
+        metrics["CSW_pct_pct"] = metrics["Whiff_pct_pitch_pct"]
 
     # ── Cross-team spread/concentration metrics ───────────────────────────
     if cross_team_metrics:
@@ -1891,7 +1884,7 @@ def _compute_projected_profile(
         ("iso",        "ISO_pct",        False),
         ("obp",        "OBP_pct",        False),
         ("bb_rate",    "BB_pct_pct",     False),
-        ("k_rate",     "K_pct_raw_pct",  True),
+        ("k_rate",     "K_pct_pct",      True),    # high = fewer Ks (Contact)
         ("barrel_pct", "Barrel_pct_pct", False),
         ("avg",        "AVG_pct",        False),
         ("contact_pct","Contact_pct_pct",False),
@@ -1906,10 +1899,10 @@ def _compute_projected_profile(
     if "k_rate" in prior_bat.columns:
         prior_bat["K_pct_raw_pct_noninv"] = normalize_percentile(
             pd.to_numeric(prior_bat["k_rate"], errors="coerce"), invert=False)
-    if "obp" in prior_bat.columns and "iso" in prior_bat.columns:
-        prior_bat["OBP_ISO_gap"] = (pd.to_numeric(prior_bat["obp"], errors="coerce") -
-                                     pd.to_numeric(prior_bat["iso"], errors="coerce"))
-        prior_bat["OBP_ISO_gap_pct"] = normalize_percentile(prior_bat["OBP_ISO_gap"])
+    if "obp" in prior_bat.columns and "slg" in prior_bat.columns:
+        prior_bat["OBP_SLG_gap"] = (pd.to_numeric(prior_bat["obp"], errors="coerce") -
+                                     pd.to_numeric(prior_bat["slg"], errors="coerce"))
+        prior_bat["OBP_SLG_gap_pct"] = normalize_percentile(prior_bat["OBP_SLG_gap"])
 
     prior_map = {int(r["key_mlbam"]): r
                  for _, r in prior_bat.iterrows()
@@ -2050,13 +2043,13 @@ def _compute_pitching_projection(
     # Normalize prior-year pool within the prior season — only the metrics
     # that feed B1 (fully) and B2 (partially; minus TeamDefense_pct).
     NORM_SPECS = [
-        ("k_rate",        "TeamK_pct_pct",      False),
-        ("fb_velocity",   "AvgVelo_pct",        False),
-        ("whiff_pct",     "Whiff_pct_pct",      False),
-        ("avg_spin_rate", "AvgSpinRate_pct",    False),
-        ("bb_rate",       "BB_pct_pitch_pct",   True),   # inverted directly → BB_pitch_inv_pct
-        ("zone_pct",      "Zone_pct_pct",       False),
-        ("gb_pct",        "GB_pct_pct",         False),
+        ("k_rate",        "K_pct_pitch_pct",     False),
+        ("fb_velocity",   "avg_velo_pct",        False),
+        ("whiff_pct",     "Whiff_pct_pitch_pct", False),
+        ("avg_spin_rate", "AvgSpinRate_pct",     False),
+        ("bb_rate",       "BB_pct_pitch_pct",    True),   # high = fewer walks
+        ("zone_pct",      "Zone_pct_pct",        False),
+        ("gb_pct",        "GB_pct_pitch_pct",    False),
     ]
     prior_pit = prior_pit.copy()
     for raw_col, pct_col, invert in NORM_SPECS:
@@ -2082,8 +2075,8 @@ def _compute_pitching_projection(
     covered_bf = 0.0
     proj_metrics: dict[str, list[tuple[float, float]]] = {}
 
-    PCT_KEYS = ["TeamK_pct_pct", "AvgVelo_pct", "Whiff_pct_pct", "AvgSpinRate_pct",
-                "Zone_pct_pct", "GB_pct_pct"]
+    PCT_KEYS = ["K_pct_pitch_pct", "avg_velo_pct", "Whiff_pct_pitch_pct", "AvgSpinRate_pct",
+                "Zone_pct_pct", "GB_pct_pitch_pct", "BB_pct_pitch_pct"]
 
     for pid in pitcher_ids:
         bf = bf_weights.get(pid, 0)
@@ -2097,11 +2090,6 @@ def _compute_pitching_projection(
             if val is not None and not pd.isna(val):
                 proj_metrics.setdefault(key, []).append((float(val), bf))
 
-        # BB_pct_pitch_pct was normalized with invert=True, so it's already
-        # the "inverted" percentile — surface it directly as BB_pitch_inv_pct.
-        bb_inv = row.get("BB_pct_pitch_pct")
-        if bb_inv is not None and not pd.isna(bb_inv):
-            proj_metrics.setdefault("BB_pitch_inv_pct", []).append((float(bb_inv), bf))
 
     if total_bf == 0 or covered_bf == 0:
         return {}

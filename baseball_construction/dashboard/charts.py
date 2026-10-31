@@ -8,6 +8,7 @@ Dash html.Div component tree (for use in collapsible breakdown panels).
 from __future__ import annotations
 
 import colorsys
+import logging
 import math
 import sys
 from pathlib import Path
@@ -20,6 +21,9 @@ from dash import html
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
+sys.path.insert(0, str(_HERE.parent / "scripts"))   # team_similarity (comp explanations)
+
+log = logging.getLogger(__name__)
 
 # Tag kind (attribute / tool / behavior / result / deployment) — the
 # vocabulary axis, used here to tell a genuinely empty trait cell from one
@@ -2347,14 +2351,14 @@ METRIC_LABELS: dict[str, str] = {
     # A1
     "ISO_pct":               "Isolated Power",
     "BB_pct_pct":            "Walk Rate",
-    "K_pct_pct":             "Strikeout Rate",
-    "HR_FB_pct":             "HR/FB Ratio",
+    "K_pct_raw_pct":         "Strikeout Rate (more Ks = higher)",
+    "HR_FB_pct_pct":         "HR/FB Ratio",
     "Sprint_inv_pct":        "Sprint Speed (low = TTO)",
     # A2
-    "K_inv_pct":             "Contact Rate (inv. K%)",
+    "K_pct_pct":             "Avoids Strikeouts",
     "OBP_SLG_gap_pct":       "OBP–SLG Gap",
     "PitchesPerPA_pct":      "Pitches per PA",
-    "SprintSpeed_pct":       "Sprint Speed",
+    "sprint_speed_pct":      "Sprint Speed",
     "Contact_pct_pct":       "Contact Rate",
     # A3
     "FPS_pct_pct":           "First-Pitch Strike Swing%",
@@ -2367,14 +2371,14 @@ METRIC_LABELS: dict[str, str] = {
     "PowerContributors_pct": "Power Contributors (PA share)",
     "TeamBarrel_pct":        "Team Barrel Rate",
     # B1
-    "TeamK_pct_pct":         "Team Strikeout Rate",
-    "AvgVelo_pct":           "Avg Fastball Velocity",
-    "Whiff_pct_pct":         "Whiff Rate (per swing)",
+    "K_pct_pitch_pct":       "Staff Strikeout Rate",
+    "avg_velo_pct":          "Avg Fastball Velocity",
+    "Whiff_pct_pitch_pct":   "Staff Whiff Rate (per swing)",
     "AvgSpinRate_pct":       "Avg Spin Rate",
     # B2
-    "BB_pitch_inv_pct":      "Walk Rate (inv.)",
+    "BB_pct_pitch_pct":      "Walk Avoidance (staff)",
     "Zone_pct_pct":          "Zone Rate",
-    "GB_pct_pct":            "Ground Ball Rate",
+    "GB_pct_pitch_pct":      "Ground Ball Rate (staff)",
     "TeamDefense_pct":       "Team Defense (OAA + Def Runs)",
     # B3
     "ArsenalDiversity_pct":  "Arsenal Diversity",
@@ -2384,7 +2388,6 @@ METRIC_LABELS: dict[str, str] = {
     # B4
     "OAA_pct":               "Outs Above Average",
     "DRS_pct":               "Def. Runs Saved (BRef)",
-    "GB_pitch_pct":          "Ground Ball Rate (pitch.)",
     "ParkPitcherFriendly_pct": "Park Pitcher-Friendliness",
     # C1
     "WAR_concentration_pct": "bWAR Concentration",
@@ -5100,18 +5103,30 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
     Other seasons of the SAME player are kept rather than filtered out. They
     are the metric's own check: if a player's nearest neighbour is not usually
     himself a year later, the similarity is not measuring anything stable.
-    Skubal 2024's closest comp is Skubal 2025 at 0.873, and Soto 2024 finds
+    Judge 2024's closest comp is Judge 2025 at 0.95, and Soto 2024 finds
     Soto 2023.
 
     Cosine similarity over the comp vectors runs in the scout_comps SQL
     function; the vectors are built by team_similarity.player_vector at
-    publish. The shared tags shown beside each comp explain it.
+    publish. Each comp carries `why` — the measurements the two share and the
+    one that most separates them (team_similarity.explain_players).
     """
     rows = compare_rows([key])
     if not rows:
         return None, []
     import store
     comps = store.scout_comps(key, limit, int(min_vol or 0), require, same_season_only)
+    try:
+        from team_similarity import explain_players
+        vecs = store.scout_vectors(rows + comps)
+        vkey = lambda r: (r.get("i"), r.get("t"), r.get("s"), r.get("g"))
+        tvec = vecs.get(vkey(rows[0])) or {}
+        for c in comps:
+            cvec = vecs.get(vkey(c))
+            if tvec and cvec:
+                c["why"] = explain_players(tvec, cvec, rows[0].get("d", "H"))
+    except Exception as exc:          # explanations are a nicety, comps are not
+        log.warning("comp explanations failed: %s", exc)
     return rows[0], [(c.pop("sim"), c) for c in comps]
 
 
@@ -5137,7 +5152,15 @@ def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
                 "borderBottom": f"1px solid {COLORS['border']}33"}),
             html.Td([html.Div(p["n"], style={"fontWeight": "600"}),
                      html.Div(f"{p['t']} {p['s']} · {p.get('v') or 0:,}",
-                              style={"color": COLORS["subtext"], "fontSize": "0.66rem"})],
+                              style={"color": COLORS["subtext"], "fontSize": "0.66rem"}),
+                     # What the two share, in the team comps' words; the
+                     # biggest difference on hover.
+                     html.Div("both: " + " · ".join((p.get("why") or {}).get("shared") or []),
+                              title=(f"Most different on {(p.get('why') or {}).get('differ')}"
+                                     if (p.get("why") or {}).get("differ") else None),
+                              style={"color": COLORS["subtext"], "fontSize": "0.64rem",
+                                     "whiteSpace": "normal", "cursor": "help"})
+                     if (p.get("why") or {}).get("shared") else None],
                     style={"padding": "6px 8px", "fontSize": "0.76rem",
                            "whiteSpace": "nowrap", "verticalAlign": "top",
                            "borderBottom": f"1px solid {COLORS['border']}33"}),

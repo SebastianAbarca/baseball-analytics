@@ -248,6 +248,19 @@ def scout_rows(keys: list[str]) -> list[dict]:
     return _db().rpc("scout_rows", {"p_keys": list(keys)}).execute().data or []
 
 
+def scout_vectors(rows: list[dict]) -> dict[tuple, dict]:
+    """Comp vectors for Scout rows, keyed (player_id, team, season, grp) — one
+    query for a target and its comps. scout_row leaves `vec` out of the row
+    JSON; the anon role reads the column directly."""
+    ids = sorted({r["i"] for r in rows if r.get("i") is not None})
+    if not ids:
+        return {}
+    data = (_db().table("scout_players").select("player_id,team,season,grp,vec")
+            .in_("player_id", ids).execute().data or [])
+    return {(d["player_id"], d["team"], d["season"], d["grp"]): d.get("vec") or {}
+            for d in data}
+
+
 def scout_comps(key: str, limit: int, min_vol: int,
                 require: Optional[list[str]], same_season: bool) -> list[dict]:
     return _db().rpc("scout_comps", {

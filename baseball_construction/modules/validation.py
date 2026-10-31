@@ -59,6 +59,7 @@ NEEDS = {
     "V21": "this machine's fg_batting roots",
     "V22": "the database",
     "V27": "this machine's portraits",
+    "V29": "this machine's portraits",
 }
 
 
@@ -221,18 +222,18 @@ def v4_philosophy_scoring() -> Result:
 
     # Construct a TTO-heavy metric profile
     metrics = {
-        # A1 weights: ISO_pct(0.30), BB_pct_pct(0.25), K_pct_pct(0.20),
-        #             HR_FB_pct(0.15), Sprint_inv_pct(0.10)
+        # A1 weights: ISO_pct(0.30), BB_pct_pct(0.25), K_pct_raw_pct(0.20),
+        #             HR_FB_pct_pct(0.15), Sprint_inv_pct(0.10)
         "ISO_pct":         85.0,
         "BB_pct_pct":      80.0,
-        "K_pct_pct":       75.0,
-        "HR_FB_pct":       80.0,
+        "K_pct_raw_pct":   75.0,    # strikes out a lot (high = MORE Ks)
+        "HR_FB_pct_pct":   80.0,
         "Sprint_inv_pct":  70.0,
         # A2 — contact profile (deliberately low)
-        "K_inv_pct":       25.0,    # high K% → low contact inv
+        "K_pct_pct":       25.0,    # the same team, so it avoids Ks rarely
         "OBP_SLG_gap_pct": 30.0,
         "PitchesPerPA_pct":40.0,
-        "SprintSpeed_pct": 30.0,
+        "sprint_speed_pct":30.0,
         "Contact_pct_pct": 25.0,
     }
 
@@ -2103,6 +2104,91 @@ def v28_player_comp_vectors() -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V29 — Philosophy inputs point the way they are named
+# ---------------------------------------------------------------------------
+
+def v29_philosophy_directions(defs: Optional[dict] = None) -> Result:
+    """
+    Each philosophy's strikeout, walk, whiff and ground-ball input — whichever
+    key its PHILOSOPHY_DEFS weights actually read — must move with the team's
+    raw rate in the direction the philosophy means, every season (Spearman
+    over the 30 teams, |rho| >= 0.8). Raw rates are recomputed from the
+    players (PA- or BF-weighted), not read from the input.
+
+    This is the check that was missing: Three True Outcomes read an inverted
+    K percentile as "more Ks", Contact inverted it a second time, Control
+    inverted an already-inverted walk percentile, and Stuff read the hitters'
+    whiff rate (2025: rho -0.98, +0.98, -1.00, -0.03). V4 fed hand-made
+    numbers, so it could not see any of it. `defs` lets the check be run
+    against other definitions (it fails on the pre-fix ones).
+    """
+    import collections
+    import json
+    import numpy as np
+    from scipy.stats import spearmanr
+    from ingest import PROCESSED_DIR
+    from philosophy import PHILOSOPHY_DEFS
+
+    defs = defs or PHILOSOPHY_DEFS
+
+    def team_rate(players, wkey, key):
+        pairs = [((p.get("gate_inputs") or {}).get("metrics", {}).get(key), float(p.get(wkey) or 0))
+                 for p in players]
+        pairs = [(v, w) for v, w in pairs if isinstance(v, (int, float)) and v == v and w > 0]
+        ws = sum(w for _, w in pairs)
+        return sum(v * w for v, w in pairs) / ws if ws else np.nan
+
+    K_H = {"K_pct_raw_pct", "K_pct_pct", "K_inv_pct"}
+    BB_H = {"BB_inv_pct", "BB_pct_pct"}
+    K_P = {"K_pct_pitch_pct", "TeamK_pct_pct"}
+    BB_P = {"BB_pct_pitch_pct", "BB_pitch_inv_pct"}
+    WH_P = {"Whiff_pct_pitch_pct", "Whiff_pct_pct"}
+    GB_P = {"GB_pct_pitch_pct", "GB_pct_pct", "GB_pitch_pct"}
+    # (philosophy, the inputs that may carry the concept, side, raw rate, sign)
+    CHECKS = [
+        ("A1", K_H, "H", "k_rate_raw", +1),            # Three True Outcomes: more Ks
+        ("A2", K_H, "H", "k_rate_raw", -1),            # Contact: fewer Ks
+        ("A3", BB_H, "H", "BB_pct_pct", -1),           # Early count: fewer walks
+        ("B1", K_P, "P", "K_pct_pitch_pct", +1),       # Stuff: more Ks
+        ("B1", WH_P, "P", "Whiff_pct_pitch_pct", +1),  # Stuff: the staff's whiffs
+        ("B2", BB_P, "P", "BB_pct_pitch_pct", +1),     # Control: walk avoidance
+        ("B2", GB_P, "P", "GB_pct_pitch_pct", +1),
+        ("B4", GB_P, "P", "GB_pct_pitch_pct", +1),
+    ]
+    by_season = collections.defaultdict(list)
+    for f in sorted((PROCESSED_DIR / "portraits").glob("*_*.json")):
+        p = json.loads(f.read_text())
+        by_season[p["season"]].append(p)
+    errors, checked = [], 0
+    for code, family, side, raw_key, sign in CHECKS:
+        keys = [k for k in defs[code]["weights"] if k in family]
+        if len(keys) != 1:
+            errors.append(f"{code}: reads {keys or 'none'} of {sorted(family)}")
+            continue
+        key = keys[0]
+        for season, ps in sorted(by_season.items()):
+            xs, ys = [], []
+            for p in ps:
+                pm = p.get("philosophy_metrics") or {}
+                players = (p["players"]["hitters"] if side == "H"
+                           else p["players"]["starters"] + p["players"]["bullpen_arms"])
+                raw = team_rate(players, "pa" if side == "H" else "bf", raw_key)
+                if isinstance(pm.get(key), (int, float)) and raw == raw:
+                    xs.append(pm[key]); ys.append(raw)
+            if len(xs) < 20:
+                errors.append(f"{season} {code} {key}: only {len(xs)} teams carry it")
+                continue
+            rho = spearmanr(xs, ys)[0]
+            checked += 1
+            if not rho * sign >= 0.8:
+                errors.append(f"{season} {code} {key}: rho {rho:+.2f}, expected {'+' if sign > 0 else '-'}")
+    passed = not errors
+    detail = (f"{checked} philosophy input-seasons point the way they are named"
+              if passed else f"{len(errors)} problems, e.g. " + "; ".join(errors[:5]))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -2135,6 +2221,7 @@ TESTS = [
     ("V26", "Team comps from measurements",    v26_team_comps),
     ("V27", "Percentile contracts",            v27_percentile_contracts),
     ("V28", "Player comp vectors",             v28_player_comp_vectors),
+    ("V29", "Philosophy input directions",     v29_philosophy_directions),
 ]
 
 
