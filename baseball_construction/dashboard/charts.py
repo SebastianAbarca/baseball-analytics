@@ -5057,41 +5057,19 @@ def compare_summary(rows: list[dict]):
 
 
 # ---------------------------------------------------------------------------
-# "Plays like" — nearest player-seasons by tag profile
+# "Plays like" — nearest player-seasons by their measurements
 # ---------------------------------------------------------------------------
 #
-# The League Identity Board does this for TEAMS: a tag-density fingerprint per
-# unit, cosine similarity to every other team, and a uniqueness band. The same
-# mechanism works a level down, where the vector is one player's tags rather
-# than a unit's densities.
+# The same comparison the team comps use, a level down: a player-season is a
+# vector of its centred era percentiles, every domain weighted equally
+# (team_similarity.player_vector). It replaced a vector of the player's tags,
+# which ranked a player's own next season a median 122nd among hitters; the
+# measurements rank it 17th. Attributes (handedness, release geometry) stay
+# out of the vector and are offered as a filter instead.
 #
 # Computed on demand, not precomputed: 18,664 player-seasons is 174M pairs
 # stored, but a single query is one vector against ~2,600 same-side
 # candidates, which lands in tens of milliseconds.
-
-def _comp_vector(row: dict, cat: dict) -> dict[str, float]:
-    """
-    A player-season as a sparse tag vector.
-
-    Attribute tags are excluded by default. Handedness fires on essentially
-    everyone and would dominate the cosine, sorting the league into
-    right-handed and left-handed before anything about how a player actually
-    plays got a vote. Excluding it is visible in the results: Judge's comps
-    are right-handed, Soto's are left-handed, and neither list is driven by
-    that.
-
-    Weight is the direction-normalised strength, so `patient` at a 5th
-    percentile chase rate counts as 0.95 rather than 0.05, and a categorical
-    tag counts as simply present.
-    """
-    v: dict[str, float] = {}
-    for tag, pct, _ev in row.get("tg", []):
-        if cat.get(tag, {}).get("kind") == "attribute":
-            continue
-        s = tag_strength(tag, pct, cat)
-        v[tag] = 1.0 if s is None else s / 100.0
-    return v
-
 
 def attribute_options(side: str = "H") -> list[dict]:
     """
@@ -5117,7 +5095,7 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
                  same_season_only: bool = False,
                  require: list[str] | None = None) -> tuple[dict | None, list[tuple[float, dict]]]:
     """
-    Nearest player-seasons to `key`, by tag profile. Returns (target, comps).
+    Nearest player-seasons to `key`, by their measurements. Returns (target, comps).
 
     Other seasons of the SAME player are kept rather than filtered out. They
     are the metric's own check: if a player's nearest neighbour is not usually
@@ -5126,7 +5104,8 @@ def player_comps(key: str, limit: int = 8, min_vol: int = 300,
     Soto 2023.
 
     Cosine similarity over the comp vectors runs in the scout_comps SQL
-    function; the vectors themselves are built by _comp_vector at publish.
+    function; the vectors are built by team_similarity.player_vector at
+    publish. The shared tags shown beside each comp explain it.
     """
     rows = compare_rows([key])
     if not rows:

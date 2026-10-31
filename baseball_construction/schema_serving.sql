@@ -77,9 +77,9 @@ CREATE TABLE IF NOT EXISTS scout_tags (
 -- `ord` is the row's position in the flattening order (portrait files sorted
 -- by name, then hitters / starters / bullpen_arms). Every sort breaks ties on
 -- it, which reproduces the stable-sort order the in-memory index had.
--- `vec` is the comp vector (non-attribute tags -> direction-normalised
--- strength 0..1, categorical = 1), `vec_norm` its L2 norm — both computed at
--- publish time by the same Python that defined them.
+-- `vec` is the comp vector (each metric's era percentile, centred and
+-- domain-weighted: team_similarity.player_vector), `vec_norm` its L2 norm —
+-- both computed at publish time by the same Python that defined them.
 CREATE TABLE IF NOT EXISTS scout_players (
     season      INT     NOT NULL,
     team        TEXT    NOT NULL,
@@ -277,7 +277,7 @@ RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
               p.ord DESC
 $$;
 
--- Nearest player-seasons by tag profile. Mirrors charts.player_comps:
+-- Nearest player-seasons by their measurements. Mirrors charts.player_comps:
 -- cosine similarity over the precomputed comp vectors, same side, volume
 -- floor, optional required tags (applied to candidates only).
 -- The target's whole player-season is excluded, not just its team row: a

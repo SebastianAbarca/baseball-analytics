@@ -45,6 +45,7 @@ from typing import Optional
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 sys.path.insert(0, str(_HERE.parent / "dashboard"))
+sys.path.insert(0, str(_HERE))
 
 log = logging.getLogger("publish")
 
@@ -228,6 +229,7 @@ def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dic
               List order is the `ord` every Scout sort breaks ties on.
     """
     from team_portrait import kind_of
+    from team_similarity import player_vector
 
     GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
     cat: dict[str, dict] = {}
@@ -276,6 +278,8 @@ def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dic
                     "tg": tg,
                     "m": {k: round(v, 1) for k, v in (pl.get("metrics_pct") or {}).items()
                           if isinstance(v, (int, float))},
+                    # Comp vector from the measurements (team_similarity).
+                    "cv": player_vector(pl, side),
                 })
 
     # Direction. A tag's percentile is the percentile of the METRIC behind it,
@@ -347,7 +351,7 @@ def publish_scout(root: Path, client, dry: bool,
 
     rows = []
     for p in players:
-        vec = charts._comp_vector(p, cat)
+        vec = p["cv"]
         rows.append({
             "season": p["s"], "team": p["t"], "player_id": p["i"], "grp": p["g"],
             "ord": p["_ord"], "side": p["d"], "name": p["n"], "age": p["a"],

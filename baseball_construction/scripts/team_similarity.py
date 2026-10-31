@@ -159,6 +159,40 @@ def _value(player: dict, src: str, key: str) -> Optional[float]:
     raise ValueError(src)
 
 
+# ---------------------------------------------------------------------------
+# Player comps — the same measurements, one player at a time
+# ---------------------------------------------------------------------------
+# A player-season's comp vector: each metric's era percentile, centred on the
+# league midpoint ((pct - 50) / 50, so -1..1), every domain sharing one unit of
+# weight. Era percentiles because comps reach across seasons. Release
+# geometry is left out — like handedness it is an attribute, offered as a
+# filter rather than a vote. scout_comps (SQL) takes the cosine of these.
+#
+# Measured against the tag vectors it replaced (prototype, 2026-10-30; 600
+# player-seasons per side, 300+ PA/BF): a player's own next season ranks at a
+# median 17th of 2,932 hitters (tags: 122nd) and 14th of 2,061 pitchers
+# (63rd), and lands in the top 8 comps 38% / 44% of the time (13% / 22%).
+_PLAYER_EXCLUDE = {"extension_pct"}     # release geometry: an attribute
+PLAYER_DOMAINS = {
+    "H": HITTER_DOMAINS,
+    "P": {d: [(s, k) for s, k in items if k not in _PLAYER_EXCLUDE]
+          for d, items in PITCHER_DOMAINS.items()},
+}
+
+
+def player_vector(player: dict, side: str) -> dict[str, float]:
+    """{metric key: weighted, centred percentile} for one player profile;
+    metrics the player has no reading for are left out."""
+    out: dict[str, float] = {}
+    for dom, items in PLAYER_DOMAINS[side].items():
+        w = 1 / np.sqrt(len(items))
+        for src, key in items:
+            v = _value(player, src, key)
+            if v is not None:
+                out[key] = float(round((v - 50.0) / 50.0 * w, 5))
+    return out
+
+
 def style_features(players: list[dict], wkey: str,
                    domains: dict) -> dict[tuple, float]:
     """{(domain, metric, stat): value}; NaN where under MIN_COVERAGE of the

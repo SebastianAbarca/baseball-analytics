@@ -1164,8 +1164,8 @@ def scout_tab() -> dbc.Tab:
 
         # ── Plays like ────────────────────────────────────────────────────
         # The second way to find a player: not "who has this tag" but "who
-        # resembles this one". Same mechanism the League Identity Board uses
-        # for teams — a tag vector and a cosine — one level down.
+        # resembles this one". Same comparison the team comps use — the
+        # measurements and a cosine (team_similarity) — one level down.
         dbc.Card([
             dbc.CardHeader(
                 html.Small("Or find players who play like one",
