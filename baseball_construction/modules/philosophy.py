@@ -9,10 +9,18 @@ DIMENSION A — Offensive Philosophy  (A1–A4)
 DIMENSION B — Pitching Philosophy   (B1–B4)
 DIMENSION C — Roster Construction   (C1–C4)
 
-All metric keys ending in _pct are assumed already normalized 0–100.
-Inversion is handled upstream by normalize_percentile(invert=True).
-The only exception: a few keys carry an explicit _inv suffix where the
-caller must supply the inverted percentile (see PHILOSOPHY_DEFS).
+All metric keys ending in _pct are assumed already normalized 0–100, and
+use the percentiles' own names (metric_contracts): `K_pct_raw_pct` is the
+hitters' strikeout percentile (high = MORE Ks), `K_pct_pct` its inverse (high
+= fewer), `BB_pct_pitch_pct` the staff's walk avoidance (high = FEWER walks).
+Read a key's contract before adding an `_inv`: these used to be inverted a
+second time, so Three True Outcomes rewarded avoiding strikeouts, Contact
+rewarded striking out, and Control rewarded walks (2025: rho -0.98, +0.98,
+-1.00 against the rates they meant). A few keys still carry an explicit
+_inv suffix where the caller inverts a plain percentile (see the builder).
+
+Names describe the roster, not the front office's intent: the inputs are
+what the players did and how they were used, which cannot say why.
 
 Confidence:
   raw        = (top_score - second_score) / 100
@@ -47,8 +55,8 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "weights": {
             "ISO_pct":        0.30,
             "BB_pct_pct":     0.25,
-            "K_pct_pct":      0.20,   # higher K% = more TTO (not inverted)
-            "HR_FB_pct":      0.15,
+            "K_pct_raw_pct":  0.20,   # hitters' K% percentile, high = more Ks
+            "HR_FB_pct_pct":  0.15,
             "Sprint_inv_pct": 0.10,   # low speed confirms TTO (caller inverts)
         },
     },
@@ -57,10 +65,10 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Contact and Pressure",
         "dimension": "offense",
         "weights": {
-            "K_inv_pct":          0.20,   # low K% (caller inverts)
+            "K_pct_pct":          0.20,   # high = fewer Ks (already inverted)
             "OBP_SLG_gap_pct":    0.15,   # OBP outperforms SLG
             "PitchesPerPA_pct":   0.15,
-            "SprintSpeed_pct":    0.15,
+            "sprint_speed_pct":   0.15,
             "Contact_pct_pct":    0.15,
             "TeamXB_pct":         0.10,   # doubles+triples rate (gap contact pressure)
             "TeamGap_pct":        0.10,   # fraction of BIP in gap zones
@@ -95,26 +103,27 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
         "name":      "Stuff Dominant",
         "dimension": "pitching",
         "weights": {
-            "TeamK_pct_pct":    0.30,
-            "AvgVelo_pct":      0.25,
-            "Whiff_pct_pct":    0.25,
+            "K_pct_pitch_pct":      0.30,
+            "avg_velo_pct":         0.25,
+            "Whiff_pct_pitch_pct":  0.25,   # the staff's, not the hitters' 
             "AvgSpinRate_pct":  0.20,
         },
     },
 
     "B2": {
-        "name":      "Command and Contact Management",
+        "name":      "Control and Contact Management",   # walks, not targets
         "dimension": "pitching",
         "weights": {
-            "BB_pitch_inv_pct":  0.30,   # low BB% (caller inverts)
+            "BB_pct_pitch_pct":  0.30,   # high = fewer walks (already inverted)
             "Zone_pct_pct":      0.25,
-            "GB_pct_pct":        0.25,
+            "GB_pct_pitch_pct":  0.25,
             "TeamDefense_pct":   0.20,   # OAA or DRS
         },
     },
 
     "B3": {
-        "name":      "Pitch Design and Analytics Driven",
+        "name":      "Arsenal Variety and Matchup Usage",   # was "Pitch Design and
+        # Analytics Driven" — the inputs describe the staff, not why it was built
         "dimension": "pitching",
         "weights": {
             "ArsenalDiversity_pct":    0.15,
@@ -126,12 +135,12 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
     },
 
     "B4": {
-        "name":      "Defensive Infrastructure",
+        "name":      "Defense and Park Support",
         "dimension": "pitching",
         "weights": {
             "OAA_pct":                0.35,
             "DRS_pct":                0.25,
-            "GB_pitch_pct":           0.25,
+            "GB_pct_pitch_pct":       0.25,
             "ParkPitcherFriendly_pct":0.15,
         },
     },
@@ -157,7 +166,7 @@ PHILOSOPHY_DEFS: dict[str, dict] = {
     },
 
     "C3": {
-        "name":      "Youth and Development",
+        "name":      "Young, Team-Controlled Roster",   # service time, not development
         "dimension": "roster",
         "weights": {
             "AvgTenure_inv_pct": 0.40,  # PA-weighted avg EST, inverted (lower = younger)

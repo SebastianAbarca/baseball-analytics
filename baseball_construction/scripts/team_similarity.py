@@ -193,6 +193,39 @@ def player_vector(player: dict, side: str) -> dict[str, float]:
     return out
 
 
+# A metric is named as shared only where both players stand at least this far
+# from the midpoint, as a centred percentile: 0.3 = the 65th / 35th.
+PLAYER_MIN_DEV = 0.3
+
+
+def explain_players(a: dict, b: dict, side: str) -> dict:
+    """
+    Why two player-seasons are comps, from their player_vector()s: up to
+    EXPLAIN_N metrics where both stand out the same way (one per domain,
+    ranked by what they add to the cosine), and the metric that most pulls
+    them apart. Same phrases as the team comps.
+    Returns {"shared": [phrase, ...], "differ": metric name or None}.
+    """
+    rows = []
+    for dom, items in PLAYER_DOMAINS[side].items():
+        w = 1 / np.sqrt(len(items))
+        for _, key in items:
+            if key in a and key in b and key in PHRASES:
+                rows.append((a[key] * b[key], key, dom, a[key] / w, b[key] / w))
+    shared, used = [], set()
+    for c, key, dom, za, zb in sorted(rows, key=lambda r: -r[0]):
+        if len(shared) >= EXPLAIN_N or c <= 0:
+            break
+        if dom in used or min(abs(za), abs(zb)) < PLAYER_MIN_DEV:
+            continue
+        _, hi, lo = PHRASES[key]
+        shared.append(hi if za > 0 else lo)
+        used.add(dom)
+    worst = min(rows, key=lambda r: r[0], default=None)
+    differ = PHRASES[worst[1]][0] if worst is not None and worst[0] < 0 else None
+    return {"shared": shared, "differ": differ}
+
+
 def style_features(players: list[dict], wkey: str,
                    domains: dict) -> dict[tuple, float]:
     """{(domain, metric, stat): value}; NaN where under MIN_COVERAGE of the
