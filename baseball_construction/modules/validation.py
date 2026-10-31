@@ -419,8 +419,8 @@ def v6_pitcher_archetypes() -> Result:
     # ── P1 Power: all minimums met ────────────────────────────────────
     p1_metrics = {
         "avg_velo_pct":    70.0,   # >= 60
-        "K_pct_pct":       72.0,   # >= 65
-        "Whiff_pct_pct":   68.0,   # >= 65
+        "K_pct_pitch_pct":       72.0,   # >= 65
+        "Whiff_pct_pitch_pct":   68.0,   # >= 65
         "stuff_composite_pct": 75.0,
         "CSW_pct_pct":     65.0,
         "HardHit_inv_pct": 60.0,
@@ -438,7 +438,7 @@ def v6_pitcher_archetypes() -> Result:
     # heavily weighted in _score_p1, so true bat-missing aces still rank
     # highest; this just keeps "big arm, results still developing" inside
     # the same style label instead of in no-man's-land.)
-    p1_low_k = {**p1_metrics, "K_pct_pct": 30.0}   # well below old 58 floor
+    p1_low_k = {**p1_metrics, "K_pct_pitch_pct": 30.0}   # well below old 58 floor
     result = classify_p1(p1_low_k)
     if result is None:
         errors.append("P1 with low K_pct_pct but qualifying velo should still match (K% is scored, not gated), got None")
@@ -454,8 +454,8 @@ def v6_pitcher_archetypes() -> Result:
     # ── P2 blocked when velo > ceiling ────────────────────────────────────
     p2_highvelo = {
         "avg_velo_pct":  70.0,   # above P2_VELO_CEILING (65)
-        "K_pct_pct":     60.0,   # >= 55
-        "Whiff_pct_pct": 58.0,   # >= 55
+        "K_pct_pitch_pct":     60.0,   # >= 55
+        "Whiff_pct_pitch_pct": 58.0,   # >= 55
     }
     result = classify_p2(p2_highvelo)
     if result is not None:
@@ -470,8 +470,8 @@ def v6_pitcher_archetypes() -> Result:
     # P3_K_CEILING = 65.0 — K_pct_pct must be AT OR BELOW 65.
     # Use 66.0 to be strictly above the ceiling.
     p3_too_k = {
-        "GB_pct_pct":          65.0,   # >= 50 (passes minimum)
-        "K_pct_pct":           66.0,   # strictly above P3_K_CEILING (65) → blocked
+        "GB_pct_pitch_pct":          65.0,   # >= 50 (passes minimum)
+        "K_pct_pitch_pct":           66.0,   # strictly above P3_K_CEILING (65) → blocked
         "HardHit_allowed_pct": 40.0,   # below hard ceiling
     }
     result = classify_p3(p3_too_k)
@@ -479,8 +479,8 @@ def v6_pitcher_archetypes() -> Result:
         errors.append("P3 with K_pct_pct=66 (above ceiling 65) should fail, but passed")
 
     p3_valid = {
-        "GB_pct_pct":          65.0,
-        "K_pct_pct":           55.0,   # at or below 60
+        "GB_pct_pitch_pct":          65.0,
+        "K_pct_pitch_pct":           55.0,   # at or below 60
         "HardHit_allowed_pct": 45.0,   # at or below 50
     }
     result = classify_p3(p3_valid)
@@ -492,12 +492,12 @@ def v6_pitcher_archetypes() -> Result:
     # ── classify_starter: P1 wins when both P1 and P3 qualify ─────────────
     both_p1_p3 = {
         "avg_velo_pct":        70.0,
-        "K_pct_pct":           72.0,
-        "Whiff_pct_pct":       68.0,
+        "K_pct_pitch_pct":           72.0,
+        "Whiff_pct_pitch_pct":       68.0,
         "stuff_composite_pct": 75.0,
         "CSW_pct_pct":         65.0,
         "HardHit_inv_pct":     60.0,
-        "GB_pct_pct":          60.0,   # also passes P3 minimum
+        "GB_pct_pitch_pct":          60.0,   # also passes P3 minimum
         "HardHit_allowed_pct": 45.0,   # below P3 ceiling
     }
     result = classify_starter(both_p1_p3)
@@ -1122,7 +1122,7 @@ def v14_metric_directions() -> Result:
         r = ranked.iloc[i]
         m = {"HardHit_allowed_pct": r.get("HardHit_allowed_pct"),
              "Barrel_allowed_pct": r.get("Barrel_allowed_pct"),
-             "BB_pct_pct": r.get("BB_pct_pitch_pct")}
+             "BB_pct_pitch_pct": r.get("BB_pct_pitch_pct")}
         return {t["tag"] for t in outcome_traits(m)}
 
     best, worst = tags_of(0), tags_of(n - 1)
@@ -1225,7 +1225,7 @@ def v16_tag_evidence() -> Result:
 
     errors = list(validate_tag_evidence(tp.TAG_KIND))
 
-    raw = outcome_traits({"BB_pct_pct": 2.0, "GB_pct_pct": 2.0})
+    raw = outcome_traits({"BB_pct_pitch_pct": 2.0, "GB_pct_pitch_pct": 2.0})
     emitted = {t["tag"] for t in raw}
     want = {"walk prone", "fly-ball prone"}
     if not want <= emitted:

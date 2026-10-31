@@ -18,9 +18,10 @@ team_portrait are derived from here, and validation V27 checks every numeric
 key in every portrait against it: declared, in range, and pointing the way
 it says (against the raw values where both are stored).
 
-Still to do: pitcher `metrics` keeps the pitcher_archetypes aliases
-(`K_pct_pct` for `K_pct_pitch_pct` …) and two raw fractions (`Zone_pct`,
-`CSW_pct`) among its percentiles.
+Since schema 26 pitcher `metrics` follow the same rule: one name per
+percentile (`K_pct_pitch_pct`, not the old `K_pct_pct` alias, which for a
+pitcher meant the opposite-side metric's name) and no raw fractions.
+`BB_pct_pct` is now only ever the hitter's walk percentile.
 
 COHORTS name the population a rank is taken in. Era cohorts pool every
 finished Statcast season plus the portrait's own (ingest.era_pool_seasons);
@@ -158,9 +159,9 @@ PERCENTILES: list[Percentile] = [
                "slower pop time", raw="pop_2b"),
     # ── pitchers, era (team_portrait._normalize_pitching) ──────────────────
     Percentile("P.metrics", "K_pct_pitch_pct", "strikeout rate", "era_pitchers", "more strikeouts",
-               ranks="K_pct_pitch", aliases=("K_pct_pct",)),
+               ranks="K_pct_pitch"),
     Percentile("P.metrics", "BB_pct_pitch_pct", "walk rate", "era_pitchers", "fewer walks",
-               inverted=True, ranks="BB_pct_pitch", aliases=("BB_pct_pct",)),
+               inverted=True, ranks="BB_pct_pitch"),
     Percentile("P.metrics", "HardHit_allowed_pct", "hard-hit rate allowed", "era_pitchers",
                "less hard contact allowed", inverted=True, ranks="HardHit_allowed"),
     Percentile("P.metrics", "Barrel_allowed_pct", "barrel rate allowed", "era_pitchers",
@@ -169,13 +170,13 @@ PERCENTILES: list[Percentile] = [
                "less damage allowed", inverted=True, ranks="xwOBA_allowed"),
     Percentile("P.metrics", "FIP_pct", "FIP", "era_pitchers", "better FIP", inverted=True, ranks="FIP"),
     Percentile("P.metrics", "Whiff_pct_pitch_pct", "whiff rate per swing", "era_pitchers", "more whiffs",
-               ranks="Whiff_pct_pitch", aliases=("Whiff_pct_pct",)),
+               ranks="Whiff_pct_pitch"),
     Percentile("P.metrics", "GB_pct_pitch_pct", "ground-ball rate", "era_pitchers", "more ground balls",
-               ranks="GB_pct_pitch", aliases=("GB_pct_pct",)),
+               ranks="GB_pct_pitch"),
     Percentile("P.metrics", "Zone_pct_pct", "zone rate", "era_pitchers", "more pitches in the zone",
-               raw="Zone_pct", ranks="Zone_pct"),
+               ranks="Zone_pct"),
     Percentile("P.metrics", "CSW_pct_pct", "called plus swinging strike rate", "era_pitchers",
-               "more called and swinging strikes", raw="CSW_pct", ranks="CSW_pct"),
+               "more called and swinging strikes", ranks="CSW_pct"),
     Percentile("P.metrics", "avg_velo_pct", "average fastball velocity", "era_pitchers", "more velocity",
                ranks="avg_velo"),
     Percentile("P.metrics", "AvgSpinRate_pct", "average spin rate", "era_pitchers", "more spin",
@@ -235,8 +236,6 @@ RAW: dict[str, dict[str, str]] = {
                    "framing_taken": "count", "blocks_above_average": "count",
                    "n_pbwp": "count", "pop_2b": "seconds"},
     "H.gi": {"sprint_speed_raw": "ft/s"},
-    "P.metrics": {"Zone_pct": "fraction of pitches in the zone",
-                  "CSW_pct": "called plus swinging strikes per pitch"},
     "P.tempo": {"tempo_empty_s": "seconds"},
     "P.rc": {"opps": "count", "advances_allowed": "count", "advance_rate": "fraction"},
     "P.pool.league_mechanics": {"pitcher": "id", "method_version": "version", "n_pitches": "count",
@@ -270,8 +269,8 @@ HITTER_DISPLAY: dict[str, str] = {
     "Hard Hit": "HardHit_pct_pct", "Barrel Rate": "Barrel_pct_pct",
 }
 PITCHER_DISPLAY: tuple = (
-    "avg_velo_pct", "K_pct_pct", "Whiff_pct_pct", "GB_pct_pct",
-    "HardHit_allowed_pct", "Barrel_allowed_pct", "CSW_pct_pct", "BB_pct_pct",
+    "avg_velo_pct", "K_pct_pitch_pct", "Whiff_pct_pitch_pct", "GB_pct_pitch_pct",
+    "HardHit_allowed_pct", "Barrel_allowed_pct", "CSW_pct_pct", "BB_pct_pitch_pct",
 )
 
 
