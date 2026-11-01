@@ -501,7 +501,7 @@ def _archetype_guide_card() -> dbc.Card:
     # ── Athleticism + pitcher trait families ─────────────────────────────────
     MODIFIERS = [
         {
-            "tag": "elite speed / fast / station-to-station / high|low steal attempts / high|low steal rate / extra base taker / everyday player / super-utility", "color": "#a78bfa",
+            "tag": "elite speed / fast / station-to-station / high|low steal attempts / high steal rate / extra base taker / everyday player / super-utility", "color": "#a78bfa",
             "desc": (
                 "Speed is a tool; running is a choice; getting there safely is a "
                 "result — so they are separate tags. steal attempts = how often he "
@@ -527,13 +527,13 @@ def _archetype_guide_card() -> dbc.Card:
         {
             "tag": "Hitter: platoon family", "color": "#14b8a6",
             "desc": (
-                "Handedness structure from statcast splits (min 50 PA each side). "
-                "switch hitter (≥15% of PAs from each side), platoon liability "
-                "(wOBA vs same-hand ≥ .060 below vs opposite — exploitable), "
-                "reverse split (better vs same-hand by ≥ .040 — matchup-proof "
-                "backwards)."
+                "Handedness: left- or right-handed hitter, or switch hitter "
+                "(≥15% of PAs from each side). There are no split tags: a "
+                "season's platoon split is mostly noise and did not carry into "
+                "later seasons (rho +0.07 over 2,620 hitter-seasons), so the "
+                "split is shown as numbers on the team split card instead."
             ),
-            "examples": "platoon liability: Peña 2023 · reverse split: Bregman 2023 (crushed RHP, .215 vs LHP)",
+            "examples": "switch hitter: Lindor 2023"
         },
         {
             "tag": "Pitcher: role family", "color": "#84cc16",
@@ -550,11 +550,11 @@ def _archetype_guide_card() -> dbc.Card:
             "tag": "Pitcher: platoon family", "color": "#f43f5e",
             "desc": (
                 "Splits + deployment (min 50 BF each side). platoon-vulnerable "
-                "(opp-hand hitters ≥ .060 better), reverse split (own-hand "
-                "hitters do more damage), platoon specialist (≥ 60% of BF vs "
-                "same-hand — sheltered/specialist usage)."
+                "(opp-hand hitters ≥ .060 better), platoon specialist (≥ 60% of "
+                "BF vs same-hand — sheltered/specialist usage). reverse split "
+                "is retired: it repeated only ~20% of the time."
             ),
-            "examples": "platoon-vulnerable: Javier 2023 · reverse split: Verlander 2023 · platoon specialist: Graveman 2023",
+            "examples": "platoon-vulnerable: Javier 2023 · platoon specialist: Graveman 2023",
         },
         {
             "tag": "Pitcher: mechanics family", "color": "#8b5cf6",
@@ -759,8 +759,8 @@ def years_tab() -> dbc.Tab:
 
 def split_resistance_card() -> dbc.Card:
     """Team split resistance — LHP vs RHP. Moved out of the retired Deep Data
-    tab: the platoon tags (`platoon liability`, `reverse split`, `platoon
-    specialist`) are live vocabulary, so this belongs with team identity."""
+    tab. The hitter split tags are retired (a season's split does not carry
+    forward), so this card is where a reader sees the split itself."""
     return dbc.Card([
         dbc.CardHeader(
             html.Small("Team Split Resistance — LHP vs RHP",

@@ -2160,8 +2160,6 @@ TAG_POPULATION: dict[str, str] = {
     # platoon — needs statcast splits; the gap tags additionally need a
     # qualifying sample from both sides
     "switch hitter":      "splits",
-    "platoon liability":  "splits_qual",
-    "reverse split":      "splits_qual",
     "platoon-vulnerable": "splits_qual",
     "platoon specialist": "splits_qual",
     # handedness is known only where splits are
@@ -2174,7 +2172,7 @@ TAG_POPULATION: dict[str, str] = {
     # running game — the decision to run is scored against runners with
     # opportunities, the result of running against those who actually went
     "high steal attempts": "steal_opps", "low steal attempts": "steal_opps",
-    "high steal rate":     "steal_attempts", "low steal rate": "steal_attempts",
+    "high steal rate":     "steal_attempts",
     # small-sample floors already enforced in the trait gates
     "rarely strikes out": "pa200",
     "super-utility":      "positions",
@@ -2276,13 +2274,13 @@ _assign_kind(
     KIND_RESULT,
     "power bat", "plus power", "gap hitter", "weak contact",
     "high-K", "rarely strikes out", "walk machine",
-    "high steal rate", "low steal rate",
+    "high steal rate",
     "elite defender", "plus defender", "defensive liability",
     "elite framer", "poor framer", "good blocker", "bad blocker",
     "bat-misser", "ground-baller", "fly-ball prone", "pitch-to-contact",
     "elite control", "plus control", "walk prone", "whiffs above velo",
     "contact suppressor", "controls runners",
-    "platoon liability", "reverse split", "platoon-vulnerable",
+    "platoon-vulnerable",
 )
 
 _assign_kind(
@@ -2311,7 +2309,6 @@ TAG_EXCLUSIVE_GROUPS: list[frozenset[str]] = [
     frozenset({"left-handed hitter", "right-handed hitter", "switch hitter"}),
     frozenset({"left-handed pitcher", "right-handed pitcher"}),
     frozenset({"high steal attempts", "low steal attempts"}),
-    frozenset({"high steal rate", "low steal rate"}),
     frozenset({"elite framer", "poor framer"}),
     frozenset({"good blocker", "bad blocker"}),
     frozenset({"air-ball bat", "ground-ball bat"}),
@@ -2843,14 +2840,13 @@ HITTER_TAG_FAMILIES: dict[str, tuple[str, ...]] = {
     "trajectory":     ("air-ball bat", "ground-ball bat"),
     "speed":          ("elite speed", "fast", "station-to-station"),
     "steal attempts": ("high steal attempts", "low steal attempts"),
-    "steal success":  ("high steal rate", "low steal rate"),
+    "steal success":  ("high steal rate",),
     "extra bases":    ("extra base taker",),
     "fielding":       ("elite defender", "plus defender", "defensive liability"),
     "arm":            ("cannon arm",),
     "framing":        ("elite framer", "poor framer"),
     "blocking":       ("good blocker", "bad blocker"),
     "pop time":       ("quick pop",),
-    "platoon":        ("platoon liability", "reverse split"),
     "playing time":   ("everyday player",),
     "versatility":    ("super-utility",),
 }
@@ -2877,7 +2873,7 @@ PITCHER_TAG_FAMILIES: dict[str, tuple[str, ...]] = {
     "contact quality": ("contact suppressor",),
     "control":         ("elite control", "plus control", "walk prone"),
     "runner control":  ("controls runners",),
-    "platoon":         ("platoon-vulnerable", "reverse split", "platoon specialist"),
+    "platoon":         ("platoon-vulnerable", "platoon specialist"),
     "starter workload": ("workhorse", "short-outing starter"),
     "reliever usage":  ("heavy usage", "multi-inning reliever"),
     "leverage":        ("high-leverage arm", "mop-up duty"),
@@ -2961,9 +2957,15 @@ def hitter_tag_states(traits: list[dict], gi: dict) -> dict[str, str]:
     caught = bool(catching) or "C" in detail
     attempts = int(gi.get("sb") or 0) + int(gi.get("cs") or 0)
 
+    from hitter_traits import DEF_LIABILITY_MIN_PA, GAP_HITTER_MIN_PA
+    own_floor = {"defensive liability": DEF_LIABILITY_MIN_PA,
+                 "gap hitter": GAP_HITTER_MIN_PA}
+
     def evaluate(tag: str) -> str:
         pop = TAG_POPULATION.get(tag, POP_ALL)
         if pop in pops:
+            if (pa or 0) < own_floor.get(tag, 0):
+                return "insufficient_sample"
             return "ok" if tag_supported(tag, pa) else "insufficient_sample"
         if pop.startswith("catchers_") and not caught:
             return "not_applicable"
