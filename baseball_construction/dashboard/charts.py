@@ -726,7 +726,7 @@ def _handedness_mark(attribute_traits: list[dict], is_pitcher: bool):
 
     Rendered even for pitchers, who also keep the attribute column — there it
     sits alongside arm slot and extension, which is where a reader looking at
-    `platoon-vulnerable` wants it.
+    `platoon specialist` wants it.
     """
     for t in attribute_traits:
         mark = _HAND_MARK.get(t.get("tag", ""))
@@ -2755,7 +2755,7 @@ def team_split_card(portrait: dict) -> html.Div:
     Gap colour:
       < .020  → muted green  (split-resistant team)
       .020–.050 → amber      (moderate platoon split)
-      > .050  → bright red   (platoon-vulnerable team)
+      > .050  → bright red   (large platoon split)
     """
     import dash_bootstrap_components as dbc
 
