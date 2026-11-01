@@ -2160,7 +2160,6 @@ TAG_POPULATION: dict[str, str] = {
     # platoon — needs statcast splits; the gap tags additionally need a
     # qualifying sample from both sides
     "switch hitter":      "splits",
-    "platoon-vulnerable": "splits_qual",
     "platoon specialist": "splits_qual",
     # handedness is known only where splits are
     "left-handed hitter":  "splits", "right-handed hitter":  "splits",
@@ -2280,7 +2279,6 @@ _assign_kind(
     "bat-misser", "ground-baller", "fly-ball prone", "pitch-to-contact",
     "elite control", "plus control", "walk prone", "whiffs above velo",
     "contact suppressor", "controls runners",
-    "platoon-vulnerable",
 )
 
 _assign_kind(
@@ -2873,7 +2871,7 @@ PITCHER_TAG_FAMILIES: dict[str, tuple[str, ...]] = {
     "contact quality": ("contact suppressor",),
     "control":         ("elite control", "plus control", "walk prone"),
     "runner control":  ("controls runners",),
-    "platoon":         ("platoon-vulnerable", "platoon specialist"),
+    "platoon":         ("platoon specialist",),
     "starter workload": ("workhorse", "short-outing starter"),
     "reliever usage":  ("heavy usage", "multi-inning reliever"),
     "leverage":        ("high-leverage arm", "mop-up duty"),

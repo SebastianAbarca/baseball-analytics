@@ -549,12 +549,13 @@ def _archetype_guide_card() -> dbc.Card:
         {
             "tag": "Pitcher: platoon family", "color": "#f43f5e",
             "desc": (
-                "Splits + deployment (min 50 BF each side). platoon-vulnerable "
-                "(opp-hand hitters ≥ .060 better), platoon specialist (≥ 60% of "
-                "BF vs same-hand — sheltered/specialist usage). reverse split "
-                "is retired: it repeated only ~20% of the time."
+                "Deployment: platoon specialist (≥ 60% of BF vs same-hand "
+                "hitters — sheltered/specialist usage). The split tags "
+                "(platoon-vulnerable, reverse split) are retired: a pitcher's "
+                "split barely carries into the next season (rho ~0.2), so the "
+                "tags described the ordinary platoon effect, not the pitcher."
             ),
-            "examples": "platoon-vulnerable: Javier 2023 · platoon specialist: Graveman 2023",
+            "examples": "platoon specialist: Graveman 2023",
         },
         {
             "tag": "Pitcher: mechanics family", "color": "#8b5cf6",

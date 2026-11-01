@@ -634,8 +634,11 @@ SWINGMAN_MIN_GS        = 3
 SWINGMAN_MIN_RELIEF_G  = 5
 
 # Platoon gates (raw wOBA-allowed gaps; opposite-hand advantage is normal)
-PLATOON_MIN_BF        = 50
-PLATOON_VULN_GAP      = 0.060   # opp-hand hitters this far better = exploitable
+# `platoon-vulnerable` is retired with the other split tags: a pitcher's split
+# repeats at rho 0.15-0.27 (career-to-date predicts later seasons at +0.19),
+# and the tag fired on 28% of pitchers and repeated 34% of the time — the
+# ordinary platoon effect, not a trait. A pitch-mix version ("no weapon vs
+# opposite-hand hitters") would rest on something that does persist.
 # `reverse split` is retired for pitchers too: the split repeats year to year
 # at rho 0.15-0.27 and the tag at ~20% whatever the BF floor.
 MATCHUP_DEPLOY_SHARE  = 0.60    # same-hand BF share (league ~0.50) = sheltered usage
@@ -715,7 +718,6 @@ def role_traits(
 def platoon_traits(splits: Optional[dict]) -> list[dict]:
     """
     Pitcher platoon tags from statcast splits:
-      platoon-vulnerable — opp-hand hitters far better (exploitable)
       platoon specialist — sheltered usage: same-hand BF share well above 50%
     """
     traits: list[dict] = []
@@ -730,18 +732,6 @@ def platoon_traits(splits: Optional[dict]) -> list[dict]:
         "left-handed pitcher" if throws == "L" else "right-handed pitcher",
         "handedness", None, None,
         f"throws {'left' if throws == 'L' else 'right'}-handed"))
-
-    same_lbl = "vs_lhh" if throws == "L" else "vs_rhh"
-    opp_lbl  = "vs_rhh" if throws == "L" else "vs_lhh"
-    same, opp = sp.get(same_lbl) or {}, sp.get(opp_lbl) or {}
-    if (same.get("pa", 0) >= PLATOON_MIN_BF and opp.get("pa", 0) >= PLATOON_MIN_BF):
-        w_same, w_opp = same.get("woba"), opp.get("woba")
-        if w_same is not None and w_opp is not None:
-            gap = float(w_opp) - float(w_same)   # positive = normal direction
-            if gap >= PLATOON_VULN_GAP:
-                traits.append(_trait("platoon-vulnerable", "platoon", gap, None,
-                                     f"wOBA allowed {w_opp:.3f} vs opp-hand, "
-                                     f"{w_same:.3f} vs same — a {gap:.3f} gap"))
 
     share = sp.get("same_hand_bf_share")
     if share is not None and float(share) >= MATCHUP_DEPLOY_SHARE:

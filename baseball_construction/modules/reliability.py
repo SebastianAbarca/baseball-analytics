@@ -197,7 +197,6 @@ UNGATED_TAGS: dict[str, str] = {
     "low steal attempts":  f"{_OWN_FLOOR}: ranked league-wide among hitters with 50+ times on base",
     "extra base taker":   f"{_OWN_FLOOR}: 10 advancement chances",
     "controls runners":   f"{_OWN_FLOOR}: 100 runner opportunities",
-    "platoon-vulnerable": f"{_OWN_FLOOR}: 50 BF on each side",
     **dict.fromkeys(["everyday player", "heavy usage", "high-leverage arm",
                      "mop-up duty", "multi-inning reliever", "short-outing starter",
                      "swingman", "workhorse", "platoon specialist", "super-utility"],
