@@ -636,7 +636,8 @@ SWINGMAN_MIN_RELIEF_G  = 5
 # Platoon gates (raw wOBA-allowed gaps; opposite-hand advantage is normal)
 PLATOON_MIN_BF        = 50
 PLATOON_VULN_GAP      = 0.060   # opp-hand hitters this far better = exploitable
-REVERSE_SPLIT_GAP     = 0.040   # better vs opp-hand than own = reverse
+# `reverse split` is retired for pitchers too: the split repeats year to year
+# at rho 0.15-0.27 and the tag at ~20% whatever the BF floor.
 MATCHUP_DEPLOY_SHARE  = 0.60    # same-hand BF share (league ~0.50) = sheltered usage
 
 
@@ -715,7 +716,6 @@ def platoon_traits(splits: Optional[dict]) -> list[dict]:
     """
     Pitcher platoon tags from statcast splits:
       platoon-vulnerable — opp-hand hitters far better (exploitable)
-      reverse split      — own-hand hitters hit him harder (unusual)
       platoon specialist — sheltered usage: same-hand BF share well above 50%
     """
     traits: list[dict] = []
@@ -742,10 +742,6 @@ def platoon_traits(splits: Optional[dict]) -> list[dict]:
                 traits.append(_trait("platoon-vulnerable", "platoon", gap, None,
                                      f"wOBA allowed {w_opp:.3f} vs opp-hand, "
                                      f"{w_same:.3f} vs same — a {gap:.3f} gap"))
-            elif -gap >= REVERSE_SPLIT_GAP:
-                traits.append(_trait("reverse split", "platoon", gap, None,
-                                     f"wOBA allowed {w_same:.3f} vs same-hand, "
-                                     f"{w_opp:.3f} vs opp — backwards splits"))
 
     share = sp.get("same_hand_bf_share")
     if share is not None and float(share) >= MATCHUP_DEPLOY_SHARE:

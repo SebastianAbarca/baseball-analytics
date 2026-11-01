@@ -539,7 +539,7 @@
      "tag": "defensive liability",
      "side": "H",
      "family": "fielding",
-     "fires": 304,
+     "fires": 257,
      "population": "fielders_oaa",
      "floor": "\u2014",
      "earned": "outs above average 10th pct"
@@ -584,7 +584,7 @@
      "tag": "gap hitter",
      "side": "H",
      "family": "bat",
-     "fires": 533,
+     "fires": 340,
      "population": "spray",
      "floor": "150 (ISO)",
      "earned": "spray-confirmed extra-base production into the gaps, without home-run power (HR/FB 45th pct)"
@@ -626,15 +626,6 @@
      "earned": "strikeout rate 90th pct (more Ks than 90% of this season's hitters)"
     },
     {
-     "tag": "low steal rate",
-     "side": "H",
-     "family": "running-game",
-     "fires": 192,
-     "population": "steal_attempts",
-     "floor": "\u2014",
-     "earned": "11 of 17 (65%) \u2014 caught often"
-    },
-    {
      "tag": "pitch-to-contact",
      "side": "P",
      "family": "outcome",
@@ -642,15 +633,6 @@
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
-    },
-    {
-     "tag": "platoon liability",
-     "side": "H",
-     "family": "platoon",
-     "fires": 1200,
-     "population": "splits_qual",
-     "floor": "\u2014",
-     "earned": "wOBA 0.284 vs same-hand, 0.352 vs opposite \u2014 a 0.068 gap the opponent can exploit"
     },
     {
      "tag": "platoon-vulnerable",
@@ -683,7 +665,7 @@
      "tag": "plus power",
      "side": "H",
      "family": "bat",
-     "fires": 1172,
+     "fires": 1232,
      "population": "all",
      "floor": "100 (HardHit_pct)",
      "earned": "barrel + hard-hit 65th pct \u2014 real thump (ISO 71th pct)"
@@ -714,15 +696,6 @@
      "population": "pa200",
      "floor": "\u2014",
      "earned": "strikeout rate 10th pct of the season \u2014 elite bat-to-ball"
-    },
-    {
-     "tag": "reverse split",
-     "side": "HP",
-     "family": "platoon",
-     "fires": 1505,
-     "population": "splits_qual",
-     "floor": "\u2014",
-     "earned": "wOBA 0.350 vs same-hand, 0.260 vs opposite \u2014 matchup-proof the wrong way around"
     },
     {
      "tag": "walk machine",

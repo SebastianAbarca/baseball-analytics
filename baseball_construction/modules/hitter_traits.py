@@ -18,13 +18,13 @@ Families:
                    aggressive
     batted-ball  — pull-heavy / oppo bat / air-ball bat / ground-ball bat
     athleticism  — elite speed / fast / station-to-station
-    running-game — high|low steal attempts / high|low steal rate /
+    running-game — high|low steal attempts / high steal rate /
                    extra base taker
     fielding     — elite|plus defender / defensive liability / cannon arm /
                    super-utility
     catcher      — elite|poor framer / good|bad blocker / quick pop
     handedness   — left|right-handed hitter / switch hitter
-    platoon      — platoon liability / reverse split
+    handedness   — left|right-handed / switch hitter
     role         — everyday player
 
 The power-contact spectrum survives as a CONTINUOUS field (`spectrum`,
@@ -80,6 +80,9 @@ PLUS_POWER_CONTACT   = 60.0   # composite ≥ (below power bat) → plus power
 # result was a tag that fired on 38% of home-run hitters and only 28% of
 # doubles hitters. Mutual exclusivity here is the point, not an artifact.
 GAP_HITTER_HRFB_CEILING = 70.0   # HR/FB percentile ≤ → power isn't the source
+# Doubles are noisy (extra-base rate repeats at rho 0.21 at 100+ PA, 0.29 at
+# 300+); the tag repeated 16% / 20% of the time at those floors.
+GAP_HITTER_MIN_PA = 300
 
 # Approach gates — zone judgment only. `patient` / `free swinger` read chase
 # rate ALONE: the old composite was 60% walk rate, and walk rate is a result,
@@ -105,7 +108,11 @@ EVERYDAY_PA_PCT  = 85.0   # PA season pct ≥ → "everyday player"
 STEAL_ATTEMPTS_HIGH_PCT = 85.0   # attempt-rate percentile ≥ → runs often
 STEAL_ATTEMPTS_LOW_PCT  = 15.0   # ≤ → stays put
 STEAL_RATE_HIGH         = 0.80   # success rate ≥ (league ~0.78)
-STEAL_RATE_LOW          = 0.65   # ≤ → runs into outs
+# `low steal rate` is retired: success rate repeats year to year at rho
+# ~0.2 at any attempt floor, and runners who keep getting caught stop being
+# sent, so the tag empties out as the floor rises (65 -> 21 -> 6 -> 0 at
+# 10 / 15 / 20 / 30 attempts, 2015-26). The high end stays: it is rarer
+# noise and a team keeps sending a runner who makes it.
 STEAL_RATE_MIN_ATTEMPTS = 10     # below this a rate is noise
 
 # Batted-ball direction gates (spray percentiles are season-ranked upstream)
@@ -116,13 +123,22 @@ GROUND_BALL_GB_PCT  = 90.0   # batter GB% at/above → hits it into the ground
 
 # Platoon gates (raw wOBA gaps from statcast splits; league platoon gap ~.020)
 PLATOON_MIN_PA        = 50
-PLATOON_LIABILITY_GAP = 0.060   # wOBA vs same-hand this far below vs opp-hand
-REVERSE_SPLIT_GAP     = 0.040   # better vs same-hand by this much (unusual)
+# `platoon liability` and `reverse split` are retired. A season's split is a
+# difference of two ~150-450 PA wOBAs, about .045 of noise against a .040-.060
+# gate, and it does not carry forward: over 2,620 hitter-seasons the split
+# predicts the hitter's later seasons at rho +0.07 — +0.06 pooled over his
+# career to date, +0.06 shrunk to his handedness's average. What persists is
+# the handedness effect (lefties .036 worse vs LHP, righties .018 worse vs
+# RHP), which the handedness tags already state. The split itself stays
+# visible as numbers on the team split card.
 
 # Fielding gates (season percentiles of OAA / arm strength)
 ELITE_DEFENDER_PCT     = 95.0
 PLUS_DEFENDER_PCT      = 85.0
 DEF_LIABILITY_PCT      = 10.0
+# OAA is a counting stat, so part-timers sit at the extremes: the tag repeated
+# 24% of the time at 100+ PA, 28% at 300+, 31% at 450+ (2015-26).
+DEF_LIABILITY_MIN_PA   = 300
 CANNON_ARM_PCT         = 90.0
 
 # Catcher gates (percentiles among qualified catchers)
@@ -228,7 +244,8 @@ def build_hitter_traits(
     # known far more often, so power_bat now carries that case.
     hrfb = gm.get("HR_FB_pct_pct")
     gap_hitter = (not power_bat) and compute_gap_hitter(gm) and (
-        hrfb is None or float(hrfb) <= GAP_HITTER_HRFB_CEILING)
+        hrfb is None or float(hrfb) <= GAP_HITTER_HRFB_CEILING) and (
+        pa is not None and pa >= GAP_HITTER_MIN_PA)
     if gap_hitter:
         xb = gm.get("XB_pct_pct")
         traits.append(_trait("gap hitter", "bat", xb, xb,
@@ -342,11 +359,7 @@ def build_hitter_traits(
             traits.append(_trait("high steal rate", "running-game", succ, None,
                                  f"{sb} of {attempts} ({succ:.0%}) — "
                                  "safe when he goes"))
-        elif succ <= STEAL_RATE_LOW:
-            traits.append(_trait("low steal rate", "running-game", succ, None,
-                                 f"{sb} of {attempts} ({succ:.0%}) — "
-                                 "caught often"))
-
+    
     # `extra base taker` is a BEHAVIOR: ranked on how often he tries for the
     # extra base (made it or thrown out, compute_batter_advancement); how
     # often he makes it is shown as evidence, not gated on.
@@ -395,7 +408,7 @@ def build_hitter_traits(
         elif float(oaa) >= PLUS_DEFENDER_PCT:
             traits.append(_trait("plus defender", "fielding", oaa, oaa,
                                  f"outs above average {oaa:.0f}th pct"))
-        elif float(oaa) <= DEF_LIABILITY_PCT:
+        elif float(oaa) <= DEF_LIABILITY_PCT and (pa or 0) >= DEF_LIABILITY_MIN_PA:
             traits.append(_trait("defensive liability", "fielding", oaa, oaa,
                                  f"outs above average {oaa:.0f}th pct"))
     arm = (season_metrics or {}).get("ArmStrength_pct")
@@ -502,13 +515,10 @@ def _catcher_traits(catching: Optional[dict]) -> list[dict]:
 def _platoon_traits(splits: Optional[dict]) -> list[dict]:
     """
     Platoon tags from statcast batter splits:
-      switch hitter     — took ≥15% of PAs from each side
-      platoon liability — wOBA vs same-hand pitching well below vs opp-hand
-      reverse split     — better vs same-hand (unusual; matchup-proof)
+      left- / right-handed hitter, switch hitter (≥15% of PAs from each side)
 
-    Same/opposite is defined off the batter's side: a RHB's same-hand
-    pitcher is a RHP. Switch hitters are excluded from split tags (they
-    never face a same-hand disadvantage by design).
+    The split tags that used to follow (platoon liability, reverse split) are
+    retired — see PLATOON_MIN_PA.
     """
     out: list[dict] = []
     sp = splits or {}
@@ -527,25 +537,4 @@ def _platoon_traits(splits: Optional[dict]) -> list[dict]:
         out.append(_trait("switch hitter", "handedness", sp.get("stand_l_share"), None,
                           "takes PAs from both sides of the plate"))
         return out
-    if bats not in ("L", "R"):
-        return out
-
-    same_lbl = "vs_lhp" if bats == "L" else "vs_rhp"
-    opp_lbl  = "vs_rhp" if bats == "L" else "vs_lhp"
-    same, opp = sp.get(same_lbl) or {}, sp.get(opp_lbl) or {}
-    if (same.get("pa", 0) < PLATOON_MIN_PA or opp.get("pa", 0) < PLATOON_MIN_PA):
-        return out
-    w_same, w_opp = same.get("woba"), opp.get("woba")
-    if w_same is None or w_opp is None:
-        return out
-
-    gap = float(w_opp) - float(w_same)   # positive = normal platoon direction
-    if gap >= PLATOON_LIABILITY_GAP:
-        out.append(_trait("platoon liability", "platoon", gap, None,
-                          f"wOBA {w_same:.3f} vs same-hand, {w_opp:.3f} vs "
-                          f"opposite — a {gap:.3f} gap the opponent can exploit"))
-    elif -gap >= REVERSE_SPLIT_GAP:
-        out.append(_trait("reverse split", "platoon", gap, None,
-                          f"wOBA {w_same:.3f} vs same-hand, {w_opp:.3f} vs "
-                          "opposite — matchup-proof the wrong way around"))
     return out
