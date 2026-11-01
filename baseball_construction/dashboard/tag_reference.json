@@ -635,15 +635,6 @@
      "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
     },
     {
-     "tag": "platoon-vulnerable",
-     "side": "P",
-     "family": "platoon",
-     "fires": 1694,
-     "population": "splits_qual",
-     "floor": "\u2014",
-     "earned": "wOBA allowed 0.351 vs opp-hand, 0.273 vs same \u2014 a 0.078 gap"
-    },
-    {
      "tag": "plus control",
      "side": "P",
      "family": "outcome",
