@@ -209,7 +209,7 @@
      "tag": "aggressive",
      "side": "H",
      "family": "approach",
-     "fires": 1286,
+     "fires": 1325,
      "population": "chase",
      "floor": "75 (FPS_pct)",
      "earned": "attacks first pitches and expands the zone (high FPS% + high chase%)"
@@ -218,7 +218,7 @@
      "tag": "air-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 571,
+     "fires": 574,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 10th pct \u2014 lives in the air"
@@ -299,7 +299,7 @@
      "tag": "free swinger",
      "side": "H",
      "family": "approach",
-     "fires": 1030,
+     "fires": 1066,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
      "earned": "chase rate 100th pct \u2014 expands the zone"
@@ -308,7 +308,7 @@
      "tag": "ground-ball bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 332,
+     "fires": 319,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "ground-ball rate 100th pct \u2014 hits it into the ground"
@@ -353,7 +353,7 @@
      "tag": "oppo bat",
      "side": "H",
      "family": "batted-ball",
-     "fires": 554,
+     "fires": 548,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "opposite-field BIP rate 100th pct"
@@ -362,10 +362,10 @@
      "tag": "patient",
      "side": "H",
      "family": "approach",
-     "fires": 1035,
+     "fires": 1039,
      "population": "chase",
      "floor": "50 (OSwing_pct)",
-     "earned": "chase rate 10th pct \u2014 lays off pitches outside the zone"
+     "earned": "chase rate 15th pct \u2014 lays off pitches outside the zone"
     },
     {
      "tag": "patterned",
@@ -380,7 +380,7 @@
      "tag": "pull-heavy",
      "side": "H",
      "family": "batted-ball",
-     "fires": 812,
+     "fires": 814,
      "population": "all",
      "floor": "100 (BatGB_pct)",
      "earned": "pull-side BIP rate 100th pct"
@@ -488,7 +488,7 @@
      "tag": "zone hunter",
      "side": "H",
      "family": "approach",
-     "fires": 1028,
+     "fires": 1040,
      "population": "all",
      "floor": "50 (OSwing_pct)",
      "earned": "swing discrimination 100th pct \u2014 attacks strikes and lays off balls"
@@ -512,7 +512,7 @@
      "tag": "bat-misser",
      "side": "P",
      "family": "outcome",
-     "fires": 1538,
+     "fires": 1561,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
      "earned": "strikeout rate 100th pct"
@@ -521,10 +521,10 @@
      "tag": "contact suppressor",
      "side": "P",
      "family": "outcome",
-     "fires": 1254,
+     "fires": 1256,
      "population": "all",
      "floor": "100 (HardHit_allowed)",
-     "earned": "hard-hit suppression 100th pct, barrel suppression 80th"
+     "earned": "hard-hit suppression 100th pct, barrel suppression 100th"
     },
     {
      "tag": "controls runners",
@@ -548,7 +548,7 @@
      "tag": "elite control",
      "side": "P",
      "family": "outcome",
-     "fires": 665,
+     "fires": 691,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
      "earned": "walk avoidance 100th pct"
@@ -575,19 +575,19 @@
      "tag": "fly-ball prone",
      "side": "P",
      "family": "outcome",
-     "fires": 480,
+     "fires": 479,
      "population": "all",
      "floor": "100 (GB_pct_pitch)",
-     "earned": "ground-ball rate 10th pct \u2014 lives in the air"
+     "earned": "ground-ball rate 0th pct \u2014 lives in the air"
     },
     {
      "tag": "gap hitter",
      "side": "H",
      "family": "bat",
-     "fires": 340,
+     "fires": 335,
      "population": "spray",
      "floor": "150 (ISO)",
-     "earned": "spray-confirmed extra-base production into the gaps, without home-run power (HR/FB 45th pct)"
+     "earned": "spray-confirmed extra-base production into the gaps, without home-run power (HR/FB 61th pct)"
     },
     {
      "tag": "good blocker",
@@ -602,7 +602,7 @@
      "tag": "ground-baller",
      "side": "P",
      "family": "outcome",
-     "fires": 1620,
+     "fires": 1614,
      "population": "all",
      "floor": "100 (GB_pct_pitch)",
      "earned": "ground-ball rate 100th pct"
@@ -620,28 +620,28 @@
      "tag": "high-K",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 708,
+     "fires": 721,
      "population": "all",
      "floor": "30 (K_pct)",
-     "earned": "strikeout rate 90th pct (more Ks than 90% of this season's hitters)"
+     "earned": "strikeout rate 100th pct (more Ks than 100% of this season's hitters)"
     },
     {
      "tag": "pitch-to-contact",
      "side": "P",
      "family": "outcome",
-     "fires": 1174,
+     "fires": 1185,
      "population": "all",
      "floor": "75 (K_pct_pitch)",
-     "earned": "strikeout rate 14th pct \u2014 outs come from the defense"
+     "earned": "strikeout rate 11th pct \u2014 outs come from the defense"
     },
     {
      "tag": "plus control",
      "side": "P",
      "family": "outcome",
-     "fires": 1160,
+     "fires": 1200,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
-     "earned": "walk avoidance 82th pct"
+     "earned": "walk avoidance 83th pct"
     },
     {
      "tag": "plus defender",
@@ -656,10 +656,10 @@
      "tag": "plus power",
      "side": "H",
      "family": "bat",
-     "fires": 1232,
+     "fires": 1175,
      "population": "all",
      "floor": "100 (HardHit_pct)",
-     "earned": "barrel + hard-hit 65th pct \u2014 real thump (ISO 71th pct)"
+     "earned": "barrel + hard-hit 80th pct \u2014 real thump (ISO 42th pct)"
     },
     {
      "tag": "poor framer",
@@ -674,7 +674,7 @@
      "tag": "power bat",
      "side": "H",
      "family": "bat",
-     "fires": 1071,
+     "fires": 994,
      "population": "all",
      "floor": "100 (HardHit_pct)",
      "earned": "barrel + hard-hit 100th pct \u2014 elite contact quality (ISO 100th pct)"
@@ -683,37 +683,37 @@
      "tag": "rarely strikes out",
      "side": "H",
      "family": "bat-to-ball",
-     "fires": 348,
+     "fires": 360,
      "population": "pa200",
      "floor": "\u2014",
-     "earned": "strikeout rate 10th pct of the season \u2014 elite bat-to-ball"
+     "earned": "strikeout rate 5th pct of the season \u2014 elite bat-to-ball"
     },
     {
      "tag": "walk machine",
      "side": "H",
      "family": "approach",
-     "fires": 1522,
+     "fires": 1524,
      "population": "all",
      "floor": "60 (BB_pct)",
-     "earned": "walk rate 88th pct"
+     "earned": "walk rate 100th pct"
     },
     {
      "tag": "walk prone",
      "side": "P",
      "family": "outcome",
-     "fires": 817,
+     "fires": 846,
      "population": "all",
      "floor": "75 (BB_pct_pitch)",
-     "earned": "walk avoidance 13th pct"
+     "earned": "walk avoidance 11th pct"
     },
     {
      "tag": "weak contact",
      "side": "H",
      "family": "bat",
-     "fires": 1063,
+     "fires": 1059,
      "population": "all",
      "floor": "150 (Barrel_pct)",
-     "earned": "barrel + hard-hit composite 10th pct"
+     "earned": "barrel + hard-hit composite 11th pct"
     },
     {
      "tag": "whiffs above velo",

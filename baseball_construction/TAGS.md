@@ -49,12 +49,12 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `soft tosser` | P | arsenal | 870 | all | — (a physical measurement, stable within the 20-BF roster minimum) | elite velo, plus velo |
 | `station-to-station` | H | athleticism | 722 | speed | — (a Savant leaderboard that publishes qualified players only) | elite speed, fast |
 
-## behavior  ·  32 tags, 22,044 firings
+## behavior  ·  32 tags, 22,121 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
-| `aggressive` | H | approach | 1,286 | chase | 75 (FPS_pct) | — |
-| `air-ball bat` | H | batted-ball | 571 | all | 100 (BatGB_pct) | ground-ball bat |
+| `aggressive` | H | approach | 1,325 | chase | 75 (FPS_pct) | — |
+| `air-ball bat` | H | batted-ball | 574 | all | 100 (BatGB_pct) | ground-ball bat |
 | `changeup out pitch` | P | arsenal | 508 | all | — | — |
 | `count-shifter` | P | sequencing | 730 | all | — (the sequencing pool requires 300 pitches) | — |
 | `curveball out pitch` | P | arsenal | 321 | all | — | — |
@@ -63,16 +63,16 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `extra base taker` | H | running-game | 801 | xbt | — (its gate carries a purpose-built floor: 10 advancement chances) | — |
 | `first-pitch attacker` | P | sequencing | 723 | all | 75 (FPS_pct) | — |
 | `forkball out pitch` | P | arsenal | 8 | all | — | — |
-| `free swinger` | H | approach | 1,030 | chase | 50 (OSwing_pct) | patient |
-| `ground-ball bat` | H | batted-ball | 332 | all | 100 (BatGB_pct) | air-ball bat |
+| `free swinger` | H | approach | 1,066 | chase | 50 (OSwing_pct) | patient |
+| `ground-ball bat` | H | batted-ball | 319 | all | 100 (BatGB_pct) | air-ball bat |
 | `high steal attempts` | H | running-game | 728 | steal_opps | — (its gate carries a purpose-built floor: ranked league-wide among hitters with 50+ times on base) | low steal attempts |
 | `knuckle-curve out pitch` | P | arsenal | 102 | all | — | — |
 | `knuckleballer` | P | arsenal | 12 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `low steal attempts` | H | running-game | 770 | steal_opps | — (its gate carries a purpose-built floor: ranked league-wide among hitters with 50+ times on base) | high steal attempts |
-| `oppo bat` | H | batted-ball | 554 | all | 100 (BatGB_pct) | pull-heavy |
-| `patient` | H | approach | 1,035 | chase | 50 (OSwing_pct) | free swinger |
+| `oppo bat` | H | batted-ball | 548 | all | 100 (BatGB_pct) | pull-heavy |
+| `patient` | H | approach | 1,039 | chase | 50 (OSwing_pct) | free swinger |
 | `patterned` | P | sequencing | 757 | all | — (the sequencing pool requires 300 pitches) | — |
-| `pull-heavy` | H | batted-ball | 812 | all | 100 (BatGB_pct) | oppo bat |
+| `pull-heavy` | H | batted-ball | 814 | all | 100 (BatGB_pct) | oppo bat |
 | `quick pitcher` | P | sequencing | 386 | tempo | — (the tempo pool requires 300 bases-empty pitches) | slow pitcher |
 | `sinker-baller` | P | arsenal | 2,240 | all | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | — |
 | `slider out pitch` | P | arsenal | 748 | all | — | — |
@@ -84,36 +84,36 @@ Every tag is described by four things. `kind` is the one the UI colours by, beca
 | `tunneler` | P | deception | 2,280 | all | 75 (tunnel_score) | — |
 | `two-pitch` | P | arsenal | 206 | starters | — (pitch usage and shape; pitch_mix requires 150 pitches and 50 of a type) | deep arsenal |
 | `unpredictable` | P | sequencing | 738 | all | — (the sequencing pool requires 300 pitches) | — |
-| `zone hunter` | H | approach | 1,028 | all | 50 (OSwing_pct) | — |
+| `zone hunter` | H | approach | 1,040 | all | 50 (OSwing_pct) | — |
 
-## result  ·  25 tags, 18,036 firings
+## result  ·  25 tags, 18,044 firings
 
 | tag | side | family | fires | population | reliability floor | exclusive with |
 |---|---|---|---|---|---|---|
 | `bad blocker` | H | catcher | 88 | catchers_blocking | — (a Savant leaderboard that publishes qualified players only) | good blocker |
-| `bat-misser` | P | outcome | 1,538 | all | 75 (K_pct_pitch) | pitch-to-contact |
-| `contact suppressor` | P | outcome | 1,254 | all | 100 (HardHit_allowed) | — |
+| `bat-misser` | P | outcome | 1,561 | all | 75 (K_pct_pitch) | pitch-to-contact |
+| `contact suppressor` | P | outcome | 1,256 | all | 100 (HardHit_allowed) | — |
 | `controls runners` | P | running-game | 391 | runner_control | — (its gate carries a purpose-built floor: 100 runner opportunities) | — |
 | `defensive liability` | H | fielding | 257 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | elite defender, plus defender |
-| `elite control` | P | outcome | 665 | all | 75 (BB_pct_pitch) | plus control, walk prone |
+| `elite control` | P | outcome | 691 | all | 75 (BB_pct_pitch) | plus control, walk prone |
 | `elite defender` | H | fielding | 159 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, plus defender |
 | `elite framer` | H | catcher | 163 | catchers_framing | — (framing requires 500 taken pitches near the edge) | poor framer |
-| `fly-ball prone` | P | outcome | 480 | all | 100 (GB_pct_pitch) | — |
-| `gap hitter` | H | bat | 340 | spray | 150 (ISO) | — |
+| `fly-ball prone` | P | outcome | 479 | all | 100 (GB_pct_pitch) | — |
+| `gap hitter` | H | bat | 335 | spray | 150 (ISO) | — |
 | `good blocker` | H | catcher | 97 | catchers_blocking | — (a Savant leaderboard that publishes qualified players only) | bad blocker |
-| `ground-baller` | P | outcome | 1,620 | all | 100 (GB_pct_pitch) | — |
+| `ground-baller` | P | outcome | 1,614 | all | 100 (GB_pct_pitch) | — |
 | `high steal rate` | H | running-game | 722 | steal_attempts | — (its gate carries a purpose-built floor: 10 attempts) | — |
-| `high-K` | H | bat-to-ball | 708 | all | 30 (K_pct) | rarely strikes out |
-| `pitch-to-contact` | P | outcome | 1,174 | all | 75 (K_pct_pitch) | bat-misser |
-| `plus control` | P | outcome | 1,160 | all | 75 (BB_pct_pitch) | elite control, walk prone |
+| `high-K` | H | bat-to-ball | 721 | all | 30 (K_pct) | rarely strikes out |
+| `pitch-to-contact` | P | outcome | 1,185 | all | 75 (K_pct_pitch) | bat-misser |
+| `plus control` | P | outcome | 1,200 | all | 75 (BB_pct_pitch) | elite control, walk prone |
 | `plus defender` | H | fielding | 272 | fielders_oaa | — (a Savant leaderboard that publishes qualified players only) | defensive liability, elite defender |
-| `plus power` | H | bat | 1,232 | all | 100 (HardHit_pct) | power bat, weak contact |
+| `plus power` | H | bat | 1,175 | all | 100 (HardHit_pct) | power bat, weak contact |
 | `poor framer` | H | catcher | 155 | catchers_framing | — (framing requires 500 taken pitches near the edge) | elite framer |
-| `power bat` | H | bat | 1,071 | all | 100 (HardHit_pct) | plus power, weak contact |
-| `rarely strikes out` | H | bat-to-ball | 348 | pa200 | — (its gate carries a purpose-built floor: 200 PA) | high-K |
-| `walk machine` | H | approach | 1,522 | all | 60 (BB_pct) | — |
-| `walk prone` | P | outcome | 817 | all | 75 (BB_pct_pitch) | elite control, plus control |
-| `weak contact` | H | bat | 1,063 | all | 150 (Barrel_pct) | plus power, power bat |
+| `power bat` | H | bat | 994 | all | 100 (HardHit_pct) | plus power, weak contact |
+| `rarely strikes out` | H | bat-to-ball | 360 | pa200 | — (its gate carries a purpose-built floor: 200 PA) | high-K |
+| `walk machine` | H | approach | 1,524 | all | 60 (BB_pct) | — |
+| `walk prone` | P | outcome | 846 | all | 75 (BB_pct_pitch) | elite control, plus control |
+| `weak contact` | H | bat | 1,059 | all | 150 (Barrel_pct) | plus power, power bat |
 | `whiffs above velo` | P | deception | 740 | all | 75 (SwStr_pct) | — |
 
 ## deployment  ·  10 tags, 7,726 firings
