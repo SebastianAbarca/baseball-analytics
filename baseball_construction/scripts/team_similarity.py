@@ -149,7 +149,10 @@ def _num(v) -> Optional[float]:
 def _value(player: dict, src: str, key: str) -> Optional[float]:
     gi = player.get("gate_inputs") or {}
     if src == "m":
-        return _num((gi.get("metrics") or {}).get(key))
+        # Career-to-date talent (talent.py, schema 28) where it exists — the
+        # same stat, era-ranked, from more than one season's sample.
+        t = _num((gi.get("talent_metrics") or {}).get(key))
+        return t if t is not None else _num((gi.get("metrics") or {}).get(key))
     if src == "gi":
         return _num(gi.get(key))
     if src == "adv":
@@ -162,7 +165,8 @@ def _value(player: dict, src: str, key: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Player comps — the same measurements, one player at a time
 # ---------------------------------------------------------------------------
-# A player-season's comp vector: each metric's era percentile, centred on the
+# A player-season's comp vector: each metric's era percentile (its talent
+# twin where there is one — see _value), centred on the
 # league midpoint ((pct - 50) / 50, so -1..1), every domain sharing one unit of
 # weight. Era percentiles because comps reach across seasons. Release
 # geometry is left out — like handedness it is an attribute, offered as a

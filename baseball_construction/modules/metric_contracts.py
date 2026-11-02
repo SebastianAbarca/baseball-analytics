@@ -47,6 +47,11 @@ COHORTS: dict[str, str] = {
     "season_steal_opps": "this season's hitters with 50+ times on base, league-wide",
     "season_xbt": "this season's runners with 10+ extra-base chances",
     "season_runner_control": "this season's pitchers with runner opportunities",
+    "era_talent_hitters": "career-to-date estimates of hitters with 100+ PA in a "
+                          "Statcast-era season, each as of that season",
+    "era_talent_pitchers": "career-to-date estimates of pitchers with 30+ BF in a "
+                           "Statcast-era season, each as of that season",
+    "season_talent_hitters": "career-to-date estimates of this season's hitters with 100+ PA",
 }
 
 
@@ -78,6 +83,9 @@ SCOPES = {
     "P.pool.league_discipline": "pitcher pool row, plate discipline",
     "P.pool.league_tunnel":     "pitcher pool row, tunneling",
     "P.pool.league_spin":       "pitcher pool row, spin efficiency",
+    "H.talent":    "hitter gate_inputs.talent_metrics",
+    "H.talent_season": "hitter gate_inputs.talent_season_metrics",
+    "P.talent":    "pitcher gate_inputs.talent_metrics",
 }
 
 
@@ -225,6 +233,34 @@ PERCENTILES: list[Percentile] = [
                "season_runner_control", "more advances allowed", raw="advance_rate"),
 ]
 
+# ── career-to-date talent (talent.py) ──────────────────────────────────────
+# Each talent percentile ranks a career-to-date estimate of the SAME stat as
+# its twin — same name, label and direction, a different scope and cohort —
+# and stores the estimate beside it as `{stem}_est`, so V27 checks the rank
+# points the way the twin says. V30 checks these lists match talent.SPECS.
+TALENT_STEMS: dict[str, tuple] = {
+    "H": ("K_pct_raw", "K_pct", "BB_pct", "OSwing_pct", "ZSwing_pct", "FPS_pct", "Whiff_pct",
+          "Contact_pct", "BatGB_pct", "Pull_pct", "Oppo_pct", "HardHit_pct", "Barrel_pct",
+          "EV_avg", "ISO", "HR_FB_pct", "XB_pct", "xwOBA"),
+    "P": ("K_pct_pitch", "BB_pct_pitch", "Whiff_pct_pitch", "CSW_pct", "Zone_pct",
+          "GB_pct_pitch", "HardHit_allowed", "Barrel_allowed", "xwOBA_allowed"),
+}
+TALENT_SEASON_STEMS_H: tuple = ("K_pct_raw", "BB_pct", "OSwing_pct", "FPS_pct", "BatGB_pct",
+                                "HardHit_pct", "Barrel_pct", "ISO", "SwingDiscrim")
+
+
+def _talent(scope: str, twin_scope: str, stem: str, cohort: str) -> Percentile:
+    t = next(c for c in PERCENTILES if c.scope == twin_scope and c.key == f"{stem}_pct")
+    return Percentile(scope, t.key, t.label, cohort, t.high, t.inverted, f"{stem}_est")
+
+
+PERCENTILES += [_talent("H.talent", "H.metrics", s, "era_talent_hitters")
+                for s in TALENT_STEMS["H"]]
+PERCENTILES += [_talent("H.talent_season", "H.season" if s in ("SwingDiscrim",) else "H.metrics",
+                        s, "season_talent_hitters") for s in TALENT_SEASON_STEMS_H]
+PERCENTILES += [_talent("P.talent", "P.metrics", s, "era_talent_pitchers")
+                for s in TALENT_STEMS["P"]]
+
 # Numeric keys that are NOT percentiles, by scope, with what they are. V27
 # requires every numeric key in a portrait to be in PERCENTILES or here.
 RAW: dict[str, dict[str, str]] = {
@@ -235,7 +271,11 @@ RAW: dict[str, dict[str, str]] = {
     "H.catching": {"framing_above": "called strikes above expected per 100 edge pitches",
                    "framing_taken": "count", "blocks_above_average": "count",
                    "n_pbwp": "count", "pop_2b": "seconds"},
-    "H.gi": {"sprint_speed_raw": "ft/s"},
+    "H.gi": {"sprint_speed_raw": "ft/s", "talent_n": "decayed PA behind the talent estimates"},
+    "P.gi": {"talent_n": "decayed BF behind the talent estimates"},
+    "H.talent": {f"{s}_est": "career-to-date estimate" for s in TALENT_STEMS["H"]},
+    "H.talent_season": {f"{s}_est": "career-to-date estimate" for s in TALENT_SEASON_STEMS_H},
+    "P.talent": {f"{s}_est": "career-to-date estimate" for s in TALENT_STEMS["P"]},
     "P.tempo": {"tempo_empty_s": "seconds"},
     "P.rc": {"opps": "count", "advances_allowed": "count", "advance_rate": "fraction"},
     "P.pool.league_mechanics": {"pitcher": "id", "method_version": "version", "n_pitches": "count",

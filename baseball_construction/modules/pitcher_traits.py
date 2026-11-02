@@ -537,14 +537,24 @@ SLOW_PITCHER_PCT  = 85.0
 CONTROLS_RUNNERS_PCT      = 15.0   # advance-rate percentile ≤ → tag
 CONTROLS_RUNNERS_MIN_OPPS = 100
 
-BAT_MISSER_PCT        = 80.0
-PITCH_TO_CONTACT_PCT  = 20.0
-GROUND_BALLER_PCT     = 75.0
-FLY_BALL_PRONE_PCT    = 10.0
-CONTACT_SUPPRESS_PCT  = 80.0
-COMMAND_ELITE_PCT     = 90.0
-COMMAND_PLUS_PCT      = 75.0
-WALK_PRONE_PCT        = 15.0
+# Recalibrated for schema 28 (talent.py): these read career-to-date estimates
+# now, whose percentiles spread evenly where the single-season ranks were
+# bunched. Each line was moved to keep its tag's count (2026-11-01): bat-misser
+# 80 -> 81.5, pitch-to-contact 20 -> 14, ground-baller 75 -> 77.5, fly-ball
+# prone 10 -> 7, contact suppressor 80 -> 83, elite control 90 -> 92, plus
+# control 75 -> 77, walk prone 15 -> 11. Judged against the next season's
+# actual rate, walk prone and elite control hold or gain a point; plus control
+# (44% vs 46% in the next season's best 30% of walk rates) and bat-misser
+# (51% vs 55% in the top fifth of K rates) lose a little — pitcher strikeout
+# rates move fastest, so a career sample helps them least.
+BAT_MISSER_PCT        = 81.5
+PITCH_TO_CONTACT_PCT  = 14.0
+GROUND_BALLER_PCT     = 77.5
+FLY_BALL_PRONE_PCT    = 7.0
+CONTACT_SUPPRESS_PCT  = 83.0
+COMMAND_ELITE_PCT     = 92.0
+COMMAND_PLUS_PCT      = 77.0
+WALK_PRONE_PCT        = 11.0
 
 # Ace badge: composite mean of the dominance keys plus ≥2 independently
 # elite traits — same spirit as pitcher_archetypes.compute_ace_tier but
@@ -772,6 +782,7 @@ def build_pitcher_traits(
     tempo:             Optional[dict] = None,
     runner_control:    Optional[dict] = None,
     bf_total:          Optional[float] = None,
+    talent_metrics:    Optional[dict] = None,
 ) -> list[dict]:
     """
     Full trait set for one pitcher-season:
@@ -781,6 +792,9 @@ def build_pitcher_traits(
     used the pitcher — the deployment tags are earned with a team. bf_total is
     the season, all teams: the sample the season-wide rates rest on, so the
     reliability gate's n. Defaults to bf for a one-team season.
+
+    talent_metrics — career-to-date percentiles (talent.py) under the same
+    names as `metrics`; the outcome gates read them first.
     """
     traits: list[dict] = []
 
@@ -806,7 +820,7 @@ def build_pitcher_traits(
         traits.extend(arsenal_traits(arsenal_profile, metrics,
                                      is_starter=is_starter))
     if metrics is not None:
-        traits.extend(outcome_traits(metrics))
+        traits.extend(outcome_traits({**metrics, **(talent_metrics or {})}))
     if is_starter is not None:
         traits.extend(role_traits(bf, g, gs, is_starter, role_pool, leverage))
     if splits is not None:

@@ -464,6 +464,7 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
     ("spin_league" for --force-spin). Returns the number of caches rebuilt.
     """
     from ingest import pull_statcast_season
+    from talent import build_counts, counts_path
     from team_portrait import cross_team_path
 
     done = 0
@@ -479,14 +480,22 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
                     or sc.stat().st_mtime > cache.stat().st_mtime
                     or _method_stale(cache, kind)):
                 stale.append((cache, build))
-        if not stale:
+        # The talent counts are a CSV pool root (fingerprinted, frozen in
+        # data/era), not a parquet league cache, but move with Statcast too.
+        cp = counts_path(s)
+        counts_stale = (force or s in changed or not cp.exists()
+                        or sc.stat().st_mtime > cp.stat().st_mtime)
+        if not stale and not counts_stale:
             continue
-        names = ", ".join(c.name.replace(f"_{s}.parquet", "") for c, _ in stale)
+        names = ", ".join([c.name.replace(f"_{s}.parquet", "") for c, _ in stale]
+                          + (["talent_counts"] if counts_stale else []))
         if dry:
             log.info("  %d: would rebuild %s", s, names)
             done += len(stale)
             continue
         statcast = pull_statcast_season(s, top_up=False)
+        if counts_stale:
+            build_counts(s, statcast, force=True)
         for cache, build in stale:
             data = statcast
             if cache.name.startswith("tunnel_league_"):
@@ -508,7 +517,7 @@ def stage_league(seasons: list[int], changed: list[int], force: bool, dry: bool,
         if ct.exists():
             ct.unlink()
         log.info("  %d: rebuilt %s (%d pitches)", s, names, len(statcast))
-        done += len(stale)
+        done += len(stale) + counts_stale
         del statcast
     return done
 

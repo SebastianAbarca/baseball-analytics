@@ -60,6 +60,7 @@ NEEDS = {
     "V22": "the database",
     "V27": "this machine's portraits",
     "V29": "this machine's portraits",
+    "V30": "this machine's portraits and talent counts",
 }
 
 
@@ -1938,11 +1939,15 @@ def _portrait_scopes(p: dict):
         yield "H.season", gi.get("season_metrics")
         yield "H.catching", gi.get("catching")
         yield "H.adv", gi.get("advancement")
-        yield "H.gi", {k: gi.get(k) for k in ("attempt_rate_pct", "sprint_speed_raw")}
+        yield "H.gi", {k: gi.get(k) for k in ("attempt_rate_pct", "sprint_speed_raw", "talent_n")}
+        yield "H.talent", gi.get("talent_metrics")
+        yield "H.talent_season", gi.get("talent_season_metrics")
     for grp in ("starters", "bullpen_arms"):
         for x in (p.get("players") or {}).get(grp) or []:
             gi = x.get("gate_inputs") or {}
             yield "P.metrics", gi.get("metrics")
+            yield "P.talent", gi.get("talent_metrics")
+            yield "P.gi", {"talent_n": gi.get("talent_n")}
             yield "P.tempo", gi.get("tempo")
             yield "P.rc", gi.get("runner_control")
             for frame, row in (gi.get("pool_rows") or {}).items():
@@ -2189,6 +2194,109 @@ def v29_philosophy_directions(defs: Optional[dict] = None) -> Result:
 
 
 # ---------------------------------------------------------------------------
+# V30 — Career-to-date talent
+# ---------------------------------------------------------------------------
+
+def v30_talent() -> Result:
+    """
+    The talent layer (talent.py) is what its contracts say, and sees no future:
+      1. talent.SPECS and metric_contracts.TALENT_STEMS name the same stats,
+         and the season-ranked ones are exactly TALENT_SEASON_STEMS_H
+      2. no look-ahead: a season's estimates computed from the counts up to
+         it alone equal the ones computed with every later season loaded
+      3. coverage: on schema-28 portraits, 95%+ of hitters with 100+ PA and
+         pitchers with 30+ BF carry talent percentiles
+      4. each talent percentile tells the same story as the single-season
+         rank of the same stat among regulars (300+ PA / 250+ BF): Spearman
+         >= 0.6 pooled over seasons — a talent rank pointing the other way,
+         or keyed to the wrong stat, cannot pass
+    """
+    import collections
+    import json
+    import numpy as np
+    from scipy.stats import spearmanr
+    import metric_contracts as mc
+    import talent
+    from ingest import PROCESSED_DIR
+
+    errors: list[str] = []
+    for side in ("H", "P"):
+        stems = tuple(sp.stem for sp in talent.SPECS[side])
+        if set(stems) != set(mc.TALENT_STEMS[side]):
+            errors.append(f"{side}: specs {sorted(set(stems) ^ set(mc.TALENT_STEMS[side]))} "
+                          "differ from the contracts")
+    szn = {sp.stem for sp in talent.HITTER_SPECS if sp.season_rank} | set(talent.DERIVED_H)
+    if szn != set(mc.TALENT_SEASON_STEMS_H):
+        errors.append(f"season-ranked stems differ: {sorted(szn ^ set(mc.TALENT_SEASON_STEMS_H))}")
+
+    counts = talent.load_counts(range(2015, 2031))
+    if counts.empty:
+        return False, "no talent counts on this machine"
+    for side in ("H", "P"):
+        full = talent.estimate_panel(counts, side)
+        upto = talent.estimate_panel(counts[counts.season <= 2019], side)
+        a = full.xs(2019, level="season")[list(upto.columns)]
+        b = upto.xs(2019, level="season").reindex(a.index)
+        if not np.allclose(a.values, b.values, equal_nan=True):
+            errors.append(f"{side}: 2019 estimates change when later seasons are loaded")
+
+    have = collections.Counter()
+    need = collections.Counter()
+    pairs: dict[tuple, list] = collections.defaultdict(list)
+    for f in sorted((PROCESSED_DIR / "portraits").glob("*_*.json")):
+        p = json.loads(f.read_text())
+        if (p.get("schema_version") or 0) < 28:
+            continue
+        players = p.get("players") or {}
+        for h in players.get("hitters") or []:
+            gi = h.get("gate_inputs") or {}
+            pa = gi.get("pa") or 0
+            if pa >= 100:
+                need["H"] += 1
+                have["H"] += bool(gi.get("talent_metrics"))
+            if pa >= 300:
+                for k, v in (gi.get("talent_metrics") or {}).items():
+                    m = (gi.get("metrics") or {}).get(k)
+                    if k.endswith("_pct") and isinstance(m, (int, float)):
+                        pairs[("H", k)].append((v, m))
+        for grp in ("starters", "bullpen_arms"):
+            for x in players.get(grp) or []:
+                gi = x.get("gate_inputs") or {}
+                bf = gi.get("bf_total") or gi.get("bf") or 0
+                if bf >= 30:
+                    need["P"] += 1
+                    have["P"] += bool(gi.get("talent_metrics"))
+                if bf >= 250:
+                    for k, v in (gi.get("talent_metrics") or {}).items():
+                        m = (gi.get("metrics") or {}).get(k)
+                        if k.endswith("_pct") and isinstance(m, (int, float)):
+                            pairs[("P", k)].append((v, m))
+    if not need:
+        return False, "no schema-28 portraits on this machine"
+    for side in need:
+        share = have[side] / need[side]
+        if share < 0.95:
+            errors.append(f"{side}: talent on {share:.0%} of players")
+    weakest = []
+    for (side, k), xs in sorted(pairs.items()):
+        if len(xs) < 100:
+            continue
+        a = np.array(xs, float)
+        rho = spearmanr(a[:, 0], a[:, 1])[0]
+        weakest.append((rho, f"{side}.{k}"))
+        if rho < 0.6:
+            errors.append(f"{side}.{k} agrees with its season rank at rho {rho:+.2f}")
+    weakest.sort()
+    passed = not errors
+    detail = (f"specs = contracts; no look-ahead; coverage "
+              + ", ".join(f"{s} {have[s] / need[s]:.0%}" for s in sorted(need))
+              + f"; {len(weakest)} percentiles agree with the season (lowest "
+              + ", ".join(f"{n} {r:+.2f}" for r, n in weakest[:3]) + ")"
+              if passed else "; ".join(errors))
+    return passed, detail
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -2222,6 +2330,7 @@ TESTS = [
     ("V27", "Percentile contracts",            v27_percentile_contracts),
     ("V28", "Player comp vectors",             v28_player_comp_vectors),
     ("V29", "Philosophy input directions",     v29_philosophy_directions),
+    ("V30", "Career-to-date talent",           v30_talent),
 ]
 
 
