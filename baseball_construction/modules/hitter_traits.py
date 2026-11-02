@@ -58,7 +58,6 @@ from hitter_archetypes import (
     compute_spectrum,
     compute_aggressive,
     compute_speed_tier,
-    compute_contact_quality,
     compute_gap_hitter,
     compute_disruptiveness,
 )
@@ -74,6 +73,7 @@ log = logging.getLogger(__name__)
 # to fire about as often as the ISO gates did (85th / 60th percentile).
 POWER_BAT_CONTACT    = 80.0   # barrel + hard-hit composite ≥ → power bat
 PLUS_POWER_CONTACT   = 60.0   # composite ≥ (below power bat) → plus power
+WEAK_CONTACT_COMPOSITE = 24.0  # composite ≤ → weak contact
 
 # `gap hitter` means extra-base production WITHOUT home-run power. The HR/FB
 # ceiling was removed once to avoid mutual exclusivity with plus power; the
@@ -84,21 +84,35 @@ GAP_HITTER_HRFB_CEILING = 70.0   # HR/FB percentile ≤ → power isn't the sour
 # 300+); the tag repeated 16% / 20% of the time at those floors.
 GAP_HITTER_MIN_PA = 300
 
+# Recalibrated for schema 28 (talent.py). The gates below that read a Statcast
+# stat now read a career-to-date estimate, whose percentiles spread evenly
+# across regulars; the single-season ranks they were tuned on were bunched —
+# small samples and pitchers batting held the extremes of the era pool, so no
+# regular reached the 90th percentile of strikeout rate. Each threshold was
+# moved to keep its tag's count where it was (a calibration replay,
+# 2026-11-01): high-K 80 -> 94, rarely strikes out 10 -> 7, oppo bat
+# 85 -> 90.5, pull-heavy 85 -> 86, ground-ball bat 90 -> 94.5, walk machine
+# 80 -> 75.5, weak contact 30 -> 24, patient 15 -> 16.5, zone hunter
+# 85 -> 83.5. Same counts, better tags, judged against the NEXT season's
+# actual rate (Statcast counts): 84% of high-K hitters are in the following
+# season's top fifth of strikeout rates (69% before), rarely strikes out 93%
+# (86%); walk machine and pull-heavy gain a point or two.
+
 # Approach gates — zone judgment only. `patient` / `free swinger` read chase
 # rate ALONE: the old composite was 60% walk rate, and walk rate is a result,
 # not a decision. Chase and K rate correlate +0.02, so this axis is genuinely
 # independent of bat-to-ball.
-PATIENT_CHASE_PCT      = 15.0   # OSwing (chase) pct ≤ → patient
+PATIENT_CHASE_PCT      = 16.5   # OSwing (chase) pct ≤ → patient
 FREE_SWINGER_CHASE_PCT = 85.0   # OSwing (chase) pct ≥ → free swinger
-WALK_MACHINE_PCT = 80.0
+WALK_MACHINE_PCT = 75.5
 # Swing discrimination (zone-swing rate − chase rate) percentile ≥ → zone
 # hunter. See the tag for why the raw zone-swing rate is not used.
-ZONE_HUNTER_PCT = 85.0
+ZONE_HUNTER_PCT = 83.5
 
 # bat-to-ball gates (K rate correlates −0.88 with contact rate — this is a
 # contact axis, not an approach one)
-HIGH_K_PCT       = 80.0   # K_pct_raw percentile (non-inverted: higher = more Ks)
-RARELY_K_PCT     = 10.0   # ≤ → "rarely strikes out" (min PA gate below)
+HIGH_K_PCT       = 94.0   # K_pct_raw percentile (non-inverted: higher = more Ks)
+RARELY_K_PCT     = 7.0   # ≤ → "rarely strikes out" (min PA gate below)
 RARELY_K_MIN_PA  = 200    # small samples produce fake 8% K rates
 STATION_SPEED_PCT = 10.0  # sprint speed season pct ≤ → "station-to-station"
 EVERYDAY_PA_PCT  = 85.0   # PA season pct ≥ → "everyday player"
@@ -116,10 +130,10 @@ STEAL_RATE_HIGH         = 0.80   # success rate ≥ (league ~0.78)
 STEAL_RATE_MIN_ATTEMPTS = 10     # below this a rate is noise
 
 # Batted-ball direction gates (spray percentiles are season-ranked upstream)
-PULL_HEAVY_PCT      = 85.0
-OPPO_BAT_PCT        = 85.0
+PULL_HEAVY_PCT      = 86.0
+OPPO_BAT_PCT        = 90.5
 AIR_BALL_GB_PCT     = 10.0   # batter GB% at/below → lives in the air
-GROUND_BALL_GB_PCT  = 90.0   # batter GB% at/above → hits it into the ground
+GROUND_BALL_GB_PCT  = 94.5   # batter GB% at/above → hits it into the ground
 
 # Platoon gates (raw wOBA gaps from statcast splits; league platoon gap ~.020)
 PLATOON_MIN_PA        = 50
@@ -183,6 +197,8 @@ def build_hitter_traits(
     advancement:      Optional[dict] = None,
     positions:        Optional[dict] = None,
     pa_team:          Optional[int] = None,
+    talent_metrics:   Optional[dict[str, float]] = None,
+    talent_season_metrics: Optional[dict[str, float]] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """
     Full trait set + spectrum score for one hitter-season.
@@ -198,14 +214,23 @@ def build_hitter_traits(
     doesn't drift with the run environment, while display percentiles and
     the spectrum score stay era-based).
 
+    talent_metrics / talent_season_metrics — career-to-date percentiles
+    (talent.py), era- and season-ranked, under the same names. A gate reads
+    the season-ranked talent, then the season rank, then the era-ranked
+    talent, then the era rank: talent replaces the one-season sample, and the
+    cohort each gate was cut against stays the same.
+
     Returns (traits, spectrum) — spectrum is the continuous 0–100
     power–contact score (None if inputs are missing).
     """
     traits: list[dict] = []
 
-    # Gate metrics: season percentiles where available, era fallback.
-    gm = {**metrics, **{k: v for k, v in (season_metrics or {}).items()
-                        if v is not None and not (isinstance(v, float) and np.isnan(v))}}
+    # Gate metrics: talent before season, season cohort before era.
+    def _known(d):
+        return {k: v for k, v in (d or {}).items()
+                if v is not None and not (isinstance(v, float) and np.isnan(v))}
+    gm = {**metrics, **_known(talent_metrics), **_known(season_metrics),
+          **_known(talent_season_metrics)}
 
     # ── bat: power (barrel + hard-hit — the process, not ISO) ─────────────
     # The spectrum is still computed and returned as a continuous field, but
@@ -259,10 +284,13 @@ def build_hitter_traits(
                              f"thump{iso_note}"))
 
     # ── bat: weak contact (no `hard contact` counterpart — see above) ──────
-    if compute_contact_quality(gm) == "Weak Contact":
-        vals = [v for v in [gm.get("Barrel_pct_pct"), gm.get("HardHit_pct_pct")]
-                if v is not None]
-        comp = float(np.mean(vals)) if vals else None
+    # The composite is the archetype layer's (hitter_archetypes
+    # .compute_contact_quality), but the line is this module's, so it can be
+    # recalibrated and replayed without a rebuild.
+    vals = [v for v in [gm.get("Barrel_pct_pct"), gm.get("HardHit_pct_pct")]
+            if v is not None]
+    comp = float(np.mean(vals)) if vals else None
+    if comp is not None and comp <= WEAK_CONTACT_COMPOSITE:
         traits.append(_trait("weak contact", "bat", comp, comp,
                              f"barrel + hard-hit composite {comp:.0f}th pct"))
 

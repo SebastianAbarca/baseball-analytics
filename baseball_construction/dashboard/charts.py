@@ -30,7 +30,17 @@ log = logging.getLogger(__name__)
 # holding only attributes that fire regardless of sample.
 from team_portrait import (kind_of, HITTER_TAG_FAMILIES,  # noqa: E402
                            PITCHER_TAG_FAMILIES)
-from metric_contracts import describe_display  # noqa: E402
+from metric_contracts import HITTER_DISPLAY, describe_display  # noqa: E402
+
+
+def _talent_note(h: dict, label: str) -> str:
+    """Hover line with a hitter's career-to-date rank of a card metric
+    (talent.py), or "" when the portrait carries none for it."""
+    key = HITTER_DISPLAY.get(label)
+    v = ((h.get("gate_inputs") or {}).get("talent_metrics") or {}).get(key)
+    if not isinstance(v, (int, float)):
+        return ""
+    return f"<br>Career-to-date: <b>{v:.0f}</b>"
 
 # ---------------------------------------------------------------------------
 # Strike zone geometry
@@ -1382,7 +1392,7 @@ def player_metrics_radar(portrait: dict, selected_ids: list[str]) -> go.Figure:
         values_closed = values + [values[0]]
 
         # What each percentile ranks and against whom (metric_contracts).
-        about = [describe_display(m) or "" for m in labels_closed]
+        about = [(describe_display(m) or "") + _talent_note(h, m) for m in labels_closed]
         traces.append(go.Scatterpolar(
             r=values_closed,
             theta=labels_closed,
@@ -1392,7 +1402,7 @@ def player_metrics_radar(portrait: dict, selected_ids: list[str]) -> go.Figure:
             line=dict(color=color, width=2),
             marker=dict(size=5, color=color),
             name=f"{name} ({arc})",
-            hovertemplate="<b>%{theta}</b><br>Percentile: <b>%{r:.0f}</b>"
+            hovertemplate="<b>%{theta}</b><br>This season: <b>%{r:.0f}</b>"
                           "<br>%{customdata}<extra></extra>",
         ))
 
@@ -1444,14 +1454,14 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
     if not selected_ids:
         return empty_figure("Select players from the dropdown above")
 
-    player_data: list[tuple[str, str, dict]] = []
+    player_data: list[tuple[str, str, dict, dict]] = []
     for pid in selected_ids:
         h = id_to_hitter.get(pid)
         if h is None:
             continue
         name = (h.get("name") or f"ID {pid}").strip()
         arc  = next((t["tag"] for t in h.get("traits") or []), "")
-        player_data.append((pid, f"{name} ({arc})", h.get("metrics_pct", {})))
+        player_data.append((pid, f"{name} ({arc})", h.get("metrics_pct", {}), h))
 
     if not player_data:
         return empty_figure("No metric data for selected players")
@@ -1459,11 +1469,11 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
     # Collect all metrics present in at least one selected player
     all_metrics = []
     for m in _PLAYER_METRIC_ORDER:
-        if any(m in metrics_dict for _, _, metrics_dict in player_data):
+        if any(m in metrics_dict for _, _, metrics_dict, _ in player_data):
             all_metrics.append(m)
 
     traces = []
-    for idx, (pid, label, metrics) in enumerate(player_data):
+    for idx, (pid, label, metrics, h) in enumerate(player_data):
         color = _ARCHETYPE_COLORS[idx % len(_ARCHETYPE_COLORS)]
         vals  = [metrics.get(m) for m in all_metrics]
         traces.append(go.Bar(
@@ -1472,8 +1482,8 @@ def player_metrics_bars(portrait: dict, selected_ids: list[str]) -> go.Figure:
             x=vals,
             orientation="h",
             marker_color=color,
-            customdata=[describe_display(m) or "" for m in all_metrics],
-            hovertemplate="<b>%{y}</b><br>%{x:.0f}th percentile"
+            customdata=[(describe_display(m) or "") + _talent_note(h, m) for m in all_metrics],
+            hovertemplate="<b>%{y}</b><br>This season: %{x:.0f}th percentile"
                           "<br>%{customdata}<extra></extra>",
         ))
 

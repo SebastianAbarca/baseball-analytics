@@ -88,7 +88,11 @@ sys.path.insert(0, str(_HERE))
 # Team aggregates average declared percentiles only. Philosophy names
 # describe the roster: "Control and Contact Management", "Arsenal Variety and
 # Matchup Usage", "Defense and Park Support", "Young, Team-Controlled Roster".
-PORTRAIT_SCHEMA_VERSION = 27
+# 28: players carry career-to-date talent (talent.py) beside the season:
+# gate_inputs.talent_metrics (era-ranked), hitters' talent_season_metrics
+# (season-ranked, the gate twins) and talent_n (decayed PA/BF). Tag gates and
+# comps read talent first, then the season and era ranks.
+PORTRAIT_SCHEMA_VERSION = 28
 
 from ingest import (
     pull_statcast_range,
@@ -1048,11 +1052,14 @@ def _classify_hitters(
     advancement_map: Optional[dict[int, dict]] = None,
     positions_map: Optional[dict[int, dict]] = None,
     attempt_pcts: Optional[pd.Series] = None,
+    talent_map: Optional[dict[int, dict]] = None,
 ) -> list[dict]:
     """
     Build hitter profile for each player in team_bat.
     Requires percentile columns (_pct suffix) to be present.
     split_map — {batter_id: L/R splits} feeding the platoon trait family.
+    talent_map — talent.player_talent(season, "H"): each hitter's
+    career-to-date estimates, ranked; the tag gates read them first.
     Returns list of hitter profile dicts (traits + spectrum + metrics_pct).
     """
     from ingest import normalize_percentile
@@ -1147,6 +1154,7 @@ def _classify_hitters(
                 val = row.get(col)
                 if val is not None and not pd.isna(val):
                     season_metrics[scol[:-4]] = float(val)
+        tal = (talent_map or {}).get(int(player_id)) or {}
         try:
             from hitter_traits import build_hitter_traits
             profile["traits"], profile["spectrum"] = build_hitter_traits(
@@ -1163,6 +1171,8 @@ def _classify_hitters(
                 positions=(positions_map or {}).get(int(player_id)),
                 pa=pa_total,
                 pa_team=pa_team,
+                talent_metrics=tal.get("talent"),
+                talent_season_metrics=tal.get("talent_season"),
             )
         except Exception as _ht_exc:
             log.warning("hitter traits failed for %s: %s", player_id, _ht_exc)
@@ -1187,6 +1197,9 @@ def _classify_hitters(
             "positions":        (positions_map or {}).get(int(player_id)),
             "pa":               pa_total,
             "pa_team":          pa_team,
+            "talent_metrics":   tal.get("talent") or {},
+            "talent_season_metrics": tal.get("talent_season") or {},
+            "talent_n":         tal.get("n_eff"),
         })
 
         # Eligible-population membership — the denominator each tag is scored
@@ -1250,6 +1263,7 @@ def _classify_pitchers(
     runner_ctrl_map: Optional[dict[int, dict]] = None,
     league_sequencing: Optional[pd.DataFrame] = None,
     pitch_stints: Optional[pd.DataFrame] = None,
+    talent_map: Optional[dict[int, dict]] = None,
 ) -> tuple[list[dict], dict]:
     """
     Classify starters individually (build_starter_profile per pitcher) and
@@ -1257,6 +1271,10 @@ def _classify_pitchers(
 
     Returns (starters_list, bullpen_profile_dict).
     """
+    def _talent(pid) -> dict:
+        """This pitcher's talent percentiles (talent.player_talent)."""
+        return ((talent_map or {}).get(int(pid)) or {}).get("talent") or {}
+
     starters: list[dict] = []
     bullpen_arms: list[dict] = []
 
@@ -1414,6 +1432,7 @@ def _classify_pitchers(
                     tempo=(tempo_map or {}).get(player_id),
                     runner_control=(runner_ctrl_map or {}).get(player_id),
                     bf_total=bf_total,
+                    talent_metrics=_talent(player_id),
                 )
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
@@ -1437,6 +1456,8 @@ def _classify_pitchers(
                 "splits":         splits,
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
+                "talent_metrics": _talent(player_id),
+                "talent_n":       ((talent_map or {}).get(int(player_id)) or {}).get("n_eff"),
                 "pool_rows":      _pool_rows(
                     player_id,
                     league_mechanics=league_mechanics,
@@ -1513,6 +1534,7 @@ def _classify_pitchers(
                     tempo=(tempo_map or {}).get(player_id),
                     runner_control=(runner_ctrl_map or {}).get(player_id),
                     bf_total=bf_total,
+                    talent_metrics=_talent(player_id),
                 )
             except Exception as _tr_exc:
                 log.warning("traits failed for %s: %s", player_id, _tr_exc)
@@ -1532,6 +1554,8 @@ def _classify_pitchers(
                 "splits":         splits,
                 "tempo":          (tempo_map or {}).get(player_id),
                 "runner_control": (runner_ctrl_map or {}).get(player_id),
+                "talent_metrics": _talent(player_id),
+                "talent_n":       ((talent_map or {}).get(int(player_id)) or {}).get("n_eff"),
                 "pool_rows":      _pool_rows(
                     player_id,
                     league_mechanics=league_mechanics,
@@ -2381,7 +2405,8 @@ _GATE_FINGERPRINT_CACHE: Optional[str] = None
 # The cross-team rows of every era-pool season are what the team-construction
 # percentiles rank against, so they are pool files exactly like the fg roots.
 _FINGERPRINT_POOL_FILES = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv",
-                           "cross_team_metrics_v3_{s}.csv")
+                           "cross_team_metrics_v3_{s}.csv",
+                           "talent_counts_{s}.csv")   # talent.py, every era season
 
 # Pools that live outside PROCESSED_DIR, hashed for the portrait's own season.
 # tunneling.py writes tunnel_league_{s}.parquet into modules/processed; left
@@ -3902,11 +3927,23 @@ def build_team_portrait(
     except Exception as exc:
         log.warning("Catcher craft map failed: %s", exc)
 
+    # Career-to-date talent (talent.py): tags and comps read these before the
+    # single-season ranks. Empty when the counts are missing — the tags then
+    # fall back to the season and era ranks exactly as before.
+    def _talent_map(side: str) -> dict:
+        try:
+            from talent import player_talent
+            return player_talent(season, side)
+        except Exception as exc:
+            log.warning("talent %s failed: %s", side, exc)
+            return {}
+
     hitter_profiles = _classify_hitters(team_bat, split_map=_split_map,
                                         catcher_map=_catcher_map,
                                         advancement_map=_advancement_map,
                                         positions_map=_positions_map,
-                                        attempt_pcts=_league_attempt_pcts(batting_full))
+                                        attempt_pcts=_league_attempt_pcts(batting_full),
+                                        talent_map=_talent_map("H"))
 
     # ── 13. Pitcher archetypes ────────────────────────────────────────────
     # Load pitch-mix table once here so every starter in the loop shares it
@@ -3994,6 +4031,7 @@ def build_team_portrait(
         tempo_map=_tempo_map, runner_ctrl_map=_runner_ctrl_map,
         league_sequencing=_league_seq,
         pitch_stints=pit_stints,
+        talent_map=_talent_map("P"),
     )
 
     # ── 14. Data coverage ─────────────────────────────────────────────────

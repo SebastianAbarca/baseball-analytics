@@ -41,8 +41,10 @@ ERA_DIR = _HERE.parent / "data" / "era"
 # a full season of Statcast per season. And each season's service-time totals
 # (service_time.service_through): the MLS lists they come from are kept out
 # of git, and the runner adds only the season in progress to the last of them.
+# And each season's talent counts (talent.py): a portrait's career-to-date
+# estimates read every season up to its own, from Statcast the runner lacks.
 ROOTS = ("fg_batting_{s}.csv", "fg_pitching_{s}.csv", "cross_team_metrics_v3_{s}.csv",
-         "service_through_{s}.csv")
+         "service_through_{s}.csv", "talent_counts_{s}.csv")
 
 
 def main() -> int:
