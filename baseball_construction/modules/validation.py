@@ -1860,6 +1860,12 @@ def v26_team_comps() -> Result:
          the way its percentile does — where team_portrait's rank-invert
          table says a high percentile is FEWER (K%, walks and hard contact
          allowed), the "high" phrase must say fewer/less
+      5. approach and outcome are separate (split-v1): every team gets
+         outcome comps carrying a quality level; the quality metric is out
+         of the outcome cosine and no outcome feature is left correlated
+         with it; no metric sits in both
+      6. pitch shape is handedness-neutral: a left-hander whose pitches
+         mirror a right-hander's has the same shape
     """
     import sys as _sys
     import numpy as np
@@ -1867,7 +1873,8 @@ def v26_team_comps() -> Result:
     import team_similarity as ts
 
     rng = np.random.default_rng(3)
-    keys = [k for items in ts.HITTER_DOMAINS.values() for src, k in items if src == "m"]
+    keys = sorted({k for doms in (ts.HITTER_DOMAINS, ts.H_APPROACH, ts.H_OUTCOME)
+                   for items in doms.values() for src, k in items if src == "m"})
 
     def hitter(pa, lean):
         m = {k: float(np.clip(rng.normal(50 + lean, 20), 0, 100)) for k in keys}
@@ -1902,7 +1909,8 @@ def v26_team_comps() -> Result:
 
     import team_portrait as tp
     invert = {**tp.BATTING_RANK_INVERT, **tp.PITCHING_RANK_INVERT}
-    feats = {k for doms in (ts.HITTER_DOMAINS, ts.PITCHER_DOMAINS)
+    feats = {k for doms in (ts.HITTER_DOMAINS, ts.PITCHER_DOMAINS, ts.H_APPROACH,
+                            ts.H_OUTCOME, ts.P_APPROACH, ts.P_OUTCOME)
              for items in doms.values() for _, k in items}
     missing = sorted(feats - set(ts.PHRASES))
     if missing:
@@ -1920,10 +1928,46 @@ def v26_team_comps() -> Result:
     if not isinstance(ex.get("shared"), list):
         errors.append("comps carry no explanation")
 
+    for unit, (_, _, appr, outc) in ts.UNITS.items():
+        both = ({k for i in appr.values() for _, k in i} & {k for i in outc.values() for _, k in i})
+        if both:
+            errors.append(f"{unit}: {sorted(both)} in both approach and outcome")
+        if ts.LEVEL[unit] not in {k for i in outc.values() for _, k in i}:
+            errors.append(f"{unit}: quality metric {ts.LEVEL[unit]} is not an outcome feature")
+    oc = league["T00"].get("outcome_neighbours", {}).get("offense") or []
+    if len(oc) != ts.TOP_N or any("level" not in x for x in oc) \
+            or league["T00"].get("level", {}).get("offense") is None:
+        errors.append(f"offense outcome comps missing or without a level: {oc}")
+    feats_o = {t: ts.style_features(teams[t]["hitters"], "pa", ts.H_OUTCOME) for t in teams}
+    _, okeys, OZ, _ = ts._standardise(feats_o, budget=True)
+    q = OZ[:, next(i for i, k in enumerate(okeys) if k[1] == ts.LEVEL["offense"] and k[2] == "mean")]
+    NZ = ts._net_of_level(okeys, OZ, ts.LEVEL["offense"])
+    for j, k in enumerate(okeys):
+        col = NZ[:, j]
+        if k[1] == ts.LEVEL["offense"]:
+            if np.isfinite(col).any():
+                errors.append("the quality metric still votes in the outcome comp")
+            continue
+        m = np.isfinite(col) & np.isfinite(q)
+        if m.sum() > 5 and abs(np.corrcoef(col[m], q[m])[0, 1]) > 1e-6:
+            errors.append(f"outcome feature {k} still tracks quality")
+            break
+
+    def arm(hand, fb_hb, op_hb):
+        return {"handedness": hand, "arsenal_profile": {
+            "fastball": {"avg_ivb": 1.3, "avg_hb": fb_hb},
+            "out_pitch": {"avg_ivb": 0.1, "avg_hb": op_hb}}}
+    r, l = ts.pitch_shape(arm("R", -0.7, 0.4)), ts.pitch_shape(arm("L", 0.7, -0.4))
+    if set(r) != set(ts.SHAPE_KEYS) or any(abs(r[k] - l[k]) > 1e-9 for k in r):
+        errors.append(f"pitch shape differs between mirrored hands: R {r} L {l}")
+    elif r["fb_run"] <= 0:
+        errors.append(f"a right-hander's arm-side run reads {r['fb_run']:.1f}, not positive")
+
     passed = not errors
     detail = ("identical rosters comp at 1.00; thin coverage excluded; "
-              f"deployment comp kept separate; {checked} phrase directions match "
-              "the rank tables" if passed else "; ".join(errors))
+              "deployment comp kept separate; approach and outcome disjoint, outcome "
+              f"net of quality; shape mirrors across hands; {checked} phrase directions "
+              "match the rank tables" if passed else "; ".join(errors))
     return passed, detail
 
 

@@ -3024,7 +3024,12 @@ def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
     who, sim = top.get("team", "?"), top.get("similarity")
     med, q1, q3 = uq.get("unit_median"), uq.get("unit_q1"), uq.get("unit_q3")
     parts = []
-    basis = ("over the unit's measurements: team averages and the share of "
+    basis = ("over how the unit plays — swing decisions, contact, spray, tools "
+             "and running; or arm, attack, mix and pitch shape — team averages "
+             "and the share of its workload in each tail, every domain weighted "
+             "equally; results are compared separately"
+             if uq.get("method") == "split-v1"
+             else "over the unit's measurements: team averages and the share of "
              "its workload in each tail, every domain weighted equally"
              if uq.get("method") == "hybrid-v1"
              else "over per-tag deviations from league average")
@@ -3292,6 +3297,26 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
             lines.append(html.Div(
                 f"Shared with {top.get('team')}: " + " · ".join(top["shared"]),
                 title=_comp_why(top)))
+        # Results, compared net of quality (team_similarity split-v1): two
+        # teams that produce the same way at different levels are comps, so
+        # each side's quality is shown as a number rather than voted on.
+        out = (pos.get("outcome_neighbours") or {}).get(unit) or []
+        if out:
+            lvl = (pos.get("level") or {}).get(unit)
+            q = "xwOBA allowed" if unit != "offense" else "xwOBA"
+            why = (" — " + ", ".join(out[0]["shared"]) + " for their quality"
+                   if out[0].get("shared") else "")
+            lines.append(html.Div(
+                "Produces like " + ", ".join(x.get("team", "") for x in out[:2]) + why,
+                title=(f"Closest by results — strikeouts, walks, contact and power — "
+                       f"after taking out quality ({q}), which is shown instead: "
+                       + (f"this {unit} {_ordinal_short(round(lvl))} percentile; "
+                          if lvl is not None else "")
+                       + ", ".join(f"{x.get('team')} {_ordinal_short(round(x['level']))}"
+                                   for x in out[:3] if x.get("level") is not None)
+                       + ". Similarity " + ", ".join(f"{x.get('team')} {x.get('similarity', 0):.2f}"
+                                                     for x in out[:3]) + "."),
+                style={"cursor": "help"}))
         dep = (pos.get("deployment_neighbours") or {}).get(unit) or []
         if dep:
             why = (" — " + ", ".join(dep[0]["shared"])) if dep[0].get("shared") else ""
