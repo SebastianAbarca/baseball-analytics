@@ -677,6 +677,8 @@ def team_identity_card(data):
             # the card rendered a bare "—" where the label used to be.
             position = {"neighbours": entry.get("neighbours") or {},
                         "uniqueness": entry.get("uniqueness") or {},
+                        "outcome_neighbours": entry.get("outcome_neighbours") or {},
+                        "level": entry.get("level") or {},
                         "deployment_neighbours": entry.get("deployment_neighbours") or {}}
     except Exception:
         pass
@@ -872,10 +874,13 @@ def league_identity_board(season):
         # relative to the league, not by which bucket a cutoff assigned it to.
         nb = (identity.get("neighbours") or {}).get("offense") or []
         uq = (identity.get("uniqueness") or {}).get("offense") or {}
+        ob = (identity.get("outcome_neighbours") or {}).get("offense") or []
         rows.append({
             "Team":              team,
             "Fingerprint":       fp_str,
             "Plays Like":        ", ".join(x["team"] for x in nb[:2]) or "—",
+            # Results net of quality (team_similarity split-v1).
+            "Produces Like":     ", ".join(x["team"] for x in ob[:2]) or "—",
             # How strong the "Plays Like" comparison actually is — similarity
             # to the closest comparable offense. A sortable number suits a
             # table better than the card's one-word band. The old 0–100
@@ -894,6 +899,7 @@ def league_identity_board(season):
         {"name": "Fingerprint",       "id": "Fingerprint"},
         {"name": "Plays Like",        "id": "Plays Like"},
         {"name": "Comp Strength",     "id": "Distinctiveness"},
+        {"name": "Produces Like",     "id": "Produces Like"},
         {"name": "Power Share",       "id": "Power Share"},
         {"name": "Top Rotation Traits", "id": "Top Rotation Traits"},
         {"name": "Bullpen Mechanism", "id": "Bullpen Mechanism"},
