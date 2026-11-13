@@ -682,6 +682,59 @@ def _archetype_guide_card() -> dbc.Card:
     ], style=CARD_STYLE, className="mb-3")
 
 
+def team_comps_card() -> dbc.Card:
+    """
+    The team comps, as the picture they are computed from (team_similarity
+    dots-v1): this unit and a comparison unit on every metric, and every other
+    team ranked by approach + results. Clicking a bar picks the comparison.
+    """
+    _small = {"fontSize": "0.72rem", "color": "#9ca3af"}
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Span([
+                html.Small("Team comps", className="fw-semibold text-uppercase",
+                           style={"fontSize": "0.7rem", "letterSpacing": "0.07em",
+                                  "color": "#9ca3af"}),
+                html.Small(" — how closely two teams sit on every metric",
+                           style={"fontSize": "0.65rem", "color": "#6b7280"}),
+            ]),
+            style={"backgroundColor": "#1a2233", "borderBottom": "1px solid #374151"},
+        ),
+        dbc.CardBody([
+            html.Div([
+                dbc.RadioItems(
+                    id="comps-unit", inline=True, value="offense",
+                    options=[{"label": "Offense", "value": "offense"},
+                             {"label": "Rotation", "value": "rotation"},
+                             {"label": "Bullpen", "value": "bullpen"}],
+                    style={"fontSize": "0.8rem"}),
+                html.Span("compare with", style=_small),
+                dcc.Dropdown(id="comps-team", clearable=False, searchable=True,
+                             style={"width": "110px", "fontSize": "0.8rem", "color": "#111827"}),
+                html.Span(id="comps-summary", style={**_small, "marginLeft": "auto"}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "12px",
+                      "flexWrap": "wrap", "marginBottom": "8px"}),
+            dbc.Row([
+                dbc.Col(dcc.Graph(id="comps-dots", config={"displayModeBar": False}), md=8),
+                dbc.Col([
+                    html.Div("Closest teams — approach + results, each out of 100",
+                             style={**_small, "margin": "2px 0 0 4px"}),
+                    dcc.Graph(id="comps-ranking", config={"displayModeBar": False}),
+                ], md=4),
+            ], className="g-2"),
+            html.Div(
+                "Each dot is a team's average on that metric, in league standard deviations "
+                "from the 30-team average. A section's score is the share of this season's "
+                "team pairs that sit farther apart on average, so 100 is the closest pair in "
+                "the league. * shown for context, not scored: exit velocity (hard contact is "
+                "the one that counts) and expected wOBA / average (the team's quality). "
+                "Offense results are compared after removing each lineup's overall level, so "
+                "they read how it produces rather than how much.",
+                style={**_small, "fontSize": "0.68rem", "lineHeight": "1.5", "marginTop": "6px"}),
+        ], style={"padding": "12px"}),
+    ], style=CARD_STYLE, className="mb-3")
+
+
 def identity_tab() -> dbc.Tab:
     """Landing tab — the team's identity, fingerprint first."""
     return dbc.Tab(label="Identity", tab_id="tab-identity", children=[
@@ -698,6 +751,7 @@ def identity_tab() -> dbc.Tab:
                 style={"padding": "14px"},
             ),
         ], style=CARD_STYLE, className="mb-3"),
+        team_comps_card(),
         _card("The lineup — share of plate appearances", "hitter-pie", height=520),
         _card("The rotation — share of batters faced", "rotation-trait-density", height=520),
         _card("The bullpen — share of batters faced", "bullpen-trait-density", height=520),

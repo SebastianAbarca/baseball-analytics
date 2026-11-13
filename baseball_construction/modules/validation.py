@@ -1849,31 +1849,32 @@ def v25_tag_states_and_framing() -> Result:
 
 def v26_team_comps() -> Result:
     """
-    Offline, synthetic league of 30 offenses (team_similarity):
-      1. two teams with the same hitters are each other's top comp at 1.0
+    Offline, synthetic league of 30 offenses (team_similarity, dots-v1):
+      1. two teams with the same hitters are each other's top comp at the
+         full 200 (100 approach + 100 results)
       2. a metric measured for under half a team's PA does not count for it
-         (its features are NaN, not zero)
-      3. every team gets style and deployment comps, the deployment one from
-         its own features — identical usage, different hitters, is a top
-         deployment comp and not a top style comp
-      4. explanations: every comp feature has a phrase, and each phrase points
-         the way its percentile does — where team_portrait's rank-invert
-         table says a high percentile is FEWER (K%, walks and hard contact
-         allowed), the "high" phrase must say fewer/less
-      5. approach and outcome are separate (split-v1): every team gets
-         outcome comps carrying a quality level; the quality metric is out
-         of the outcome cosine and no outcome feature is left correlated
-         with it; no metric sits in both
+         (NaN, not zero)
+      3. deployment is its own comparison — identical usage, different
+         hitters, is the top deployment comp and not the top comp
+      4. every comparison row has a phrase, and each phrase points the way
+         its percentile does (where the rank-invert table says a high
+         percentile is FEWER, the "high" phrase says fewer/less)
+      5. the scoring rules hold: no metric in both sections; whiffs (a mirror
+         of contact) are not a hitter row; show-only rows move nothing;
+         raising every centred offense-results row of a team by the same
+         amount leaves its results scores unchanged; every team's comps list
+         the other 29, best total first, total = approach + results
       6. pitch shape is handedness-neutral: a left-hander whose pitches
          mirror a right-hander's has the same shape
     """
+    import copy
     import sys as _sys
     import numpy as np
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
     import team_similarity as ts
 
     rng = np.random.default_rng(3)
-    keys = sorted({k for doms in (ts.HITTER_DOMAINS, ts.H_APPROACH, ts.H_OUTCOME)
+    keys = sorted({k for doms in (ts.HITTER_DOMAINS, ts.H_APPROACH, ts.H_RESULTS)
                    for items in doms.values() for src, k in items if src == "m"})
 
     def hitter(pa, lean):
@@ -1891,26 +1892,26 @@ def v26_team_comps() -> Result:
 
     errors = []
     top = league["T00"]["neighbours"]["offense"][0]
-    if top["team"] != "TWIN" or abs(top["similarity"] - 1.0) > 1e-6:
+    if top["team"] != "TWIN" or top["total"] != 200:
         errors.append(f"identical roster's top comp is {top}")
     dep = [x["team"] for x in league["USAGE"]["deployment_neighbours"]["offense"]]
-    style = [x["team"] for x in league["USAGE"]["neighbours"]["offense"]]
+    near = [x["team"] for x in league["USAGE"]["neighbours"]["offense"]]
     if "T01" not in dep[:1]:
         errors.append(f"same usage not the top deployment comp: {dep}")
-    if "T01" in style[:1]:
-        errors.append("same usage leaked into the style comp")
+    if "T01" in near[:1]:
+        errors.append("same usage leaked into the comps")
     thin = [dict(h) for h in teams["T02"]["hitters"]]
     for h in thin[:-1]:
         h["gate_inputs"] = {**h["gate_inputs"], "metrics": {k: v for k, v in h["gate_inputs"]["metrics"].items()
                                                             if k != "Barrel_pct_pct"}}
-    f = ts.style_features(thin, "pa", ts.HITTER_DOMAINS)
-    if not np.isnan(f[("power", "Barrel_pct_pct", "mean")]):
+    f = ts.style_features(thin, "pa", ts.H_RESULTS)
+    if not np.isnan(f[("contact quality", "Barrel_pct_pct", "mean")]):
         errors.append("a metric measured for one hitter still counted")
 
     import team_portrait as tp
     invert = {**tp.BATTING_RANK_INVERT, **tp.PITCHING_RANK_INVERT}
     feats = {k for doms in (ts.HITTER_DOMAINS, ts.PITCHER_DOMAINS, ts.H_APPROACH,
-                            ts.H_OUTCOME, ts.P_APPROACH, ts.P_OUTCOME)
+                            ts.H_RESULTS, ts.P_APPROACH, ts.P_RESULTS)
              for items in doms.values() for _, k in items}
     missing = sorted(feats - set(ts.PHRASES))
     if missing:
@@ -1924,34 +1925,39 @@ def v26_team_comps() -> Result:
         says_fewer = hi.split()[0] in ("fewer", "less")
         if says_fewer != invert[base]:
             errors.append(f"{key}: high reads '{hi}' but rank-invert is {invert[base]}")
-    ex = league["T00"]["neighbours"]["offense"][0]
-    if not isinstance(ex.get("shared"), list):
+    if not isinstance(top.get("shared"), list):
         errors.append("comps carry no explanation")
 
-    for unit, (_, _, appr, outc) in ts.UNITS.items():
-        both = ({k for i in appr.values() for _, k in i} & {k for i in outc.values() for _, k in i})
+    for unit, (_, _, appr, res) in ts.UNITS.items():
+        both = {k for i in appr.values() for _, k in i} & {k for i in res.values() for _, k in i}
         if both:
-            errors.append(f"{unit}: {sorted(both)} in both approach and outcome")
-        if ts.LEVEL[unit] not in {k for i in outc.values() for _, k in i}:
-            errors.append(f"{unit}: quality metric {ts.LEVEL[unit]} is not an outcome feature")
-    oc = league["T00"].get("outcome_neighbours", {}).get("offense") or []
-    if len(oc) != ts.TOP_N or any("level" not in x for x in oc) \
-            or league["T00"].get("level", {}).get("offense") is None:
-        errors.append(f"offense outcome comps missing or without a level: {oc}")
-    feats_o = {t: ts.style_features(teams[t]["hitters"], "pa", ts.H_OUTCOME) for t in teams}
-    _, okeys, OZ, _ = ts._standardise(feats_o, budget=True)
-    q = OZ[:, next(i for i, k in enumerate(okeys) if k[1] == ts.LEVEL["offense"] and k[2] == "mean")]
-    NZ = ts._net_of_level(okeys, OZ, ts.LEVEL["offense"])
-    for j, k in enumerate(okeys):
-        col = NZ[:, j]
-        if k[1] == ts.LEVEL["offense"]:
-            if np.isfinite(col).any():
-                errors.append("the quality metric still votes in the outcome comp")
-            continue
-        m = np.isfinite(col) & np.isfinite(q)
-        if m.sum() > 5 and abs(np.corrcoef(col[m], q[m])[0, 1]) > 1e-6:
-            errors.append(f"outcome feature {k} still tracks quality")
-            break
+            errors.append(f"{unit}: {sorted(both)} in both approach and results")
+    if "Whiff_pct_pct" in {r["key"] for r in ts.comparison_rows("offense")}:
+        errors.append("hitter whiffs (the mirror of contact) are a comparison row")
+    comps = league["T03"]["comps"]["offense"]
+    totals = [a + r for _, a, r in comps]
+    if len(comps) != len(teams) - 1 or totals != sorted(totals, reverse=True) \
+            or top["total"] != top["approach"] + top["results"]:
+        errors.append("comps are not the other 29 teams, best total first, total = approach + results")
+
+    def scores(tms):
+        lg = {t: {} for t in tms}
+        ts.compute_positions(lg, tms)
+        return {t: (a, r) for t, a, r in lg["T04"]["comps"]["offense"]}
+    base_scores = scores(teams)
+    shown = copy.deepcopy(teams)
+    for h in shown["T04"]["hitters"]:
+        for k in ts.SHOW_ONLY & set(h["gate_inputs"]["metrics"]):
+            h["gate_inputs"]["metrics"][k] = 99.0
+    if scores(shown) != base_scores:
+        errors.append("a show-only row moved the scores")
+    t0, rows, Z0 = ts.unit_profiles({t: v["hitters"] for t, v in teams.items()}, "offense")
+    i, c = t0.index("T04"), [j for j, r in enumerate(rows) if r["centred"]]
+    shifted = Z0.copy()
+    shifted[i, c] += 1.3     # the same offense, better by the same amount on every centred row
+    if not c or not np.allclose(ts.scored_values(rows, shifted), ts.scored_values(rows, Z0),
+                                equal_nan=True):
+        errors.append("an even shift across a team's centred rows changed what is scored")
 
     def arm(hand, fb_hb, op_hb):
         return {"handedness": hand, "arsenal_profile": {
@@ -1964,10 +1970,10 @@ def v26_team_comps() -> Result:
         errors.append(f"a right-hander's arm-side run reads {r['fb_run']:.1f}, not positive")
 
     passed = not errors
-    detail = ("identical rosters comp at 1.00; thin coverage excluded; "
-              "deployment comp kept separate; approach and outcome disjoint, outcome "
-              f"net of quality; shape mirrors across hands; {checked} phrase directions "
-              "match the rank tables" if passed else "; ".join(errors))
+    detail = ("identical rosters comp at 200; thin coverage excluded; deployment kept "
+              "separate; sections disjoint, show-only rows inert, centring shift-proof, "
+              f"comps ranked by total; shape mirrors across hands; {checked} phrase "
+              "directions match the rank tables" if passed else "; ".join(errors))
     return passed, detail
 
 
@@ -2074,7 +2080,9 @@ def v27_percentile_contracts() -> Result:
             pool = {"spin_efficiency_pct": "P.pool.league_spin",
                     "extension_pct": "P.pool.league_mechanics",
                     "entropy_ratio_pct": "P.pool.league_sequencing",
-                    "count_shift_pct": "P.pool.league_sequencing"}.get(key)
+                    "count_shift_pct": "P.pool.league_sequencing",
+                    "called_strike_pct": "P.pool.league_discipline",
+                    "foul_swing_pct": "P.pool.league_discipline"}.get(key)
             c = mc.lookup(pool, key) if pool else None
         if c is not None and (hi.split()[0] in lower) != (c.high.split()[0] in lower):
             errors.append(f"comp phrase '{hi}' disagrees with contract '{c.high}' for {key}")

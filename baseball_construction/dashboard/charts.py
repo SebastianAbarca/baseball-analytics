@@ -3021,28 +3021,133 @@ def _comp_why(comp: dict) -> str:
 def _comp_tooltip(unit: str, near: list, uq: dict) -> str:
     """The numbers behind the one-word comp strength."""
     top = near[0] if near else {}
-    who, sim = top.get("team", "?"), top.get("similarity")
+    who = top.get("team", "?")
     med, q1, q3 = uq.get("unit_median"), uq.get("unit_q1"), uq.get("unit_q3")
     parts = []
-    basis = ("over how the unit plays — swing decisions, contact, spray, tools "
-             "and running; or arm, attack, mix and pitch shape — team averages "
-             "and the share of its workload in each tail, every domain weighted "
-             "equally; results are compared separately"
-             if uq.get("method") == "split-v1"
-             else "over the unit's measurements: team averages and the share of "
-             "its workload in each tail, every domain weighted equally"
-             if uq.get("method") == "hybrid-v1"
-             else "over per-tag deviations from league average")
+    if uq.get("method") == "dots-v1":
+        if top.get("total") is not None:
+            parts.append(f"Closest is {who}: approach {top['approach']} + results "
+                         f"{top['results']} = {top['total']} of 200. Each score is the "
+                         "share of this season's team pairs that sit farther apart, "
+                         "averaged over every metric on the comparison below.")
+        if med is not None:
+            parts.append(f"Across this season's {unit}s the closest comp typically "
+                         f"totals {med:.0f}; below {q1:.0f} counts as loose and "
+                         f"above {q3:.0f} as close.")
+        return " ".join(parts)
+    sim = top.get("similarity")
     if sim is not None:
-        parts.append(f"Closest comparable team is {who}, at {sim:.2f} similarity "
-                     f"(cosine, {basis}).")
+        parts.append(f"Closest comparable team is {who}, at {sim:.2f} similarity.")
     if med is not None:
         parts.append(f"Across this season's {unit}s the closest comp typically "
                      f"lands at {med:.2f}; below {q1:.2f} counts as loose and "
                      f"above {q3:.2f} as close.")
-    parts.append("Each unit is banded against its own spread — offenses and "
-                 "rotations do not sit on a common scale.")
     return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Team comps — the comparison, and every team ranked by it
+# ---------------------------------------------------------------------------
+# team_similarity (dots-v1) scores two units by how close their dots sit on
+# every metric: an approach score and a results score, each 0-100 (the share
+# of the season's pairs farther apart), totalling 0-200. These two figures
+# ARE that score: the dots it averages, and the totals it ranks by.
+
+COMP_A, COMP_B = "#7F77DD", "#D85A30"            # the two teams' dots
+COMP_APPROACH, COMP_RESULTS = "#378ADD", "#1D9E75"  # the two score colours
+
+
+def team_comp_dots(rows: list[dict], za: list, zb: list,
+                   team_a: str, team_b: str) -> go.Figure:
+    """
+    Both units on every comparison row, in league standard deviations, with
+    the gap between them drawn. Rows not in the score are faded; centred rows
+    are scored on the gap after each team's own level is removed, and say so
+    on hover. `za`, `zb` are the two teams' profiles from the league file.
+    """
+    ys, labels, hover_a, hover_b, line_x, line_y = [], [], [], [], [], []
+    xa, xb, op = [], [], []
+    shapes, notes = [], []
+    y, last_sec, last_dom = 0, None, None
+    for r, a, b in zip(rows, za, zb):
+        if r["section"] != last_sec:
+            y -= 1.6 if last_sec else 0.6
+            notes.append(dict(x=-3.15, y=y, xref="x", yref="y", xanchor="left",
+                              text=f"<b>{r['section'].capitalize()}</b>", showarrow=False,
+                              font=dict(size=13, color=COLORS["text"])))
+            last_sec, last_dom = r["section"], None
+            y -= 1.5
+        if r["domain"] != last_dom:
+            notes.append(dict(x=-3.15, y=y + 0.05, xref="x", yref="y", xanchor="left",
+                              yanchor="bottom", text=r["domain"], showarrow=False,
+                              font=dict(size=10, color=COLORS["subtext"])))
+            last_dom = r["domain"]
+            y -= 0.7
+        ys.append(y)
+        tag = "" if r["scored"] else " *"
+        labels.append(r["label"] + tag)
+        note = ("shown for context, not scored" if not r["scored"] else
+                "scored after removing each team's own level" if r["centred"] else "scored")
+        gap = f"{abs(a - b):.1f}" if a is not None and b is not None else "–"
+        hover_a.append(f"<b>{r['label']}</b><br>{team_a}: {a if a is not None else '–'}"
+                       f"<br>gap {gap} SD · {note}")
+        hover_b.append(f"<b>{r['label']}</b><br>{team_b}: {b if b is not None else '–'}"
+                       f"<br>gap {gap} SD · {note}")
+        xa.append(a), xb.append(b), op.append(1.0 if r["scored"] else 0.35)
+        if a is not None and b is not None:
+            line_x += [a, b, None]
+            line_y += [y, y, None]
+        y -= 1
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines", hoverinfo="skip",
+                             line=dict(color=COLORS["subtext"], width=2), showlegend=False))
+    for x, name, color, hover in ((xb, team_b, COMP_B, hover_b), (xa, team_a, COMP_A, hover_a)):
+        fig.add_trace(go.Scatter(
+            x=x, y=ys, mode="markers", name=name, hovertext=hover,
+            hovertemplate="%{hovertext}<extra></extra>",
+            marker=dict(size=11, color=color, opacity=op, line=dict(width=0))))
+    fig.add_vline(x=0, line=dict(color=COLORS["border"], width=1))
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=10, r=10, t=10, b=40)},
+        height=max(420, int(-y * 19) + 70), showlegend=True,
+        legend=dict(orientation="h", x=1, xanchor="right", y=-0.04, yanchor="top",
+                    font=dict(size=11)),
+        annotations=notes, shapes=shapes,
+        xaxis=dict(range=[-3.2, 3.2], zeroline=False, showgrid=True,
+                   gridcolor=COLORS["border"], tickvals=[-2, -1, 0, 1, 2],
+                   ticktext=["−2 SD", "−1", "league avg", "+1", "+2 SD"],
+                   tickfont=dict(size=10, color=COLORS["subtext"])),
+        yaxis=dict(tickvals=ys, ticktext=labels, showgrid=False, zeroline=False,
+                   tickfont=dict(size=11, color=COLORS["subtext"]),
+                   range=[y + 0.3, 0.6]),
+    )
+    return fig
+
+
+def team_comp_ranking(comps: list, selected: str | None) -> go.Figure:
+    """Every other team, best total first: approach and results stacked, so
+    the longest bar is the closest match on both. Click a bar to compare."""
+    comps = list(comps)[::-1]            # plotly draws the first bar at the bottom
+    teams = [c[0] for c in comps]
+    op = [1.0 if t == selected else 0.55 for t in teams]
+    fig = go.Figure()
+    for i, (name, color) in enumerate((("approach", COMP_APPROACH), ("results", COMP_RESULTS))):
+        fig.add_trace(go.Bar(
+            y=teams, x=[c[1 + i] for c in comps], orientation="h", name=name,
+            marker=dict(color=color, opacity=op),
+            customdata=[[c[1], c[2], c[1] + c[2]] for c in comps],
+            hovertemplate=("<b>%{y}</b><br>approach %{customdata[0]} + results "
+                           "%{customdata[1]} = %{customdata[2]}<extra></extra>")))
+    fig.update_layout(
+        **{**_DARK_LAYOUT, "margin": dict(l=10, r=10, t=10, b=40)},
+        barmode="stack", height=max(420, 19 * len(teams) + 70), bargap=0.25,
+        legend=dict(orientation="h", x=1, xanchor="right", y=-0.04, yanchor="top",
+                    font=dict(size=11)),
+        xaxis=dict(range=[0, 200], tickvals=[0, 50, 100, 150, 200], showgrid=True,
+                   gridcolor=COLORS["border"], tickfont=dict(size=10, color=COLORS["subtext"])),
+        yaxis=dict(tickfont=dict(size=11, color=COLORS["text"]), automargin=True),
+    )
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -3274,11 +3379,11 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
         # the headline stays readable without hiding the number.
         band = uq.get("band")
         if not band:
-            return html.Span(["Plays like ", names])
+            return html.Span(["Most like ", names])
         word = {"close": "close comp", "fair": "fair comp",
                 "loose": "loose comp"}.get(band, band)
         return html.Span([
-            "Plays like ", names, " · ",
+            "Most like ", names, " · ",
             html.Span(word, title=_comp_tooltip(unit, near, uq),
                       style={"borderBottom": "1px dotted currentColor",
                              "cursor": "help"}),
@@ -3297,26 +3402,6 @@ def team_identity_card(portrait: dict, fingerprint: dict | None = None,
             lines.append(html.Div(
                 f"Shared with {top.get('team')}: " + " · ".join(top["shared"]),
                 title=_comp_why(top)))
-        # Results, compared net of quality (team_similarity split-v1): two
-        # teams that produce the same way at different levels are comps, so
-        # each side's quality is shown as a number rather than voted on.
-        out = (pos.get("outcome_neighbours") or {}).get(unit) or []
-        if out:
-            lvl = (pos.get("level") or {}).get(unit)
-            q = "xwOBA allowed" if unit != "offense" else "xwOBA"
-            why = (" — " + ", ".join(out[0]["shared"]) + " for their quality"
-                   if out[0].get("shared") else "")
-            lines.append(html.Div(
-                "Produces like " + ", ".join(x.get("team", "") for x in out[:2]) + why,
-                title=(f"Closest by results — strikeouts, walks, contact and power — "
-                       f"after taking out quality ({q}), which is shown instead: "
-                       + (f"this {unit} {_ordinal_short(round(lvl))} percentile; "
-                          if lvl is not None else "")
-                       + ", ".join(f"{x.get('team')} {_ordinal_short(round(x['level']))}"
-                                   for x in out[:3] if x.get("level") is not None)
-                       + ". Similarity " + ", ".join(f"{x.get('team')} {x.get('similarity', 0):.2f}"
-                                                     for x in out[:3]) + "."),
-                style={"cursor": "help"}))
         dep = (pos.get("deployment_neighbours") or {}).get(unit) or []
         if dep:
             why = (" — " + ", ".join(dep[0]["shared"])) if dep[0].get("shared") else ""

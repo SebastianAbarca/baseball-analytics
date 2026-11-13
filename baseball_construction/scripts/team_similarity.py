@@ -3,52 +3,53 @@ team_similarity.py — which teams a unit plays like, from the measurements.
 
 A team used to be compared through its tag densities: the share of its
 workload carried by players over each tag's line. That throws away most of
-what was measured (an 84th-percentile chaser and a league-average one both
-count as "no tag") and weights each skill by how many tags happen to describe
-it. A unit is now a vector of the measurements themselves:
+what was measured and weights each skill by how many tags happen to describe
+it. A unit is now its measurements: for every metric, the workload-weighted
+(PA/BF) mean of its players' percentiles, z-scored across the season's 30
+teams. A metric counts for a team only when at least half the unit's
+workload was measured for it.
 
-  for every metric, three numbers over the unit's players, weighted by PA/BF
-      mean  — where the unit sits
-      hi    — share of the workload at or above the 80th percentile
-      lo    — share at or below the 20th
-  the tails keep the roster's SHAPE: four sluggers and five slap hitters
-  average to the same mean as nine average hitters, but not the same tails.
+Two scores, read off one picture (dots-v1, 2026-11-13). Lay two units side by
+side on every metric — a dot each, in league standard deviations — and the
+similarity is how close the dots sit:
 
-Each feature is z-scored across the season's 30 teams. Features are grouped
-into baseball domains (swing decisions, spray, arm...) and every domain gets
-the same total weight however many metrics describe it — equal weights are
-the starting point, not a finding. A feature counts for a team only when at
-least half the unit's workload was measured for it; similarity is the cosine
-over the features both teams have.
+  APPROACH   what the players choose or physically bring: swing decisions,
+             bat-to-ball, spray, tools, running; arm, attack, mix, pitch shape
+  RESULTS    what happened: strikeouts and walks, contact quality, power,
+             production; misses (whiffs, called strikes, fouls per swing),
+             strikeouts and walks, contact allowed
 
-Two comparisons, never one score (split-v1, 2026-11-11):
+  section gap   mean |z_a - z_b| over the section's scored metrics
+  similarity    0-100: the share of the season's 435 unit pairs whose gap is
+                larger, so the two sections share a scale and add
+  total         approach + results (0-200), which ranks the comps
 
-  APPROACH ("plays like")    what the players choose or physically bring —
-                             swing decisions, bat-to-ball, spray, tools,
-                             running; arm, attack, mix, pitch shape
-  OUTCOME ("produces like")  what happened — K/BB, contact quality, power,
-                             production; misses, K/BB, contact allowed
+Every metric counts once and equally. Rules, each a decision with its reason:
+  - contact and whiffs are one number at team level (rho -1.00): whiffs out
+  - exit velocity is shown, not scored: it and hard contact are rho +0.96,
+    and hard contact (results) is the one that counts
+  - expected wOBA / average (allowed) are shown, not scored: they are the
+    unit's quality, which pulled results comps toward equally good teams
+  - offense results are scored after removing each offense's own mean over
+    the rows where higher is better (not OBP-vs-power), so the gap compares
+    how a lineup produces, not how much; pitching keeps the plain rows,
+    where centring cost 6-9 points of repeatability
+  - CSW was two opposite styles added together (called strikes and whiffs,
+    rho -0.42 per pitcher), so misses are whiffs, called strikes and fouls
+    per swing; whiffs above what velocity predicts repeated plain whiffs
 
-The single score they replaced counted K%, BB% and CSW% twice (once as the
-result, once through the process that produces it) and leaned on how GOOD a
-unit was: its pairwise similarity tracked the gap in xwOBA at rho +0.23 to
-+0.37. A raw outcome score is worse (+0.40 to +0.56) — it mostly pairs
-equally good teams — so the outcome comparison is taken on SHAPE: every
-outcome feature is regressed on the unit's quality (xwOBA, or xwOBA allowed)
-across the season's teams and the residual is compared; quality itself is
-reported beside the comps as `level`, not voted on.
+Measured on 2015-26 (prototype, 2026-11-13): a unit's own next season in its
+top 3 comps (random 10%), and how much pair similarity tracks the gap in
+quality (Spearman with -|xwOBA gap|):
 
-Measured on 2015-26 (prototype, 2026-11-11), a unit's own next season in its
-top 3 comps (random 10%), and how much similarity tracks quality:
+                 offense      rotation     bullpen
+  approach      66%  +0.06   67%  +0.09   51%  +0.08
+  results       55%  +0.09   54%  +0.46   41%  +0.38
+  total         71%  +0.09   72%  +0.35   53%  +0.29
 
-                  offense   rotation   bullpen   tracks quality
-  single score      81%       72%        62%      +0.23 .. +0.37
-  approach          75%       72%        62%      +0.07 .. +0.13
-  outcome (shape)   64%       47%        35%      -0.07 .. -0.05
-
-The two lists share 13-23% of their top-3 comps, so each says something the
-other does not. Pitch shape (fastball ride and run, separation from the out
-pitch) is what lifts pitching approach from 59% / 54% to 72% / 62%.
+The cosine it replaced repeated slightly better (81/72/62%) but could not be
+read: a similarity of 0.43 said nothing, and nothing on screen showed which
+metrics made it. Here every point of the score is a gap you can see.
 
 Deployment — how the club USED the unit (workload concentration, starts,
 leverage) — answers a third question and carries little year to year
@@ -64,27 +65,24 @@ from typing import Optional
 
 import numpy as np
 
-METHOD = "split-v1"   # explanations do not change the comps, so no bump
+METHOD = "dots-v1"   # explanations do not change the comps, so no bump
 MIN_COVERAGE = 0.5
-TAIL_HI, TAIL_LO = 80.0, 20.0
 TOP_N = 3
 
 # domain -> [(source, key)]. Sources: m = gate_inputs.metrics (league
 # percentiles), gi = a gate_inputs field, adv = advancement,
 # pool:<frame> = the pitcher's row from that league pool, shape = the
 # pitcher's pitch shape (pitch_shape below), ranked among the season's arms.
-#
-# Team comps: approach and outcome (see the module docstring).
 H_APPROACH: dict[str, list[tuple[str, str]]] = {
     "swing decisions": [("m", "OSwing_pct_pct"), ("m", "ZSwing_pct_pct"),
                         ("m", "FPS_pct_pct"), ("m", "PitchesPerPA_pct")],
-    "bat-to-ball":     [("m", "Contact_pct_pct"), ("m", "Whiff_pct_pct")],
+    "bat-to-ball":     [("m", "Contact_pct_pct")],
     "spray":           [("m", "Pull_pct_pct"), ("m", "Oppo_pct_pct"), ("m", "BatGB_pct_pct"),
                         ("m", "GapTend_pct_pct")],
     "tools":           [("m", "EV_avg_pct"), ("m", "sprint_speed_pct")],
     "running":         [("gi", "attempt_rate_pct"), ("adv", "xbt_pct")],
 }
-H_OUTCOME: dict[str, list[tuple[str, str]]] = {
+H_RESULTS: dict[str, list[tuple[str, str]]] = {
     "strikeouts and walks": [("m", "K_pct_pct"), ("m", "BB_pct_pct")],
     "contact quality":      [("m", "Barrel_pct_pct"), ("m", "HardHit_pct_pct")],
     "power":                [("m", "ISO_pct"), ("m", "HR_FB_pct_pct"), ("m", "XB_pct_pct")],
@@ -100,15 +98,23 @@ P_APPROACH: dict[str, list[tuple[str, str]]] = {
     "shape":  [("shape", "fb_ivb"), ("shape", "fb_run"), ("shape", "vert_sep"),
                ("shape", "horiz_sep")],
 }
-P_OUTCOME: dict[str, list[tuple[str, str]]] = {
-    "misses":               [("m", "Whiff_pct_pitch_pct"), ("m", "CSW_pct_pct"),
-                             ("m", "SwStr_per_velo_pct")],
+P_RESULTS: dict[str, list[tuple[str, str]]] = {
+    "misses":               [("m", "Whiff_pct_pitch_pct"),
+                             ("pool:league_discipline", "called_strike_pct"),
+                             ("pool:league_discipline", "foul_swing_pct")],
     "strikeouts and walks": [("m", "K_pct_pitch_pct"), ("m", "BB_pct_pitch_pct")],
     "contact allowed":      [("m", "GB_pct_pitch_pct"), ("m", "HardHit_allowed_pct"),
                              ("m", "Barrel_allowed_pct"), ("m", "xwOBA_allowed_pct")],
 }
-# The quality an outcome comparison is taken net of, per unit (an outcome
-# key; it is reported as `level` and dropped from the outcome cosine).
+# Drawn on the comparison but not in the score (see the module docstring).
+SHOW_ONLY = frozenset({"EV_avg_pct", "xwOBA_pct", "xBA_pct", "xwOBA_allowed_pct"})
+# Results rows with no better/worse direction: never centred.
+STYLE = frozenset({"OBP_SLG_gap_pct", "GB_pct_pitch_pct"})
+# unit -> sections scored after removing the unit's own mean over the
+# directional rows (every scored percentile there already points high =
+# better; K%, walks and contact allowed are inverted in the contracts).
+CENTRED = {"offense": frozenset({"results"})}
+# The unit's quality, for the check that comps do not just pair equal teams.
 LEVEL = {"offense": "xwOBA_pct", "rotation": "xwOBA_allowed_pct",
          "bullpen": "xwOBA_allowed_pct"}
 
@@ -192,6 +198,8 @@ PHRASES: dict[str, tuple[str, str, str]] = {
     "FirstPitchStrike_pct": ("first-pitch strikes", "more first-pitch strikes", "fewer first-pitch strikes"),
     "CSW_pct_pct":          ("called and swinging strikes", "more called and swinging strikes",
                              "fewer called and swinging strikes"),
+    "called_strike_pct":    ("called strikes", "more called strikes", "fewer called strikes"),
+    "foul_swing_pct":       ("fouls per swing", "more fouls per swing", "fewer fouls per swing"),
     "TunnelScore_pct":      ("tunneling", "better tunneling", "weaker tunneling"),
     "spin_efficiency_pct":  ("spin efficiency", "more efficient spin", "less efficient spin"),
     "extension_pct":        ("extension", "longer extension", "shorter extension"),
@@ -211,17 +219,26 @@ PHRASES: dict[str, tuple[str, str, str]] = {
     "leverage_spread":      ("leverage roles", "sharper leverage roles", "flatter leverage roles"),
     "arms_used":            ("relievers used", "more relievers used", "fewer relievers used"),
 }
+# The comparison's row labels, read left to right as less -> more. Where a
+# high percentile means FEWER of something the label says so, so right of
+# centre is always the high percentile.
+LABELS: dict[str, str] = {
+    "K_pct_pct": "avoids strikeouts", "BB_pct_pitch_pct": "avoids walks",
+    "HardHit_allowed_pct": "avoids hard contact", "Barrel_allowed_pct": "avoids barrels",
+    "xwOBA_allowed_pct": "limits expected wOBA", "OBP_SLG_gap_pct": "on-base over power",
+}
 # Explanations name at most this many shared traits, one per domain, each
 # standing out by at least MIN_Z for both teams.
 EXPLAIN_N = 3
 MIN_Z = 0.5
 
-# unit -> (players key, weight key, approach domains, outcome domains)
+# unit -> (players key, weight key, approach domains, results domains)
 UNITS = {
-    "offense":  ("hitters",      "pa", H_APPROACH, H_OUTCOME),
-    "rotation": ("starters",     "bf", P_APPROACH, P_OUTCOME),
-    "bullpen":  ("bullpen_arms", "bf", P_APPROACH, P_OUTCOME),
+    "offense":  ("hitters",      "pa", H_APPROACH, H_RESULTS),
+    "rotation": ("starters",     "bf", P_APPROACH, P_RESULTS),
+    "bullpen":  ("bullpen_arms", "bf", P_APPROACH, P_RESULTS),
 }
+SECTIONS = ("approach", "results")
 
 
 def _num(v) -> Optional[float]:
@@ -369,9 +386,11 @@ def explain_players(a: dict, b: dict, side: str) -> dict:
 
 def style_features(players: list[dict], wkey: str, domains: dict,
                    shape: Optional[dict] = None) -> dict[tuple, float]:
-    """{(domain, metric, stat): value}; NaN where under MIN_COVERAGE of the
-    unit's workload was measured. `shape` is shape_percentiles() of the
-    season's arms, for the shape domain."""
+    """{(domain, metric, "mean"): workload-weighted mean percentile}; NaN
+    where under MIN_COVERAGE of the unit's workload was measured. `shape` is
+    shape_percentiles() of the season's arms, for the shape domain. (The
+    hybrid-v1 tails — share of workload above the 80th / below the 20th —
+    went with the cosine: on the comparison they had no dot to draw.)"""
     total = sum(float(p.get(wkey) or 0) for p in players)
     out: dict[tuple, float] = {}
     for dom, items in domains.items():
@@ -382,8 +401,6 @@ def style_features(players: list[dict], wkey: str, domains: dict,
             ws = sum(w for _, w in have)
             ok = total > 0 and ws / total >= MIN_COVERAGE
             out[(dom, key, "mean")] = sum(v * w for v, w in have) / ws if ok else np.nan
-            out[(dom, key, "hi")] = sum(w for v, w in have if v >= TAIL_HI) / ws if ok else np.nan
-            out[(dom, key, "lo")] = sum(w for v, w in have if v <= TAIL_LO) / ws if ok else np.nan
     return out
 
 
@@ -455,29 +472,6 @@ def _standardise(feats: dict[str, dict], budget: bool):
     return teams, keys, Z, w
 
 
-def _net_of_level(keys: list, Z: np.ndarray, level: str) -> np.ndarray:
-    """Z with every feature's linear dependence on the unit's quality (the
-    `level` metric's team mean) removed across teams and re-standardised,
-    and the level metric's own features blanked: the outcome comparison is
-    of how a unit produces, not how much. Unchanged if level is unmeasured."""
-    li = next((i for i, k in enumerate(keys) if k[1] == level and k[2] == "mean"), None)
-    if li is None:
-        return Z
-    q, out = Z[:, li].copy(), Z.copy()
-    for j, k in enumerate(keys):
-        if k[1] == level:
-            out[:, j] = np.nan
-            continue
-        m = np.isfinite(q) & np.isfinite(Z[:, j])
-        if m.sum() < 5:
-            continue
-        slope, icept = np.polyfit(q[m], Z[m, j], 1)
-        r = Z[:, j] - (slope * q + icept)
-        sd = np.nanstd(r)
-        out[:, j] = r / sd if sd > 0 else r
-    return out
-
-
 def explain(keys: list, w: np.ndarray, a: np.ndarray, b: np.ndarray) -> dict:
     """
     Why two units are close: the metrics on which BOTH stand out the same
@@ -547,25 +541,92 @@ def _uniqueness(sims: dict[str, dict[str, float]]) -> dict[str, dict]:
     return out
 
 
-def _comps(order: list, keys: list, Z: np.ndarray, w: np.ndarray,
-           sims: dict, t: str, **extra) -> list[dict]:
-    i = order.index(t)
-    near = sorted(sims.get(t, {}).items(), key=lambda kv: -kv[1])[:TOP_N]
-    return [{"team": o, "similarity": round(s, 4),
-             **{k: v.get(o) for k, v in extra.items()},
-             **explain(keys, w, Z[i], Z[order.index(o)])} for o, s in near]
+def comparison_rows(unit: str) -> list[dict]:
+    """The rows of a unit's comparison, in drawing order: section, domain,
+    metric key, label, whether it is scored and whether it is centred."""
+    _, _, approach, results = UNITS[unit]
+    rows = []
+    for section, doms in zip(SECTIONS, (approach, results)):
+        for dom, items in doms.items():
+            for src, key in items:
+                scored = key not in SHOW_ONLY
+                rows.append({"section": section, "domain": dom, "src": src, "key": key,
+                             "label": LABELS.get(key, PHRASES[key][0]), "scored": scored,
+                             "centred": scored and key not in STYLE
+                                        and section in CENTRED.get(unit, ())})
+    return rows
+
+
+def unit_profiles(players: dict[str, list], unit: str, shape: Optional[dict] = None):
+    """(teams, rows, Z): every team's z-score on every comparison row,
+    across the given teams. `players` is {team: that unit's players}."""
+    _, wkey, _, _ = UNITS[unit]
+    rows = comparison_rows(unit)
+    doms: dict[str, list] = collections.defaultdict(list)
+    for r in rows:
+        doms[r["domain"] + "|" + r["section"]].append((r["src"], r["key"]))
+    feats = {t: style_features(pl, wkey, doms, shape) for t, pl in players.items()}
+    teams, keys, Z, _ = _standardise(feats, budget=False)
+    col = {(k[0].split("|")[1], k[1]): i for i, k in enumerate(keys)}
+    Z = Z[:, [col[(r["section"], r["key"])] for r in rows]]
+    return teams, rows, Z
+
+
+def scored_values(rows: list[dict], Z: np.ndarray) -> np.ndarray:
+    """Z as scored: show-only rows blanked, centred rows less each team's own
+    mean over them."""
+    S = Z.copy()
+    c = [j for j, r in enumerate(rows) if r["centred"]]
+    if c:
+        with np.errstate(all="ignore"):
+            S[:, c] = S[:, c] - np.nanmean(S[:, c], axis=1, keepdims=True)
+    S[:, [j for j, r in enumerate(rows) if not r["scored"]]] = np.nan
+    return S
+
+
+def section_gap(rows: list[dict], a: np.ndarray, b: np.ndarray, section: str) -> float:
+    """Mean |a - b| over the section's scored rows both units have; inf when
+    they share none."""
+    idx = [j for j, r in enumerate(rows) if r["section"] == section]
+    d = np.abs(a[idx] - b[idx])
+    d = d[np.isfinite(d)]
+    return float(d.mean()) if d.size else np.inf
+
+
+def explain_dots(rows: list[dict], za: np.ndarray, zb: np.ndarray) -> dict:
+    """
+    Why two units are comps, off the comparison itself: up to EXPLAIN_N
+    scored metrics where both stand out the same way (|z| >= MIN_Z for each),
+    closest first, one per domain; and the scored metric they sit furthest
+    apart on. `za`, `zb` are the drawn (unscored) z rows.
+    Returns {"shared": [phrase, ...], "differ": label or None}.
+    """
+    have = [(abs(za[j] - zb[j]), j) for j, r in enumerate(rows)
+            if r["scored"] and np.isfinite(za[j]) and np.isfinite(zb[j])]
+    shared, used = [], set()
+    for _, j in sorted(have):
+        r = rows[j]
+        if len(shared) >= EXPLAIN_N:
+            break
+        if r["domain"] in used or za[j] * zb[j] <= 0 or min(abs(za[j]), abs(zb[j])) < MIN_Z:
+            continue
+        _, hi, lo = PHRASES[r["key"]]
+        shared.append(hi if za[j] > 0 else lo)
+        used.add(r["domain"])
+    far = max(have, default=None)
+    return {"shared": shared, "differ": rows[far[1]]["label"] if far else None}
 
 
 def compute_positions(league: dict[str, dict], players: dict[str, dict]) -> None:
     """
     Mutates `league`, per team and unit:
-      neighbours            approach comps ("plays like"), and
-      uniqueness            how close the nearest of them is
-      outcome_neighbours    outcome comps net of quality ("produces like"),
-                            each carrying the comp's `level`
-      level                 the unit's own quality: the LEVEL metric's
-                            workload-weighted mean percentile
-      deployment_neighbours usage comps
+      profile               its z-score on every comparison row (the rows
+                            are league["_similarity"]["rows"][unit])
+      comps                 every other team as [team, approach, results]
+                            (each 0-100), best total first
+      neighbours            the TOP_N of those, with why (explain_dots)
+      uniqueness            how close the nearest comp is, banded
+      deployment_neighbours usage comps (cosine, unchanged)
     `players` is {team: portrait["players"]}.
     """
     teams = [t for t in league if not t.startswith("_") and t in players]
@@ -574,37 +635,49 @@ def compute_positions(league: dict[str, dict], players: dict[str, dict]) -> None
     arms = [p for t in teams for g in ("starters", "bullpen_arms")
             for p in players[t].get(g) or []]
     shape = shape_percentiles(arms)
-    for unit, (grp, wkey, approach, outcome) in UNITS.items():
-        roster = {t: players[t].get(grp) or [] for t in teams}
-        a_feats = {t: style_features(roster[t], wkey, approach, shape) for t in teams}
-        order, keys, Z, w = _standardise(a_feats, budget=True)
-        sims = _similarities(order, Z * w)
-        uq = _uniqueness(sims)
-
-        o_feats = {t: style_features(roster[t], wkey, outcome, shape) for t in teams}
-        o_order, o_keys, OZ, ow = _standardise(o_feats, budget=True)
-        OZ = _net_of_level(o_keys, OZ, LEVEL[unit])
-        o_sims = _similarities(o_order, OZ * ow)
-        lvl = {t: (None if not np.isfinite(v := next(
-                   (x for k, x in f.items() if k[1] == LEVEL[unit] and k[2] == "mean"), np.nan))
-                   else round(float(v), 1)) for t, f in o_feats.items()}
-
-        dep = {t: deployment_features(roster[t], unit) for t in teams}
+    rows_out = {}
+    for unit, (grp, _, _, _) in UNITS.items():
+        order, rows, Z = unit_profiles({t: players[t].get(grp) or [] for t in teams}, unit, shape)
+        rows_out[unit] = [{k: r[k] for k in ("section", "domain", "key", "label", "scored", "centred")}
+                          for r in rows]
+        S = scored_values(rows, Z)
+        n = len(order)
+        sims = {}
+        for section in SECTIONS:
+            G = np.full((n, n), np.inf)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    G[i, j] = G[j, i] = section_gap(rows, S[i], S[j], section)
+            pairs = np.sort(G[np.triu_indices(n, 1)])
+            # share of the season's pairs farther apart, so 100 = the closest pair
+            sims[section] = np.rint(100 * (1 - np.searchsorted(pairs, G, "left") / len(pairs)))
+        total = sims["approach"] + sims["results"]
+        uq = _uniqueness({t: {o: float(total[i, j]) for j, o in enumerate(order) if j != i}
+                          for i, t in enumerate(order)})
+        dep = {t: deployment_features(players[t].get(grp) or [], unit) for t in teams}
         d_order, d_keys, DZ, dw = _standardise(dep, budget=False)
         d_sims = _similarities(d_order, DZ * dw)
-        for t in teams:
-            league[t].setdefault("neighbours", {})[unit] = _comps(order, keys, Z, w, sims, t)
+        for i, t in enumerate(order):
+            ranked = sorted((j for j in range(n) if j != i), key=lambda j: -total[i, j])
+            comps = [{"team": order[j], "approach": int(sims["approach"][i, j]),
+                      "results": int(sims["results"][i, j]), "total": int(total[i, j])}
+                     for j in ranked]
+            # Compact, as [team, approach, results]: every season's file is
+            # read for the year-over-year view, and the total is their sum.
+            league[t].setdefault("profile", {})[unit] = [
+                None if not np.isfinite(v) else round(float(v), 2) for v in Z[i]]
+            league[t].setdefault("comps", {})[unit] = [
+                [c["team"], c["approach"], c["results"]] for c in comps]
+            league[t].setdefault("neighbours", {})[unit] = [
+                {**c, **explain_dots(rows, Z[i], Z[order.index(c["team"])])} for c in comps[:TOP_N]]
             league[t].setdefault("uniqueness", {})[unit] = uq.get(t, {})
-            league[t].setdefault("outcome_neighbours", {})[unit] = _comps(
-                o_order, o_keys, OZ, ow, o_sims, t, level=lvl)
-            league[t].setdefault("level", {})[unit] = lvl.get(t)
-            league[t].setdefault("deployment_neighbours", {})[unit] = _comps(
-                d_order, d_keys, DZ, dw, d_sims, t)
+            d_near = sorted(d_sims.get(t, {}).items(), key=lambda kv: -kv[1])[:TOP_N]
+            di = d_order.index(t)
+            league[t].setdefault("deployment_neighbours", {})[unit] = [
+                {"team": o, "similarity": round(s, 4),
+                 **explain(d_keys, dw, DZ[di], DZ[d_order.index(o)])} for o, s in d_near]
     league["_similarity"] = {
-        "method": METHOD, "min_coverage": MIN_COVERAGE, "tails": [TAIL_LO, TAIL_HI],
-        "domains": {u: {d: [k for _, k in items] for d, items in doms.items()}
-                    for u, (_, _, doms, _) in UNITS.items()},
-        "outcome_domains": {u: {d: [k for _, k in items] for d, items in doms.items()}
-                            for u, (_, _, _, doms) in UNITS.items()},
-        "level": LEVEL,
+        "method": METHOD, "min_coverage": MIN_COVERAGE, "rows": rows_out,
+        "scale": "approach and results are each the share (0-100) of the season's "
+                 "unit pairs whose average gap is larger; total = approach + results",
     }
