@@ -43,7 +43,8 @@ MIN_PITCHER_PITCHES = 150
 # Bump when the computation changes; older caches rebuild (cached_if_current).
 # 2: shared outcome sets (foul tip = whiff); whiff_pct -> swstr_pct + whiff_per_swing.
 PITCH_MIX_METHOD_VERSION = 2
-PLATE_DISCIPLINE_METHOD_VERSION = 2
+# 3: called strikes per pitch and fouls per swing, for the team comps' misses.
+PLATE_DISCIPLINE_METHOD_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Pitch family taxonomy
@@ -255,8 +256,17 @@ def load_league_plate_discipline(
         swstr_resid         — swstr_rate minus the league linear fit on fb_velo:
                               whiffs beyond what velocity predicts (deception)
         fps_rate            — first-pitch strikes / first pitches (raw)
+        called_rate         — called strikes / all pitches (raw)
+        foul_swing_rate     — fouls (not foul tips, which are whiffs) / swings
         swstr_per_velo_pct  — percentile rank of swstr_resid (0–100)
         first_pitch_strike_pct — percentile rank of fps_rate (0–100)
+        called_strike_pct   — percentile rank of called_rate (0–100)
+        foul_swing_pct      — percentile rank of foul_swing_rate (0–100)
+
+    Called strikes and whiffs run in opposite directions (zone-fillers
+    collect one, bat-missers the other: rho -0.42 per pitcher, 2025), so CSW
+    adds two opposite styles; the comps keep them apart. Fouls per swing
+    repeat year to year (0.46) and say nothing about strikeouts (-0.03).
 
     Percentiles are ranked against all qualifying pitchers in the season, so
     they live in the same league-percentile space as the other archetype
@@ -277,12 +287,20 @@ def load_league_plate_discipline(
                    "release_speed", "pitch_type"]].copy()
 
     # ── SwStr% over all pitches ────────────────────────────────────────────
-    from pitch_aggregates import WHIFF_EVENTS
+    from pitch_aggregates import SWING_EVENTS, WHIFF_EVENTS
     sc["_is_whiff"] = sc["description"].isin(WHIFF_EVENTS)
+    sc["_is_called"] = sc["description"].eq("called_strike")
+    sc["_is_swing"] = sc["description"].isin(SWING_EVENTS)
+    sc["_is_foul"] = sc["description"].isin({"foul", "foul_bunt"})
     per = sc.groupby("pitcher").agg(
-        n_pitches  = ("description", "count"),
-        swstr_rate = ("_is_whiff",   "mean"),
+        n_pitches   = ("description", "count"),
+        swstr_rate  = ("_is_whiff",   "mean"),
+        called_rate = ("_is_called",  "mean"),
+        n_swings    = ("_is_swing",   "sum"),
+        n_fouls     = ("_is_foul",    "sum"),
     )
+    per["foul_swing_rate"] = (per.pop("n_fouls") / per.pop("n_swings")
+                              .where(lambda n: n > 0))
 
     # ── Fastball velocity (overall mean fallback) ──────────────────────────
     fb = sc[sc["pitch_type"].isin(FASTBALL_CODES)]
@@ -312,6 +330,8 @@ def load_league_plate_discipline(
 
     per["swstr_per_velo_pct"]     = per["swstr_resid"].rank(pct=True) * 100.0
     per["first_pitch_strike_pct"] = per["fps_rate"].rank(pct=True) * 100.0
+    per["called_strike_pct"]      = per["called_rate"].rank(pct=True) * 100.0
+    per["foul_swing_pct"]         = per["foul_swing_rate"].rank(pct=True) * 100.0
 
     out = per.reset_index()
     out["method_version"] = PLATE_DISCIPLINE_METHOD_VERSION

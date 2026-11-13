@@ -24,6 +24,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "modules"))
 
 import charts
+import plotly.graph_objects as go
 import store
 from dash.exceptions import PreventUpdate
 from layout import team_header
@@ -677,12 +678,52 @@ def team_identity_card(data):
             # the card rendered a bare "—" where the label used to be.
             position = {"neighbours": entry.get("neighbours") or {},
                         "uniqueness": entry.get("uniqueness") or {},
-                        "outcome_neighbours": entry.get("outcome_neighbours") or {},
-                        "level": entry.get("level") or {},
                         "deployment_neighbours": entry.get("deployment_neighbours") or {}}
     except Exception:
         pass
     return charts.team_identity_card(p, fingerprint=fingerprint, position=position)
+
+
+@callback(
+    Output("comps-team", "options"), Output("comps-team", "value"),
+    Output("comps-dots", "figure"), Output("comps-ranking", "figure"),
+    Output("comps-summary", "children"),
+    Input("portrait-store", "data"), Input("comps-unit", "value"),
+    Input("comps-team", "value"), Input("comps-ranking", "clickData"),
+)
+def team_comps(data, unit, picked, click):
+    """The comparison and the ranking (team_similarity dots-v1). A new team
+    or unit opens on its closest comp; a dropdown pick or a bar click
+    changes only the comparison."""
+    p = _deserialize(data)
+    if not p:
+        raise PreventUpdate
+    league = _league_identity_file(p.get("season")) or {}
+    entry = league.get(p.get("team")) or {}
+    rows = ((league.get("_similarity") or {}).get("rows") or {}).get(unit)
+    comps = (entry.get("comps") or {}).get(unit) or []
+    if not rows or not comps:
+        empty = go.Figure().update_layout(**charts._DARK_LAYOUT, height=120)
+        msg = "Comps for this season are built by the league stage and not published yet."
+        return [], None, empty, empty, msg
+    teams = [c[0] for c in comps]
+    trig = ctx.triggered_id
+    if trig == "comps-ranking" and click:
+        b = click["points"][0]["y"]
+    elif trig == "comps-team" and picked in teams:
+        b = picked
+    else:
+        b = teams[0]
+    other = league.get(b) or {}
+    za = (entry.get("profile") or {}).get(unit) or [None] * len(rows)
+    zb = (other.get("profile") or {}).get(unit) or [None] * len(rows)
+    ap, rs = next((c[1], c[2]) for c in comps if c[0] == b)
+    rank = teams.index(b) + 1
+    summary = (f"{p.get('team')} vs {b}: approach {ap} + results {rs} = {ap + rs} "
+               f"of 200 · {rank} of {len(teams)}")
+    return ([{"label": t, "value": t} for t in sorted(teams)], b,
+            charts.team_comp_dots(rows, za, zb, p.get("team"), b),
+            charts.team_comp_ranking(comps, b), summary)
 
 
 # ---------------------------------------------------------------------------
@@ -872,20 +913,21 @@ def league_identity_board(season):
 
         # Headline labels retired — a team is described by where it sits
         # relative to the league, not by which bucket a cutoff assigned it to.
-        nb = (identity.get("neighbours") or {}).get("offense") or []
         uq = (identity.get("uniqueness") or {}).get("offense") or {}
-        ob = (identity.get("outcome_neighbours") or {}).get("offense") or []
+        # Every other offense as [team, approach, results] (team_similarity
+        # dots-v1), best total first; re-sorted by one score for its column.
+        cp = (identity.get("comps") or {}).get("offense") or []
+        by = lambda i: ", ".join(c[0] for c in sorted(cp, key=lambda c: -c[i])[:2]) or "—"
         rows.append({
             "Team":              team,
             "Fingerprint":       fp_str,
-            "Plays Like":        ", ".join(x["team"] for x in nb[:2]) or "—",
-            # Results net of quality (team_similarity split-v1).
-            "Produces Like":     ", ".join(x["team"] for x in ob[:2]) or "—",
-            # How strong the "Plays Like" comparison actually is — similarity
-            # to the closest comparable offense. A sortable number suits a
-            # table better than the card's one-word band. The old 0–100
-            # "distinctiveness" was a min-max rescale of near-zero mean
-            # similarities and rated teams with near-twins as highly distinct.
+            "Closest":           ", ".join(c[0] for c in cp[:2]) or "—",
+            "Plays Like":        by(1),
+            "Produces Like":     by(2),
+            # The closest comp's total, of 200 — sortable, where the card
+            # shows a one-word band. The old 0–100 "distinctiveness" was a
+            # min-max rescale of near-zero mean similarities and rated teams
+            # with near-twins as highly distinct.
             "Distinctiveness":   uq.get("closest"),
             "Power Share":       (f"{offense['power_share']:.0%}"
                                   if offense.get("power_share") is not None else "—"),
@@ -897,8 +939,9 @@ def league_identity_board(season):
     columns = [
         {"name": "Team",              "id": "Team"},
         {"name": "Fingerprint",       "id": "Fingerprint"},
+        {"name": "Closest",           "id": "Closest"},
+        {"name": "Comp Strength /200", "id": "Distinctiveness"},
         {"name": "Plays Like",        "id": "Plays Like"},
-        {"name": "Comp Strength",     "id": "Distinctiveness"},
         {"name": "Produces Like",     "id": "Produces Like"},
         {"name": "Power Share",       "id": "Power Share"},
         {"name": "Top Rotation Traits", "id": "Top Rotation Traits"},

@@ -92,7 +92,10 @@ sys.path.insert(0, str(_HERE))
 # gate_inputs.talent_metrics (era-ranked), hitters' talent_season_metrics
 # (season-ranked, the gate twins) and talent_n (decayed PA/BF). Tag gates and
 # comps read talent first, then the season and era ranks.
-PORTRAIT_SCHEMA_VERSION = 28
+# 29: the plate-discipline pool row carries called strikes per pitch and
+# fouls per swing (called_rate / called_strike_pct, foul_swing_rate /
+# foul_swing_pct), which the team comps' misses read instead of CSW.
+PORTRAIT_SCHEMA_VERSION = 29
 
 from ingest import (
     pull_statcast_range,
