@@ -22,6 +22,9 @@
 -- Functions are dropped first because their return type changed from JSONB to
 -- JSON, which CREATE OR REPLACE cannot do. They hold no data.
 DROP FUNCTION IF EXISTS scout_comps(TEXT, INT, INT, TEXT[], BOOLEAN);
+-- dots-v1 (2026-11-14) added p_own and returns {r, approach, results}.
+DROP FUNCTION IF EXISTS scout_comps(TEXT, INT, INT, TEXT[], BOOLEAN, BOOLEAN);
+DROP FUNCTION IF EXISTS scout_score(DOUBLE PRECISION);
 DROP FUNCTION IF EXISTS scout_rows(TEXT[]);
 DROP FUNCTION IF EXISTS scout_name_search(TEXT, TEXT, INT);
 DROP FUNCTION IF EXISTS scout_search(TEXT[], TEXT[], TEXT, BOOLEAN, INT, INT, INT, BOOLEAN, TEXT[], TEXT, INT, INT);
@@ -77,9 +80,10 @@ CREATE TABLE IF NOT EXISTS scout_tags (
 -- `ord` is the row's position in the flattening order (portrait files sorted
 -- by name, then hitters / starters / bullpen_arms). Every sort breaks ties on
 -- it, which reproduces the stable-sort order the in-memory index had.
--- `vec` is the comp vector (each metric's era percentile, centred and
--- domain-weighted: team_similarity.player_vector), `vec_norm` its L2 norm —
--- both computed at publish time by the same Python that defined them.
+-- `vec` is the comp profile (team_similarity.player_vector, dots-v1): `d` the
+-- player's percentile on every comparison row, `a` / `r` the approach and
+-- results rows as scored. Computed at publish time by the Python that
+-- defines them. `vec_norm` belonged to the cosine it replaced and is 0.
 CREATE TABLE IF NOT EXISTS scout_players (
     season      INT     NOT NULL,
     team        TEXT    NOT NULL,
@@ -277,20 +281,37 @@ RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
               p.ord DESC
 $$;
 
--- Nearest player-seasons by their measurements. Mirrors charts.player_comps:
--- cosine similarity over the precomputed comp vectors, same side, volume
--- floor, optional required tags (applied to candidates only).
--- The target's whole player-season is excluded, not just its team row: a
--- traded player's other stint carries the same season-wide tags and came
--- back as a near-perfect comp of himself. Candidates are one per
--- player-season too — a traded comp's stints would otherwise fill two slots
--- with one season. Other seasons of the same player stay (the face check).
+-- One comparison section's score, 0-100, from its mean gap in percentile
+-- points: 100 x (1 - gap / 33.3), floored at 0; 0 when there is no gap to
+-- read. 33.3 is how far apart two random percentiles sit on average, so 100
+-- is the same dots and 0 is as far apart as two random players. Mirrors
+-- team_similarity.section_score (V28 holds the scale to PLAYER_SCALE).
+CREATE OR REPLACE FUNCTION scout_score(gap DOUBLE PRECISION)
+RETURNS DOUBLE PRECISION LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN gap IS NULL THEN 0.0 ELSE
+        round(GREATEST(0.0, 100.0 * (1.0 - gap / (100.0 / 3.0)))::numeric, 1)::DOUBLE PRECISION END
+$$;
+
+-- Nearest player-seasons by their measurements (dots-v1): approach and
+-- results scores, ranked by their sum (0-200). Mirrors charts.player_comps:
+-- same side, volume floor, optional required tags (applied to candidates
+-- only). The target's whole player-season is always excluded — a traded
+-- player's other stint came back as a near-perfect comp of himself — and
+-- candidates are one per player-season (its closest stint). The player's
+-- other seasons are left out unless p_own: they crowd out everyone else
+-- (Judge 2025's top 8 held five Judge seasons). Rows come back as
+-- {"r": scout_row with sim = total, "approach": .., "results": ..}.
+-- A section needs at least half the target's rows in common, or it scores 0.
+-- The target's rows are unpacked once and only the top rows are rebuilt
+-- (0.13 s for a hitter at 300 PA, 0.22 s for a pitcher with no floor, on the
+-- 16,936 published rows in Postgres 17).
 CREATE OR REPLACE FUNCTION scout_comps(
     p_key        TEXT,
     p_limit      INT     DEFAULT 8,
     p_min_vol    INT     DEFAULT 300,
     p_require    TEXT[]  DEFAULT NULL,
-    p_same_season BOOLEAN DEFAULT false
+    p_same_season BOOLEAN DEFAULT false,
+    p_own        BOOLEAN DEFAULT false
 )
 RETURNS SETOF JSON LANGUAGE sql STABLE SECURITY INVOKER AS $$
 WITH tgt AS (
@@ -300,36 +321,51 @@ WITH tgt AS (
      ORDER BY ((p_key LIKE '%|%|%|%') AND side = split_part(p_key, '|', 4)) DESC, ord DESC
      LIMIT 1
 ),
+-- The target's scored rows, unpacked once: (section, key, value).
+tk AS (
+    SELECT s.sec, e.key, e.value::text::DOUBLE PRECISION AS v
+      FROM tgt, (VALUES ('a'), ('r')) s(sec), jsonb_each(tgt.vec -> s.sec) e
+),
+need AS (   -- at least half the target's rows, per section
+    SELECT GREATEST(1, ceil(count(*) FILTER (WHERE sec = 'a') / 2.0)) AS na,
+           GREATEST(1, ceil(count(*) FILTER (WHERE sec = 'r') / 2.0)) AS nr
+      FROM tk
+),
 cand AS (
-    -- `p AS rw` keeps the whole row as a scout_players value for scout_row;
-    -- `p.*` plus a sim column would no longer be one.
-    SELECT p AS rw, p.ord, p.player_id, p.season,
-        (SELECT COALESCE(sum((t.vec ->> k)::DOUBLE PRECISION * (p.vec ->> k)::DOUBLE PRECISION), 0)
-           FROM jsonb_object_keys(t.vec) k WHERE p.vec ? k)
-        / NULLIF(t.vec_norm * p.vec_norm, 0) AS sim
-      FROM scout_players p, tgt t
+    SELECT p.season, p.team, p.player_id, p.grp, p.ord,
+           CASE WHEN g.ca >= n.na THEN scout_score(g.ga) ELSE 0.0 END AS appr,
+           CASE WHEN g.cr >= n.nr THEN scout_score(g.gr) ELSE 0.0 END AS res
+      FROM scout_players p CROSS JOIN tgt t CROSS JOIN need n
+     CROSS JOIN LATERAL (
+        SELECT avg(abs(tk.v - (p.vec -> 'a' ->> tk.key)::DOUBLE PRECISION))
+                   FILTER (WHERE tk.sec = 'a') AS ga,
+               count(*) FILTER (WHERE tk.sec = 'a') AS ca,
+               avg(abs(tk.v - (p.vec -> 'r' ->> tk.key)::DOUBLE PRECISION))
+                   FILTER (WHERE tk.sec = 'r') AS gr,
+               count(*) FILTER (WHERE tk.sec = 'r') AS cr
+          FROM tk WHERE (p.vec -> tk.sec) ? tk.key) g
      WHERE p.side = t.side
        AND NOT (p.player_id = t.player_id AND p.season = t.season)
+       AND (COALESCE(p_own, false) OR p.player_id <> t.player_id)
        AND COALESCE(p.volume, 0) >= COALESCE(p_min_vol, 0)
        AND (COALESCE(cardinality(p_require), 0) = 0 OR p.tags @> p_require)
        AND (NOT p_same_season OR p.season = t.season)
-       AND t.vec <> '{}'::jsonb
 ),
 best AS (
-    -- One row per player-season: its most similar stint.
-    SELECT DISTINCT ON (c.player_id, c.season) c.rw, c.ord, c.sim
+    SELECT DISTINCT ON (c.player_id, c.season) c.*, c.appr + c.res AS total
       FROM cand c
-     WHERE c.sim > 0
-     ORDER BY c.player_id, c.season, c.sim DESC, c.ord
-)
-SELECT scout_row(b.rw, b.sim)
-  FROM best b
- ORDER BY b.sim DESC, b.ord
- LIMIT p_limit
+     WHERE c.appr + c.res > 0
+     ORDER BY c.player_id, c.season, c.appr + c.res DESC, c.ord
+),
+top AS (SELECT * FROM best ORDER BY total DESC, ord LIMIT p_limit)
+SELECT json_build_object('r', scout_row(p, top.total),
+                         'approach', top.appr, 'results', top.res)
+  FROM top JOIN scout_players p USING (season, team, player_id, grp)
+ ORDER BY top.total DESC, top.ord
 $$;
 
 GRANT EXECUTE ON FUNCTION scout_row(scout_players, DOUBLE PRECISION), scout_strength(JSONB),
     scout_search(TEXT[], TEXT[], TEXT, BOOLEAN, INT, INT, INT, BOOLEAN, TEXT[], TEXT, INT, INT),
     scout_name_search(TEXT, TEXT, INT), scout_rows(TEXT[]),
-    scout_comps(TEXT, INT, INT, TEXT[], BOOLEAN)
+    scout_score(DOUBLE PRECISION), scout_comps(TEXT, INT, INT, TEXT[], BOOLEAN, BOOLEAN)
     TO anon, authenticated;

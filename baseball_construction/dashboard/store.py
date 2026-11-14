@@ -262,8 +262,19 @@ def scout_vectors(rows: list[dict]) -> dict[tuple, dict]:
 
 
 def scout_comps(key: str, limit: int, min_vol: int,
-                require: Optional[list[str]], same_season: bool) -> list[dict]:
-    return _db().rpc("scout_comps", {
+                require: Optional[list[str]], same_season: bool,
+                own: bool = False) -> list[dict]:
+    """Comp rows (scout_row shape, `sim` = total) with their `approach` and
+    `results` scores, best total first. The SQL wraps each as
+    {r, approach, results}; flattened here."""
+    data = _db().rpc("scout_comps", {
         "p_key": key, "p_limit": limit, "p_min_vol": min_vol,
         "p_require": require or None, "p_same_season": same_season,
+        "p_own": bool(own),
     }).execute().data or []
+    out = []
+    for d in data:
+        row = dict(d.get("r") or {})
+        row["approach"], row["results"] = d.get("approach"), d.get("results")
+        out.append(row)
+    return out

@@ -1255,12 +1255,45 @@ def scout_tab() -> dbc.Tab:
                                      placeholder="any handedness or slot",
                                      className="dash-dropdown"),
                     ], md=9),
+                    dbc.Col(dbc.Switch(id="comp-own", value=False,
+                                       label="include this player's other seasons",
+                                       style={"fontSize": "0.72rem", "marginTop": "26px"}),
+                            md=3),
                 ], className="g-2 mt-1"),
                 html.Small(
                     "Handedness is left out of the comparison — it fires on everyone "
                     "and would sort the league by which side they stand on before "
                     "anything about how they play counted.",
                     className="text-secondary", style={"fontSize": "0.66rem"}),
+                dcc.Store(id="comp-store"),
+                # The comparison the scores are read off (team_similarity
+                # dots-v1, player side): the target and one comp on every
+                # row, and every comp ranked. Clicking a bar picks the comp.
+                html.Div(id="comp-figs", style={"display": "none"}, children=[
+                    html.Div(id="comp-summary", className="mt-2 mb-1",
+                             style={"fontSize": "0.72rem", "color": "#9ca3af"}),
+                    dbc.Row([
+                        dbc.Col(dcc.Graph(id="comp-dots", config={"displayModeBar": False}),
+                                md=8),
+                        dbc.Col([
+                            html.Div("Closest players — approach + results, each out of 100",
+                                     style={"fontSize": "0.72rem", "color": "#9ca3af",
+                                            "margin": "2px 0 0 4px"}),
+                            dcc.Graph(id="comp-ranking", config={"displayModeBar": False}),
+                        ], md=4),
+                    ], className="g-2"),
+                    html.Div(
+                        "Each dot is the player's percentile on that metric. A section "
+                        "scores 100 when the dots sit on top of each other and 0 when "
+                        "they are as far apart as two random players (33 percentile "
+                        "points on average). * shown for context, not scored: exit "
+                        "velocity (hard contact is the one that counts) and expected "
+                        "wOBA / average (the player's quality). Hitter results are "
+                        "compared after removing each hitter's overall level, so they "
+                        "read how he produces rather than how much.",
+                        style={"fontSize": "0.68rem", "color": "#9ca3af",
+                               "lineHeight": "1.5", "marginTop": "6px"}),
+                ]),
                 dcc.Loading(html.Div(id="comp-results", className="mt-2"), type="default"),
             ], style={"padding": "12px"}),
         ], style=CARD_STYLE, className="mb-3"),

@@ -118,31 +118,6 @@ CENTRED = {"offense": frozenset({"results"})}
 LEVEL = {"offense": "xwOBA_pct", "rotation": "xwOBA_allowed_pct",
          "bullpen": "xwOBA_allowed_pct"}
 
-# Player comps (scout_comps) still use one combined vector over these; their
-# split is the player side of the same change.
-HITTER_DOMAINS: dict[str, list[tuple[str, str]]] = {
-    "power":      [("m", "Barrel_pct_pct"), ("m", "HardHit_pct_pct"), ("m", "ISO_pct"),
-                   ("m", "EV_avg_pct")],
-    "contact":    [("m", "K_pct_pct"), ("m", "Contact_pct_pct"), ("m", "Whiff_pct_pct")],
-    "discipline": [("m", "OSwing_pct_pct"), ("m", "ZSwing_pct_pct"), ("m", "BB_pct_pct"),
-                   ("m", "FPS_pct_pct")],
-    "direction":  [("m", "Pull_pct_pct"), ("m", "Oppo_pct_pct"), ("m", "BatGB_pct_pct"),
-                   ("m", "GapTend_pct_pct")],
-    "running":    [("m", "sprint_speed_pct"), ("gi", "attempt_rate_pct"),
-                   ("adv", "xbt_pct")],
-}
-PITCHER_DOMAINS: dict[str, list[tuple[str, str]]] = {
-    "stuff":     [("m", "avg_velo_pct"), ("m", "AvgSpinRate_pct"),
-                  ("m", "Whiff_pct_pitch_pct"), ("m", "SwStr_per_velo_pct")],
-    "outcomes":  [("m", "K_pct_pitch_pct"), ("m", "BB_pct_pitch_pct"),
-                  ("m", "GB_pct_pitch_pct"), ("m", "HardHit_allowed_pct")],
-    "command":   [("m", "Zone_pct_pct"), ("m", "FirstPitchStrike_pct"), ("m", "CSW_pct_pct")],
-    "deception": [("m", "TunnelScore_pct"), ("pool:league_spin", "spin_efficiency_pct"),
-                  ("pool:league_mechanics", "extension_pct")],
-    "mix":       [("m", "ArsenalDiversity_pct"),
-                  ("pool:league_sequencing", "entropy_ratio_pct"),
-                  ("pool:league_sequencing", "count_shift_pct")],
-}
 # What a HIGH value of each feature means for a team, and what a low one
 # means — (name, high, low). Percentile directions follow the rank-invert
 # tables in team_portrait (K% and walks/hard contact allowed are inverted:
@@ -317,71 +292,112 @@ def _value(player: dict, src: str, key: str,
 
 
 # ---------------------------------------------------------------------------
-# Player comps — the same measurements, one player at a time
+# Player comps — the same comparison, one player at a time (dots-v1)
 # ---------------------------------------------------------------------------
-# A player-season's comp vector: each metric's era percentile (its talent
-# twin where there is one — see _value), centred on the
-# league midpoint ((pct - 50) / 50, so -1..1), every domain sharing one unit of
-# weight. Era percentiles because comps reach across seasons. Release
-# geometry is left out — like handedness it is an attribute, offered as a
-# filter rather than a vote. scout_comps (SQL) takes the cosine of these.
+# A player-season is laid out on the same rows as its unit's comparison
+# (offense for hitters, rotation for pitchers), as percentiles: the talent
+# twin where there is one (see _value), pitch shape ranked among the season's
+# arms. Two players' dots are compared exactly as two teams' are, with two
+# differences, each measured (prototype, 2026-11-14, 600 player-seasons per
+# side at 300+ PA/BF, 2015-26):
 #
-# Measured against the tag vectors it replaced (prototype, 2026-10-30; 600
-# player-seasons per side, 300+ PA/BF): a player's own next season ranks at a
-# median 17th of 2,932 hitters (tags: 122nd) and 14th of 2,061 pitchers
-# (63rd), and lands in the top 8 comps 38% / 44% of the time (13% / 22%).
-_PLAYER_EXCLUDE = {"extension_pct"}     # release geometry: an attribute
-PLAYER_DOMAINS = {
-    "H": HITTER_DOMAINS,
-    "P": {d: [(s, k) for s, k in items if k not in _PLAYER_EXCLUDE]
-          for d, items in PITCHER_DOMAINS.items()},
-}
+#   - the score is the gap itself, not its rank. Among ~2M player pairs every
+#     real comp sits in the top 0.1%, so a rank reads 99-100 for all of them.
+#     A section scores 100 x (1 - mean gap / PLAYER_SCALE): 100 = the same
+#     dots, 0 = as far apart as two random players (two independent
+#     percentiles sit 33.3 points apart on average).
+#   - the gap is in percentile points, the units every player number is
+#     already shown in.
+#
+# Same rules as the teams: show-only rows drawn, not scored; hitter results
+# centred on the player's own mean (user decision; repeats 76% vs 79%
+# uncentred, but pairs equally good hitters less: rho with -|xwOBA gap|
+# +0.16 vs +0.29); pitchers not centred. Release extension is scored, as in
+# the team arm domain (user decision, 2026-11-14).
+#
+# Own next season in the top 8 comps: hitters 79%, pitchers 74%, against
+# the cosine it replaced at 72% / 58% (same sample). Total = approach +
+# results, out of 200; the scout_comps SQL computes the same score from
+# player_vector() and must stay in step with player_scores() (V28).
+PLAYER_UNIT = {"H": "offense", "P": "rotation"}
+PLAYER_SCALE = 100 / 3
+# A metric is named as shared only where both players stand at least this
+# many percentile points from the midpoint (the 65th / 35th).
+PLAYER_MIN_DEV = 15.0
 
 
-def player_vector(player: dict, side: str) -> dict[str, float]:
-    """{metric key: weighted, centred percentile} for one player profile;
-    metrics the player has no reading for are left out."""
-    out: dict[str, float] = {}
-    for dom, items in PLAYER_DOMAINS[side].items():
-        w = 1 / np.sqrt(len(items))
-        for src, key in items:
-            v = _value(player, src, key)
-            if v is not None:
-                out[key] = float(round((v - 50.0) / 50.0 * w, 5))
+def player_rows(side: str) -> list[dict]:
+    """The comparison rows for a hitter ("H") or pitcher ("P")."""
+    return comparison_rows(PLAYER_UNIT[side])
+
+
+def player_vector(player: dict, side: str, shape: Optional[dict] = None) -> dict:
+    """
+    What publish writes to scout_players.vec:
+      d   {key: percentile} on every comparison row the player has (drawn)
+      a   {key: value} the approach rows as scored
+      r   {key: value} the results rows as scored (centred where the rule says)
+    `shape` is shape_percentiles() of the season's arms.
+    """
+    rows = player_rows(side)
+    d = {}
+    for r in rows:
+        v = _value(player, r["src"], r["key"], shape)
+        if v is not None:
+            d[r["key"]] = round(v, 1)
+    out = {"d": d, "a": {}, "r": {}}
+    cen = [d[r["key"]] for r in rows if r["centred"] and r["key"] in d]
+    mid = float(np.mean(cen)) if cen else 0.0
+    for r in rows:
+        if r["scored"] and r["key"] in d:
+            v = d[r["key"]] - mid + 50.0 if r["centred"] else d[r["key"]]
+            out[r["section"][0]][r["key"]] = round(v, 2)
     return out
 
 
-# A metric is named as shared only where both players stand at least this far
-# from the midpoint, as a centred percentile: 0.3 = the 65th / 35th.
-PLAYER_MIN_DEV = 0.3
+def section_score(a: dict, b: dict) -> float:
+    """One section's score, 0-100, from two players' scored rows (`a` the
+    target). Needs at least half the target's rows in common; mirrors
+    scout_score and the section gaps in the scout_comps SQL function."""
+    keys = [k for k in a if k in b]
+    if not keys or len(keys) < max(1, int(np.ceil(len(a) / 2))):
+        return 0.0
+    gap = float(np.mean([abs(a[k] - b[k]) for k in keys]))
+    return round(max(0.0, 100 * (1 - gap / PLAYER_SCALE)), 1)
+
+
+def player_scores(va: dict, vb: dict) -> dict:
+    """{approach, results, total} for target `va` against `vb`."""
+    ap = section_score(va.get("a") or {}, vb.get("a") or {})
+    rs = section_score(va.get("r") or {}, vb.get("r") or {})
+    return {"approach": ap, "results": rs, "total": round(ap + rs, 1)}
 
 
 def explain_players(a: dict, b: dict, side: str) -> dict:
     """
-    Why two player-seasons are comps, from their player_vector()s: up to
-    EXPLAIN_N metrics where both stand out the same way (one per domain,
-    ranked by what they add to the cosine), and the metric that most pulls
-    them apart. Same phrases as the team comps.
-    Returns {"shared": [phrase, ...], "differ": metric name or None}.
+    Why two player-seasons are comps, off their drawn rows (player_vector's
+    "d"): up to EXPLAIN_N scored metrics where both stand at least
+    PLAYER_MIN_DEV from the midpoint on the same side, closest first, one per
+    domain; and the scored metric they sit furthest apart on.
+    Returns {"shared": [phrase, ...], "differ": label or None}.
     """
-    rows = []
-    for dom, items in PLAYER_DOMAINS[side].items():
-        w = 1 / np.sqrt(len(items))
-        for _, key in items:
-            if key in a and key in b and key in PHRASES:
-                rows.append((a[key] * b[key], key, dom, a[key] / w, b[key] / w))
+    da, db = a.get("d") or {}, b.get("d") or {}
+    have = [(abs(da[r["key"]] - db[r["key"]]), i) for i, r in enumerate(player_rows(side))
+            if r["scored"] and r["key"] in da and r["key"] in db]
+    rows = player_rows(side)
     shared, used = [], set()
-    for c, key, dom, za, zb in sorted(rows, key=lambda r: -r[0]):
-        if len(shared) >= EXPLAIN_N or c <= 0:
+    for _, i in sorted(have):
+        r = rows[i]
+        x, y = da[r["key"]] - 50, db[r["key"]] - 50
+        if len(shared) >= EXPLAIN_N:
             break
-        if dom in used or min(abs(za), abs(zb)) < PLAYER_MIN_DEV:
+        if r["domain"] in used or x * y <= 0 or min(abs(x), abs(y)) < PLAYER_MIN_DEV:
             continue
-        _, hi, lo = PHRASES[key]
-        shared.append(hi if za > 0 else lo)
-        used.add(dom)
-    worst = min(rows, key=lambda r: r[0], default=None)
-    differ = PHRASES[worst[1]][0] if worst is not None and worst[0] < 0 else None
-    return {"shared": shared, "differ": differ}
+        _, hi, lo = PHRASES[r["key"]]
+        shared.append(hi if x > 0 else lo)
+        used.add(r["domain"])
+    far = max(have, default=None)
+    return {"shared": shared, "differ": rows[far[1]]["label"] if far else None}
 
 
 def style_features(players: list[dict], wkey: str, domains: dict,

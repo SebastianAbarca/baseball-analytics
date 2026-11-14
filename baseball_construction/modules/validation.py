@@ -1874,7 +1874,7 @@ def v26_team_comps() -> Result:
     import team_similarity as ts
 
     rng = np.random.default_rng(3)
-    keys = sorted({k for doms in (ts.HITTER_DOMAINS, ts.H_APPROACH, ts.H_RESULTS)
+    keys = sorted({k for doms in (ts.H_APPROACH, ts.H_RESULTS)
                    for items in doms.values() for src, k in items if src == "m"})
 
     def hitter(pa, lean):
@@ -1910,8 +1910,7 @@ def v26_team_comps() -> Result:
 
     import team_portrait as tp
     invert = {**tp.BATTING_RANK_INVERT, **tp.PITCHING_RANK_INVERT}
-    feats = {k for doms in (ts.HITTER_DOMAINS, ts.PITCHER_DOMAINS, ts.H_APPROACH,
-                            ts.H_RESULTS, ts.P_APPROACH, ts.P_RESULTS)
+    feats = {k for doms in (ts.H_APPROACH, ts.H_RESULTS, ts.P_APPROACH, ts.P_RESULTS)
              for items in doms.values() for _, k in items}
     missing = sorted(feats - set(ts.PHRASES))
     if missing:
@@ -2101,16 +2100,21 @@ def v27_percentile_contracts() -> Result:
 def v28_player_comp_vectors() -> Result:
     """
     Offline (team_similarity.player_vector, which publish writes to
-    scout_players.vec for the scout_comps cosine):
-      1. every comp feature is a percentile metric_contracts declares, in the
-         scope its source reads
-      2. release geometry stays out of the pitcher vector (an attribute)
-      3. a player at the league midpoint on everything is the zero vector, and
-         two identical players are at cosine 1.0
-      4. each domain carries the same total weight however many metrics it has
+    scout_players.vec, and section_score, which the scout_comps SQL
+    function mirrors):
+      1. every scored player row is a percentile metric_contracts declares,
+         in the scope its source reads (pitch shape is ranked at publish)
+      2. show-only rows are drawn but never scored; pitcher extension is
+         scored (user decision, 2026-11-14)
+      3. identical players score 100 + 100; opposite extremes score 0
+      4. an even shift across a hitter's centred results rows leaves the
+         results score unchanged; pitchers are not centred
+      5. a candidate sharing under half the target's rows scores 0
+      6. shared phrases point the way the percentiles do
+      7. the SQL uses the same scale (100 / 3) as PLAYER_SCALE
     """
+    import re
     import sys as _sys
-    import numpy as np
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
     import team_similarity as ts
     import metric_contracts as mc
@@ -2118,44 +2122,79 @@ def v28_player_comp_vectors() -> Result:
     errors = []
     scope = {("H", "m"): "H.metrics", ("P", "m"): "P.metrics",
              ("H", "gi"): "H.gi", ("H", "adv"): "H.adv"}
-    for side, doms in ts.PLAYER_DOMAINS.items():
-        for items in doms.values():
-            for src, key in items:
-                sc = scope.get((side, src)) or (f"P.pool.{src[5:]}" if src.startswith("pool:") else None)
-                if sc is None or mc.lookup(sc, key) is None:
-                    errors.append(f"{side} comp feature {src}:{key} is not a declared percentile")
-    p_keys = {k for items in ts.PLAYER_DOMAINS["P"].values() for _, k in items}
-    if "extension_pct" in p_keys:
-        errors.append("release extension is in the pitcher comp vector")
+    n_rows = 0
+    for side in ("H", "P"):
+        for r in ts.player_rows(side):
+            n_rows += 1
+            src, key = r["src"], r["key"]
+            if src == "shape":
+                continue
+            sc = scope.get((side, src)) or (f"P.pool.{src[5:]}" if src.startswith("pool:") else None)
+            if sc is None or mc.lookup(sc, key) is None:
+                errors.append(f"{side} comp row {src}:{key} is not a declared percentile")
 
-    def player(side, pct):
-        m, pools = {}, {}
-        for items in ts.PLAYER_DOMAINS[side].values():
-            for src, key in items:
-                if src == "m":
-                    m[key] = pct
-                elif src.startswith("pool:"):
-                    pools.setdefault(src[5:], {})[key] = pct
-        gi = {"metrics": m, "pool_rows": pools, "attempt_rate_pct": pct,
-              "advancement": {"xbt_pct": pct}}
-        return {"gate_inputs": gi}
+    def player(side, pct, over=None):
+        m, pools, shape = {}, {}, {}
+        for r in ts.player_rows(side):
+            v = (over or {}).get(r["key"], pct)
+            if r["src"] == "m":
+                m[r["key"]] = v
+            elif r["src"].startswith("pool:"):
+                pools.setdefault(r["src"][5:], {})[r["key"]] = v
+            elif r["src"] == "shape":
+                shape[r["key"]] = v
+        gi = {"metrics": m, "pool_rows": pools,
+              "attempt_rate_pct": (over or {}).get("attempt_rate_pct", pct),
+              "advancement": {"xbt_pct": (over or {}).get("xbt_pct", pct)}}
+        return ts.player_vector({"player_id": 1, "gate_inputs": gi}, side, {1: shape})
 
     for side in ("H", "P"):
-        mid = ts.player_vector(player(side, 50.0), side)
-        if any(abs(v) > 1e-9 for v in mid.values()):
-            errors.append(f"{side}: a midpoint player is not the zero vector")
-        hi = ts.player_vector(player(side, 90.0), side)
-        a = np.array(list(hi.values()))
-        if abs(a @ a / (np.linalg.norm(a) ** 2) - 1) > 1e-9:
-            errors.append(f"{side}: identical players are not at cosine 1")
-        for dom, items in ts.PLAYER_DOMAINS[side].items():
-            sq = sum(hi[k] ** 2 for _, k in items if k in hi)
-            if abs(sq - 0.8 ** 2) > 1e-3:      # vectors are rounded to 5 places
-                errors.append(f"{side} {dom}: squared weight {sq:.3f}, not one domain's share")
+        rows = ts.player_rows(side)
+        hi, lo = player(side, 95.0), player(side, 5.0)
+        shown = {r["key"] for r in rows if not r["scored"]}
+        if len(hi["d"]) != len(rows):
+            errors.append(f"{side}: {len(rows) - len(hi['d'])} rows missing from the drawn profile")
+        leaked = shown & (set(hi["a"]) | set(hi["r"]))
+        if leaked:
+            errors.append(f"{side}: show-only rows scored: {sorted(leaked)}")
+        sc = ts.player_scores(hi, hi)
+        if (sc["approach"], sc["results"]) != (100.0, 100.0):
+            errors.append(f"{side}: identical players score {sc}")
+        far = ts.player_scores(hi, lo)
+        if far["approach"] != 0.0 or (side == "P" and far["results"] != 0.0):
+            errors.append(f"{side}: opposite extremes score {far}")
+        thin = {"d": {}, "a": dict(list(hi["a"].items())[:len(hi["a"]) // 2 - 1]), "r": hi["r"]}
+        if ts.player_scores(hi, thin)["approach"] != 0.0:
+            errors.append(f"{side}: a candidate sharing under half the rows still scored")
+    if "extension_pct" not in player("P", 60.0)["a"]:
+        errors.append("pitcher extension is not scored")
+
+    # Centring: hitter results compare shape, not level.
+    rng = np.random.default_rng(28)
+    over = {r["key"]: float(rng.uniform(20, 80)) for r in ts.player_rows("H")}
+    base = player("H", 50.0, over)
+    cen = [r["key"] for r in ts.player_rows("H") if r["centred"]]
+    shifted = player("H", 50.0, {**over, **{k: over[k] + 12 for k in cen}})
+    other = player("H", 50.0, {k: float(rng.uniform(20, 80)) for k in over})
+    a, b = ts.player_scores(base, other)["results"], ts.player_scores(shifted, other)["results"]
+    if abs(a - b) > 0.11:
+        errors.append(f"an even shift in a hitter's results moved the score {a} -> {b}")
+    if any(r["centred"] for r in ts.player_rows("P")):
+        errors.append("pitcher rows are centred")
+
+    # Phrases follow the percentiles: two hitters who both avoid strikeouts.
+    k = player("H", 50.0, {"K_pct_pct": 92.0})
+    why = ts.explain_players(k, k, "H")
+    if ts.PHRASES["K_pct_pct"][1] not in why["shared"]:
+        errors.append(f"high K_pct_pct not phrased as {ts.PHRASES['K_pct_pct'][1]!r}: {why}")
+
+    sql = (Path(__file__).resolve().parent.parent / "schema_serving.sql").read_text()
+    if not re.search(r"/\s*\(100\.0\s*/\s*3\.0\)", sql) or abs(ts.PLAYER_SCALE - 100 / 3) > 1e-12:
+        errors.append("scout_score's scale is not PLAYER_SCALE (100 / 3)")
 
     passed = not errors
-    detail = (f"{sum(len(i) for d in ts.PLAYER_DOMAINS.values() for i in d.values())} declared features; "
-              "geometry excluded; midpoint = zero vector; equal weight per domain"
+    detail = (f"{n_rows} rows declared; show-only unscored; identical 100+100, "
+              "opposites 0; hitter results centred; SQL scale matches"
               if passed else "; ".join(errors))
     return passed, detail
 
