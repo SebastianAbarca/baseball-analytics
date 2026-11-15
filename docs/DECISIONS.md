@@ -1,3 +1,11 @@
+---
+type: decisions
+status: living
+updated: 2026-11-15
+tags:
+  - project/decisions
+---
+
 # Decisions
 
 Things that are not obvious from the code, each of which cost real debugging.
@@ -386,6 +394,36 @@ reported success.
 Counting what is still stale *afterwards* is the only check that speaks to the
 goal rather than the attempt.
 
+### A generated file is never written from an empty scan
+
+`tag_reference.py` generates two artifacts from the stored portraits: `TAGS.md`
+and `dashboard/tag_reference.json`. `scan_portraits()` globs
+`data/processed/portraits/*.json`, and a glob over an empty directory raises
+nothing — it returns no paths, and every count comes back zero.
+
+Nothing checked that. `build()` would then write a `TAGS.md` headed **"0 tags
+across 0 player-seasons in 0 portraits"**, a discrepancy block declaring all 80
+coded tags "has a kind but never fires", and no per-kind tables at all — then
+`return 0`, reporting success. `write_json` blanked the dashboard footer in the
+same pass.
+
+The empty directory is not an edge case. Portraits are a regenerable cache and
+gitignored, so **every fresh clone, and every machine that has not run a full
+build, is in exactly that state** — and `refresh.py`'s `tags` stage calls
+`build(False)` directly.
+
+Now an empty scan refuses: nothing is written and the exit code is 2, on the
+default path and `--check` alike. Zero portraits is not a vocabulary of zero
+tags, it is no evidence, and the reasoning that makes `reliability` refuse
+rather than shrink applies the same way to a generated file.
+
+Change it back and the first `tags` stage run on a machine without portraits
+silently replaces the tag vocabulary — in the repository and in the UI — with a
+document stating the project has no tags.
+
+`refresh.py:686` discards the return value, so that stage still reports success.
+The guard prevents the damage, not the misreport.
+
 ---
 
 ## The dashboard
@@ -536,3 +574,30 @@ playing years, nickname groups and typo tolerance, then same-named players are
 separated by whether their totals chain (a total never falls, and grows at
 most a season's worth). Lists and ledger agree within 10 days for 96–99% of
 players in every season compared.
+
+
+---
+
+## Related
+
+The baseball meaning behind these decisions:
+
+- [Percentiles vs ranks](../reference/percentiles-vs-ranks.md) — the trap behind the bogus `elite speed` tags
+- [Spin efficiency](../reference/spin-efficiency.md) — measured active spin, and the clipped constant it replaced
+- [The strike zone](../reference/the-strike-zone.md) — ABS, the ball-radius buffer, and the 2026 `sz_top` redefinition
+- [Pitch movement and break](../reference/pitch-movement-and-break.md) — why late break is a constant and `pfx` is in feet
+- [Whiffs, swings and CSW](../reference/whiffs-swings-and-csw.md) — foul tips, and what each rate divides by
+- [Plate discipline](../reference/plate-discipline.md) — discrimination versus raw zone-swing rate
+- [Service time](../reference/service-time.md) — MLB's own number and the roster ledger
+
+The system these decisions describe:
+
+- [Architecture](ARCHITECTURE.md) — the structures the decisions constrain
+- [Operations](OPERATIONS.md) — the runbook that respects them
+
+What challenged them:
+
+- [Review — 12 October 2026](reviews/REVIEW-2026-10-12.md)
+- [Review — 14 October 2026](reviews/REVIEW-2026-10-14.md)
+- [Conceptual review — 14 October 2026](reviews/CONCEPTUAL-REVIEW-2026-10-14.md)
+- [Home](../HOME.md)

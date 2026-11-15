@@ -31,8 +31,8 @@ Juan Soto · NYY 2024
   walk machine     walk rate 97th pct
 ```
 
-Ninety-four tags exist, 87,120 firings across twelve seasons, and every one
-carries its evidence. A league-average player carries none — that is the point.
+Eighty tags exist, and every one carries its evidence — incidence counts per
+tag live in [TAGS.md](baseball_construction/TAGS.md). A league-average player carries none — that is the point.
 There are no boxes and nobody is assigned an archetype.
 
 ---
@@ -45,7 +45,10 @@ There are no boxes and nobody is assigned an archetype.
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | how data flows, with diagrams |
 | **[docs/OPERATIONS.md](docs/OPERATIONS.md)** | the runbook — refreshing, rebuilding, failure modes |
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | why things are this way, and the traps behind them |
+| **[docs/TODO.md](docs/TODO.md)** | every open item, with what has been verified since October |
 | **[baseball_construction/TAGS.md](baseball_construction/TAGS.md)** | every tag, its gate, how often it fires |
+| **[reference/](reference/README.md)** | what the metrics mean — the baseball reasoning the decisions rest on |
+| **[HOME.md](HOME.md)** | the Obsidian vault index, if you are reading this as a vault |
 
 New here? Read `baseball_construction/README.md`, then ARCHITECTURE. Most of
 what looks odd in this repo is odd for a reason written down in DECISIONS.

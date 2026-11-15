@@ -1,3 +1,11 @@
+---
+type: runbook
+status: living
+updated: 2026-11-15
+tags:
+  - project/operations
+---
+
 # Operations
 
 Running, refreshing and rebuilding. For why it is shaped this way see
@@ -300,3 +308,12 @@ collects that night's games.
 | `freeze_era.py` | at finalize: copy finished seasons' roots into `data/era/` for the nightly job; `--check` to verify |
 | `publish.py` | write to the serving tables; `--dry-run`, `--only portraits\|league\|scout`, `--seasons`, `--force` to ignore content hashes. ~5 min for everything, seconds when little changed |
 | `battery_base.py` | diagnostic: pitcher/catcher separability |
+
+
+---
+
+## Related
+
+- [Architecture](ARCHITECTURE.md) — the cache stack and fingerprint this runbook drives
+- [Decisions](DECISIONS.md) — the caching and staleness rules behind "what invalidates what"
+- [Home](../HOME.md)
