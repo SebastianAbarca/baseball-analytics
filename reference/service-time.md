@@ -98,7 +98,7 @@ either.
   number, checked against every roster day*
 - [Operations](../docs/OPERATIONS.md) — `scripts/pull_mls.py` and
   `scripts/pull_rosters.py`
-- [Review — 12 October 2026](../docs/REVIEW-2026-10-12.md) § 11, and
-  [Review — 14 October 2026](../docs/REVIEW-2026-10-14.md), where the IL-day
+- [Review — 12 October 2026](../docs/reviews/REVIEW-2026-10-12.md) § 11, and
+  [Review — 14 October 2026](../docs/reviews/REVIEW-2026-10-14.md), where the IL-day
   subtraction was still recorded as open
 - [Reference index](README.md) · [Home](../HOME.md)

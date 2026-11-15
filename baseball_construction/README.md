@@ -31,9 +31,8 @@ Juan Soto · NYY 2024
   walk machine     walk rate 97th pct
 ```
 
-Ninety-four tags exist. **87,120 of them fire across the twelve seasons, and
-every single one carries an evidence string.** A league-average player carries
-none — that is the point. There are no boxes and nobody is assigned an
+Eighty tags exist, and **every single firing carries an evidence string.**
+A league-average player carries none — that is the point. There are no boxes and nobody is assigned an
 archetype.
 
 ---
@@ -57,30 +56,21 @@ is Skubal 2025, which is the metric checking its own work.
 ## The taxonomy
 
 Every tag sits on four axes. The one that does the work is **kind**, ordered by
-how much control the player has over it:
+how much control the player has over it: **attribute** (a fact about the body)
+→ **tool** (a capability that clears a bar) → **behavior** (a choice he makes)
+→ **result** (what came of it) → **deployment** (the club's decision about him
+rather than his about himself). The other three are **family** (which part of
+the game), **side** (hitter or pitcher) and **population**, the denominator a
+percentile was taken against — because `elite framer` means nothing without
+"among catchers with enough takes to measure".
 
-| kind | what it is | examples |
-|---|---|---|
-| **attribute** | a fact about the body | throws left · sidearm · deep extension |
-| **tool** | a capability that clears a bar | elite velo · ride four-seam · elite speed |
-| **behavior** | a choice he makes | patient · sinker-baller · tunneler |
-| **result** | what came of it | bat-misser · walk prone · elite control |
-| **deployment** | the club's decision about him | high-leverage arm · platoon specialist |
-| **noise** | results minus contact quality | lucky · unlucky |
+Why that ordering earns its keep, and what each axis is for:
+**[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)**, which is the single
+explanation of the taxonomy.
 
-The ordering matters when you read a roster. Three pitchers can all carry
-`bat-misser` — a result — while one gets there on `elite velo` (a tool), one on
-`tunneler` (a behavior), and one on nothing you can name, which is the
-interesting case.
-
-The other three axes: **family** (which part of the game), **side** (hitter or
-pitcher — 40 tags are hitter-only, 53 pitcher-only, 1 shared), and
-**population**, the denominator a percentile was taken against, because
-`elite framer` means nothing without "among catchers with enough takes to
-measure".
-
-Full definitions, gates and incidence counts: **[TAGS.md](TAGS.md)** —
-generated from the live maps, so it cannot drift from the code.
+Every tag's definition, gate and incidence: **[TAGS.md](TAGS.md)**, generated
+by `scripts/tag_reference.py` — regenerate after any change to the tag maps or
+gates.
 
 ---
 

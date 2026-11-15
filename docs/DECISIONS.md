@@ -567,7 +567,7 @@ The system these decisions describe:
 
 What challenged them:
 
-- [Review — 12 October 2026](REVIEW-2026-10-12.md)
-- [Review — 14 October 2026](REVIEW-2026-10-14.md)
-- [Conceptual review — 14 October 2026](CONCEPTUAL-REVIEW-2026-10-14.md)
+- [Review — 12 October 2026](reviews/REVIEW-2026-10-12.md)
+- [Review — 14 October 2026](reviews/REVIEW-2026-10-14.md)
+- [Conceptual review — 14 October 2026](reviews/CONCEPTUAL-REVIEW-2026-10-14.md)
 - [Home](../HOME.md)

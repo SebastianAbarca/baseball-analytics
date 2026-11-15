@@ -23,13 +23,14 @@ Canonical, committed, public. These describe the system as it actually is.
 | [Architecture](docs/ARCHITECTURE.md) | how data flows — cache layers, the build, the fingerprint, serving, deployment |
 | [Operations](docs/OPERATIONS.md) | the runbook — refreshing, rebuilding, timings, failure modes |
 | [Decisions](docs/DECISIONS.md) | why things are the way they are, and the traps behind them |
+| [TODO](docs/TODO.md) | every open item — defects, doc/code mismatches, open questions |
 | [Code README](baseball_construction/README.md) | what the project is, the five views, the taxonomy, layout |
 
 Reviews — dated snapshots, not living documents:
 
-- [Review — 12 October 2026](docs/REVIEW-2026-10-12.md) — the first full implementation and conceptual pass
-- [Review — 14 October 2026](docs/REVIEW-2026-10-14.md) — follow-up, with closure against the above
-- [Conceptual review — 14 October 2026](docs/CONCEPTUAL-REVIEW-2026-10-14.md) — mathematics, evidence, and baseball meaning
+- [Review — 12 October 2026](docs/reviews/REVIEW-2026-10-12.md) — the first full implementation and conceptual pass
+- [Review — 14 October 2026](docs/reviews/REVIEW-2026-10-14.md) — follow-up, with closure against the above
+- [Conceptual review — 14 October 2026](docs/reviews/CONCEPTUAL-REVIEW-2026-10-14.md) — mathematics, evidence, and baseball meaning
 
 ## 2. Baseball reference — what the concepts mean
 

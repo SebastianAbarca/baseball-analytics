@@ -71,6 +71,6 @@ any Savant column named like a rate as suspect until checked.**
 
 - [Decisions](../docs/DECISIONS.md) § Unit traps that produced wrong tags →
   *Savant's percentile columns are ranks, not rates*, and *Percentile direction*
-- [Conceptual review — 14 October 2026](../docs/CONCEPTUAL-REVIEW-2026-10-14.md)
+- [Conceptual review — 14 October 2026](../docs/reviews/CONCEPTUAL-REVIEW-2026-10-14.md)
   § 6, on defining what each percentile and team average means
 - [Reference index](README.md) · [Home](../HOME.md)
