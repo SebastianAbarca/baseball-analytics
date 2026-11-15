@@ -68,6 +68,9 @@ Not from the reviews — found by reading the code and the CI on 15 November 202
 | item | status |
 |---|---|
 | `validation` has not run on any PR since #57 — the Actions account is billing-locked | **OPEN** |
+| `validation.py` crashes on a Windows console — no encoding handling anywhere | **OPEN** |
+| `validation.py`'s docstring indexes V1–V24; the suite runs V1–V30 | **OPEN** |
+| Python 3.12 is documented, 3.13.2 is installed, nothing enforces either | **OPEN** |
 | `refresh.py`'s `tags` stage cannot report failure — `stage_tags` is `-> None` | **OPEN** |
 | `TAGS.md` is stale: it reports 88 tags against the code's 80 | **OPEN** |
 
@@ -99,8 +102,72 @@ suite" is now true for a second and worse reason than when it was written. Not
 *there is no gate*, but *the gate cannot start, and says so only in a place
 nobody looks*.
 
-Clear the billing lock, then re-run the checks on #60 and #61 before merging
-either. Until then, treat every merge since #57 as unvalidated by CI.
+Clear the billing lock, then re-run the check on #60 before merging it. #61 was
+merged on 15 November 2026 with the check red — the third in a row to go in that
+way.
+
+**Partly answered since.** The offline suite was run by hand on this machine
+against the #61 branch (main's code, plus the doc commits and the
+`tag_reference` guard) and passed **20/20, exit 0**, with 10 checks skipped
+offline. Two sessions ran it independently and agreed. So the offline subset now
+covers everything merged since #57. What remains unrun on #58 and #59 is the 10
+skipped checks — the ones needing the database, a full season of Statcast, or
+this machine's portraits and league caches.
+
+`validation.py` prints a test's detail string at `:2412`
+(`print(f"      {detail}")`), and some details contain non-ASCII — an arrow, in
+the case that surfaced this. On a Windows console that is cp1252, the print
+raises `UnicodeEncodeError` and the run dies partway through. There is **no
+encoding handling anywhere in the file**: no `PYTHONIOENCODING`, no
+`sys.stdout.reconfigure`, no `encoding=`. Linux CI never hits it.
+
+This matters more than a cosmetic bug because [Operations](OPERATIONS.md) tells
+people to run the suite, and the crash reads like a test failure rather than a
+console problem. Workaround today: `PYTHONIOENCODING=utf-8`. Fix: reconfigure **both streams**
+once at module load, so the suite is runnable as documented on the platform it
+is being developed on:
+
+```python
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+```
+
+Both details earn their place. `errors="replace"` matters because reconfiguring
+to utf-8 alone still raises if the console cannot represent a character, and a
+test harness should degrade to a replacement glyph rather than die mid-run.
+`stderr` matters because the crash seen was on stdout, but any traceback or
+warning carrying non-ASCII fails the same way — one line each closes the class
+rather than the path that happened to surface it.
+
+The module docstring ends at line 32 and indexes **V1–V24**. The suite runs
+**V1–V30**, so six checks are undocumented — and they are the six most recent:
+
+| | |
+|---|---|
+| V25 | Tag states and framing |
+| V26 | Team comps from measurements |
+| V27 | Percentile contracts |
+| V28 | Player comp vectors |
+| V29 | Philosophy input directions |
+| V30 | Career-to-date talent |
+
+An index that stops six short is worse than no index, because it reads as
+complete. Same failure mode as a generated file that cannot drift only until
+someone stops regenerating it.
+
+**Python version:** 3.12 is stated in `README.md:72`,
+`baseball_construction/README.md:123` and `.github/workflows/checks.yml:28`.
+This machine runs **3.13.2**, and the suite passes on it. Nothing enforces
+either number — `requirements.txt` is a pip requirements file and has no
+mechanism to pin the interpreter. So the project is developed on one version,
+tested on another, and documented as the second.
+
+Not urgent while both work, but it belongs with the 12 October review's
+dependency-reproducibility finding rather than standing alone: broad minimum
+versions, a pandas floor below what `include_groups=False` needs, and now an
+interpreter that differs between the machine and CI. One decision covers all
+three — pin a tested set, or say explicitly that a range is supported and test
+the range.
 
 `stage_tags` (`refresh.py:674`) is annotated `-> None` and calls
 `tag_reference.build(False)` without capturing it (`:686`). The runner
