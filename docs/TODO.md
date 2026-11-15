@@ -63,12 +63,44 @@ Background in [Service time](../reference/service-time.md).
 
 ### Found since
 
-Not from the reviews — found by reading the code on 15 November 2026.
+Not from the reviews — found by reading the code and the CI on 15 November 2026.
 
 | item | status |
 |---|---|
+| `validation` has not run on any PR since #57 — the Actions account is billing-locked | **OPEN** |
 | `refresh.py`'s `tags` stage cannot report failure — `stage_tags` is `-> None` | **OPEN** |
 | `TAGS.md` is stale: it reports 88 tags against the code's 80 | **OPEN** |
+
+Not a code defect, and nothing in the repository fixes it. GitHub Actions
+refuses the job outright: *"The job was not started because your account is
+locked due to a billing issue."*
+
+| PR | `validation` |
+|---|---|
+| #57, 13 days ago | ran 41s — **passed** |
+| #58, 3 days ago | never started — billing |
+| #59, 1 day ago | never started — billing |
+| #60, 9 hours ago | never started — billing |
+| #61, this branch | never started — billing |
+
+**#58 and #59 were merged to `main` anyway** — both are in the log as merge
+commits. So the last two changes to land, schema 29 among them, went in without
+the validation suite running on them at all.
+
+It went unnoticed because a never-started job reports as an ordinary check
+failure. Red either way, 2 seconds either way; the only difference is in the run
+annotation, which nobody reads on a check they expect to be red.
+
+Worth recording the irony: `checks.yml` exists *because*
+[Review — 12 Oct](reviews/REVIEW-2026-10-12.md) § 4 asked for a correctness suite
+on pull requests. The workflow was written, ran once on #57, and then stopped
+starting — so § 3's "the workflows still do not run an independent correctness
+suite" is now true for a second and worse reason than when it was written. Not
+*there is no gate*, but *the gate cannot start, and says so only in a place
+nobody looks*.
+
+Clear the billing lock, then re-run the checks on #60 and #61 before merging
+either. Until then, treat every merge since #57 as unvalidated by CI.
 
 `stage_tags` (`refresh.py:674`) is annotated `-> None` and calls
 `tag_reference.build(False)` without capturing it (`:686`). The runner
@@ -204,7 +236,8 @@ documentation still needing attention.
 - **Validation suite scope** — some checks replicate implementation logic (V8
   repeats the same foul-tip classification; V19 reconciles to the same event
   filter rather than an external ledger). Workflows still do not run an
-  independent correctness suite on pull requests.
+  independent correctness suite on pull requests — and since #57 the workflow
+  that would cannot start at all, § 1 *Found since*.
 
 ---
 
