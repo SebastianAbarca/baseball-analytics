@@ -1,3 +1,11 @@
+---
+type: decisions
+status: living
+updated: 2026-11-15
+tags:
+  - project/decisions
+---
+
 # Decisions
 
 Things that are not obvious from the code, each of which cost real debugging.
@@ -536,3 +544,30 @@ playing years, nickname groups and typo tolerance, then same-named players are
 separated by whether their totals chain (a total never falls, and grows at
 most a season's worth). Lists and ledger agree within 10 days for 96–99% of
 players in every season compared.
+
+
+---
+
+## Related
+
+The baseball meaning behind these decisions:
+
+- [Percentiles vs ranks](../reference/percentiles-vs-ranks.md) — the trap behind the bogus `elite speed` tags
+- [Spin efficiency](../reference/spin-efficiency.md) — measured active spin, and the clipped constant it replaced
+- [The strike zone](../reference/the-strike-zone.md) — ABS, the ball-radius buffer, and the 2026 `sz_top` redefinition
+- [Pitch movement and break](../reference/pitch-movement-and-break.md) — why late break is a constant and `pfx` is in feet
+- [Whiffs, swings and CSW](../reference/whiffs-swings-and-csw.md) — foul tips, and what each rate divides by
+- [Plate discipline](../reference/plate-discipline.md) — discrimination versus raw zone-swing rate
+- [Service time](../reference/service-time.md) — MLB's own number and the roster ledger
+
+The system these decisions describe:
+
+- [Architecture](ARCHITECTURE.md) — the structures the decisions constrain
+- [Operations](OPERATIONS.md) — the runbook that respects them
+
+What challenged them:
+
+- [Review — 12 October 2026](REVIEW-2026-10-12.md)
+- [Review — 14 October 2026](REVIEW-2026-10-14.md)
+- [Conceptual review — 14 October 2026](CONCEPTUAL-REVIEW-2026-10-14.md)
+- [Home](../HOME.md)

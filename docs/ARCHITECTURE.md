@@ -1,3 +1,11 @@
+---
+type: architecture
+status: living
+updated: 2026-11-15
+tags:
+  - project/architecture
+---
+
 # Architecture
 
 How data gets from Baseball Savant to a chart on screen, and why it is shaped
@@ -400,3 +408,14 @@ Their archetype labels are retired, but both are still on the portrait path:
 `build_bullpen_profile` for each starter's profile and the bullpen collective,
 and `hitter_traits` imports helpers from `hitter_archetypes` (the speed tier
 among them). A change to either can move tags.
+
+
+---
+
+## Related
+
+- [Operations](OPERATIONS.md) — how to run what this describes
+- [Decisions](DECISIONS.md) — why these structures are shaped this way
+- [Code README](../baseball_construction/README.md) — the five views and the taxonomy, from the top
+- [Reference index](../reference/README.md) — what the metrics named here mean
+- [Home](../HOME.md)

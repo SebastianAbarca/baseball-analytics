@@ -1,3 +1,13 @@
+---
+type: review
+subtype: conceptual
+status: snapshot
+date: 2026-10-14
+tags:
+  - project/review
+  - project/meaning
+---
+
 # Conceptual review: mathematics, evidence, and baseball meaning
 
 Reviewed October 14, 2026. Source revision: `88602951528cbda32d2baee16bb7174313d3b5b5`, together with the local derived data. This is a review of the model's meaning and statistical validity. Production code and data were not changed.
@@ -152,3 +162,17 @@ The similarity experiment used the stored 2025 offense density vectors, filled a
 The sequencing counterexample ran the actual `_entropy` and `_pitcher_sequencing` function definitions in an isolated namespace with their current constants. The framing check used saved `populations`, `pa`, tags, and `gate_inputs.catching.framing_pct`, counting team-stint rows rather than unique catchers. The steal interval is illustrative and does not model selection of steal opportunities.
 
 No full statistical calibration, future-season validation, production rebuild, or deployment was performed. Known implementation findings from the code reviews remain separate; resolving them alone would not resolve the conceptual issues here.
+
+
+---
+
+## Related
+
+- [Review — 12 October 2026](REVIEW-2026-10-12.md) and [Review — 14 October 2026](REVIEW-2026-10-14.md) — the implementation passes this one sits beside
+- [Decisions](DECISIONS.md) — the positions taken in response
+- [Reference index](../reference/README.md) — this review is mostly about what the measurements *mean*, which is what the reference notes are for
+- [Home](../HOME.md)
+
+> A dated snapshot. Judged on meaning rather than implementation, so its points
+> age more slowly than a bug list — but check [Decisions](DECISIONS.md) for
+> which were accepted.

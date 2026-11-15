@@ -34,3 +34,13 @@ baseball_construction/data/processed/league_identity_*.json
 
 # Pre-repair metric caches, moved aside by scripts/repair_metric_units.py
 baseball_construction/data/processed/_stale_pre_unit_repair/
+
+# Obsidian — shared settings live in .obsidian/app.json; these are per-machine UI state
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspace.json.bak
+.obsidian/cache
+.trash/
+
+# Private planning space — its own git repo, deliberately not in the public one
+planning/

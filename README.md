@@ -46,6 +46,8 @@ There are no boxes and nobody is assigned an archetype.
 | **[docs/OPERATIONS.md](docs/OPERATIONS.md)** | the runbook — refreshing, rebuilding, failure modes |
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | why things are this way, and the traps behind them |
 | **[baseball_construction/TAGS.md](baseball_construction/TAGS.md)** | every tag, its gate, how often it fires |
+| **[reference/](reference/README.md)** | what the metrics mean — the baseball reasoning the decisions rest on |
+| **[HOME.md](HOME.md)** | the Obsidian vault index, if you are reading this as a vault |
 
 New here? Read `baseball_construction/README.md`, then ARCHITECTURE. Most of
 what looks odd in this repo is odd for a reason written down in DECISIONS.
