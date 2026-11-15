@@ -177,6 +177,21 @@ def write_json(family, side, count, evidence) -> Path:
 
 def build(check_only: bool) -> int:
     family, side, count, players, evidence = scan_portraits()
+
+    # Both outputs are GENERATED from the portraits, so an empty scan is not a
+    # vocabulary of zero tags — it is no evidence at all. Writing it would blank
+    # TAGS.md and the dashboard footer, list every coded tag as never-firing,
+    # and still exit 0. Portraits are a regenerable cache and gitignored, so the
+    # empty directory is the normal state on a fresh clone and on any machine
+    # that has not built them. Refuse rather than hedge, as reliability.py does.
+    if not glob.glob(str(_PORTRAITS / "*.json")):
+        print(f"refusing: no portraits in {_PORTRAITS}\n"
+              f"  {_OUT.name} and dashboard/tag_reference.json are generated "
+              f"from them, so writing now would blank both.\n"
+              f"  Build the portraits first (scripts/refresh.py), then rerun.",
+              file=sys.stderr)
+        return 2
+
     seen = set(count)
     coded = set(TAG_KIND) | {t for t in seen if kind_of(t)}
 

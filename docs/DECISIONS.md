@@ -394,6 +394,36 @@ reported success.
 Counting what is still stale *afterwards* is the only check that speaks to the
 goal rather than the attempt.
 
+### A generated file is never written from an empty scan
+
+`tag_reference.py` generates two artifacts from the stored portraits: `TAGS.md`
+and `dashboard/tag_reference.json`. `scan_portraits()` globs
+`data/processed/portraits/*.json`, and a glob over an empty directory raises
+nothing — it returns no paths, and every count comes back zero.
+
+Nothing checked that. `build()` would then write a `TAGS.md` headed **"0 tags
+across 0 player-seasons in 0 portraits"**, a discrepancy block declaring all 80
+coded tags "has a kind but never fires", and no per-kind tables at all — then
+`return 0`, reporting success. `write_json` blanked the dashboard footer in the
+same pass.
+
+The empty directory is not an edge case. Portraits are a regenerable cache and
+gitignored, so **every fresh clone, and every machine that has not run a full
+build, is in exactly that state** — and `refresh.py`'s `tags` stage calls
+`build(False)` directly.
+
+Now an empty scan refuses: nothing is written and the exit code is 2, on the
+default path and `--check` alike. Zero portraits is not a vocabulary of zero
+tags, it is no evidence, and the reasoning that makes `reliability` refuse
+rather than shrink applies the same way to a generated file.
+
+Change it back and the first `tags` stage run on a machine without portraits
+silently replaces the tag vocabulary — in the repository and in the UI — with a
+document stating the project has no tags.
+
+`refresh.py:686` discards the return value, so that stage still reports success.
+The guard prevents the damage, not the misreport.
+
 ---
 
 ## The dashboard

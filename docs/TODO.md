@@ -67,23 +67,67 @@ Not from the reviews — found by reading the code on 15 November 2026.
 
 | item | status |
 |---|---|
-| `tag_reference.py` blanks `TAGS.md` when no portraits are present | **OPEN** |
+| `refresh.py`'s `tags` stage cannot report failure — `stage_tags` is `-> None` | **OPEN** |
+| `TAGS.md` is stale: it reports 88 tags against the code's 80 | **OPEN** |
 
-`build()` in `scripts/tag_reference.py` calls `scan_portraits()` and never
-checks whether it found anything. Run with `data/processed/portraits/` empty —
-the normal state on any machine that has not done a full build, including the
-PC this was written on — it does not fail. It writes a header reading `0 tags
-across 0 player-seasons in 0 portraits`, a `⚠ Discrepancies` block listing all
-80 coded tags as "has a kind but never fires", and empty per-kind tables. The
-`--check` path is safe; the default path is destructive.
+`stage_tags` (`refresh.py:674`) is annotated `-> None` and calls
+`tag_reference.build(False)` without capturing it (`:686`). The runner
+accumulates failures from its siblings — `failures += stage_portraits(...)` at
+`:781`, `failures += stage_publish(...)` at `:792` — but calls
+`stage_tags(args.dry_run)` bare at `:784`. The stage cannot fail, by signature.
 
-Fix: refuse and exit non-zero when `scan_portraits()` finds no portraits. Same
-failure shape as [Review — 12 Oct](reviews/REVIEW-2026-10-12.md) § 13, where
-missing local files could become destructive Scout deletions.
+With the empty-scan guard in place this is a silent **no-op** rather than silent
+corruption, which is the improvement. But a refresh that regenerated nothing
+still reports success.
 
-Related but separate: the committed `TAGS.md` is itself stale — it reports 88
-tags against the code's 80, because it was generated before tags were retired.
-It can only be regenerated where the portraits live.
+`failures` does more than report, which is what makes this bite. It is
+initialised at `:757` and at `:786-792` it **gates publish**:
+
+```python
+elif name == "publish":
+    if failures:
+        log.error("  skipped: %d portrait(s) failed or are stale — "
+                  "nothing published", failures)
+    else:
+        failures += stage_publish(seasons, args.dry_run)
+```
+
+Because the tags stage cannot contribute to `failures`, a failed tags stage does
+not block publish — the run publishes anyway. It also cannot reach the exit code
+(`return 1 if failures else 0`, `:796`) or the "N FAILED" summary at `:795`.
+
+The gate's own comment is the argument for wiring it up: *"publishing its
+survivors beside last night's files would mix generations."* A stale `TAGS.md`
+served beside freshly built portraits is precisely that. With the empty-scan
+guard in place, what reaches production is a **stale** vocabulary rather than a
+blanked one — better, but still a generation behind, and still silent.
+
+So this is the concrete mechanism behind the 14 October P1 #2, not merely
+another instance of the same shape.
+
+Fix, in the shape the siblings already use: give `stage_tags` an `int` return,
+`return tag_reference.build(False)` (and `0` on the dry path), and accumulate it
+at `:784`. Deliberately not done with the guard, because it changes pipeline
+behaviour — a refresh that currently succeeds would start failing wherever
+portraits are absent. Correct, but a decision about the build rather than a
+documentation fix.
+
+**This is the third instance of one pattern**, not a third bug:
+[Review — 12 Oct](reviews/REVIEW-2026-10-12.md) § 12 "failed builds can still
+publish and report success", the 14 October P1 #2 "build failure still does not
+prevent publication", and this. Worth fixing as a class — every stage returning
+a failure count and the runner accumulating all of them.
+
+The committed `TAGS.md` was generated before tags were retired, so it reports
+88 tags where the code now has 80, and both READMEs say eighty. It is generated
+from the stored portraits, so it can only be regenerated on a machine that has
+them — not on a fresh clone, where `data/processed/portraits/` is empty.
+
+Resolved here on 15 November 2026: `tag_reference.py` used to overwrite
+`TAGS.md` and the dashboard footer with a 0-tag document when that directory was
+empty, and exit 0. It now refuses. Graduated to
+[Decisions](DECISIONS.md) § Caching and staleness → *A generated file is never
+written from an empty scan*.
 
 ---
 
@@ -100,7 +144,7 @@ settle, because each is a specific checkable claim.
 | `OPERATIONS` calls `build_fingerprint()` without its season argument | `OPERATIONS.md:210` now passes a season | **CLOSED** |
 | "Regular-season-only" | cached spring games and BRef postseason totals remain; date bounds omit legitimate regular-season games | unverified |
 | "Every derived layer up to date" | only tunnel has raw-data-driven refresh orchestration; five league caches can go stale; refresh does not sync seeded DB totals | unverified |
-| "A run must verify it achieved its goal" | checks exist, but general refresh discards their return values and still returns success | unverified |
+| "A run must verify it achieved its goal" | checks exist, but general refresh discards their return values and still returns success | **OPEN** — confirmed for the `tags` stage, § 1 *Found since* |
 | "Publish refuses stale portraits" | applies to the portrait branch only; League and Scout can still publish after refusal | unverified |
 | "Fingerprints cover current data and current logic" | only a subset of inputs and selected public constants; missing fingerprints are accepted | unverified |
 | "Reliability refuses rather than shrinks" | spin and tunneling inputs still shrink; the floor is 0.5 of configured stabilization, not the full point | unverified |
