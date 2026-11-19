@@ -3058,13 +3058,18 @@ COMP_APPROACH, COMP_RESULTS = "#378ADD", "#1D9E75"  # the two score colours
 
 
 def team_comp_dots(rows: list[dict], za: list, zb: list,
-                   team_a: str, team_b: str) -> go.Figure:
+                   team_a: str, team_b: str, scale: str = "z") -> go.Figure:
     """
-    Both units on every comparison row, in league standard deviations, with
-    the gap between them drawn. Rows not in the score are faded; centred rows
-    are scored on the gap after each team's own level is removed, and say so
-    on hover. `za`, `zb` are the two teams' profiles from the league file.
+    Both units on every comparison row, with the gap between them drawn.
+    Rows not in the score are faded; centred rows are scored on the gap after
+    each one's own level is removed, and say so on hover. `za`, `zb` are the
+    two profiles: league standard deviations for teams (scale "z", from the
+    league file) or percentiles for players (scale "pct", player comps).
     """
+    pct = scale == "pct"
+    lo, hi = (-8.0, 108.0) if pct else (-3.2, 3.2)
+    note_x = lo + (hi - lo) * 0.008
+    unit, who = ("pts", "player") if pct else ("SD", "team")
     ys, labels, hover_a, hover_b, line_x, line_y = [], [], [], [], [], []
     xa, xb, op = [], [], []
     shapes, notes = [], []
@@ -3072,13 +3077,13 @@ def team_comp_dots(rows: list[dict], za: list, zb: list,
     for r, a, b in zip(rows, za, zb):
         if r["section"] != last_sec:
             y -= 1.6 if last_sec else 0.6
-            notes.append(dict(x=-3.15, y=y, xref="x", yref="y", xanchor="left",
+            notes.append(dict(x=note_x, y=y, xref="x", yref="y", xanchor="left",
                               text=f"<b>{r['section'].capitalize()}</b>", showarrow=False,
                               font=dict(size=13, color=COLORS["text"])))
             last_sec, last_dom = r["section"], None
             y -= 1.5
         if r["domain"] != last_dom:
-            notes.append(dict(x=-3.15, y=y + 0.05, xref="x", yref="y", xanchor="left",
+            notes.append(dict(x=note_x, y=y + 0.05, xref="x", yref="y", xanchor="left",
                               yanchor="bottom", text=r["domain"], showarrow=False,
                               font=dict(size=10, color=COLORS["subtext"])))
             last_dom = r["domain"]
@@ -3087,12 +3092,12 @@ def team_comp_dots(rows: list[dict], za: list, zb: list,
         tag = "" if r["scored"] else " *"
         labels.append(r["label"] + tag)
         note = ("shown for context, not scored" if not r["scored"] else
-                "scored after removing each team's own level" if r["centred"] else "scored")
+                f"scored after removing each {who}'s own level" if r["centred"] else "scored")
         gap = f"{abs(a - b):.1f}" if a is not None and b is not None else "–"
         hover_a.append(f"<b>{r['label']}</b><br>{team_a}: {a if a is not None else '–'}"
-                       f"<br>gap {gap} SD · {note}")
+                       f"<br>gap {gap} {unit} · {note}")
         hover_b.append(f"<b>{r['label']}</b><br>{team_b}: {b if b is not None else '–'}"
-                       f"<br>gap {gap} SD · {note}")
+                       f"<br>gap {gap} {unit} · {note}")
         xa.append(a), xb.append(b), op.append(1.0 if r["scored"] else 0.35)
         if a is not None and b is not None:
             line_x += [a, b, None]
@@ -3106,16 +3111,18 @@ def team_comp_dots(rows: list[dict], za: list, zb: list,
             x=x, y=ys, mode="markers", name=name, hovertext=hover,
             hovertemplate="%{hovertext}<extra></extra>",
             marker=dict(size=11, color=color, opacity=op, line=dict(width=0))))
-    fig.add_vline(x=0, line=dict(color=COLORS["border"], width=1))
+    fig.add_vline(x=50 if pct else 0, line=dict(color=COLORS["border"], width=1))
     fig.update_layout(
         **{**_DARK_LAYOUT, "margin": dict(l=10, r=10, t=10, b=40)},
         height=max(420, int(-y * 19) + 70), showlegend=True,
         legend=dict(orientation="h", x=1, xanchor="right", y=-0.04, yanchor="top",
                     font=dict(size=11)),
         annotations=notes, shapes=shapes,
-        xaxis=dict(range=[-3.2, 3.2], zeroline=False, showgrid=True,
-                   gridcolor=COLORS["border"], tickvals=[-2, -1, 0, 1, 2],
-                   ticktext=["−2 SD", "−1", "league avg", "+1", "+2 SD"],
+        xaxis=dict(range=[lo, hi], zeroline=False, showgrid=True,
+                   gridcolor=COLORS["border"],
+                   tickvals=[0, 25, 50, 75, 100] if pct else [-2, -1, 0, 1, 2],
+                   ticktext=(["0", "25th", "50th", "75th", "100"] if pct else
+                             ["−2 SD", "−1", "league avg", "+1", "+2 SD"]),
                    tickfont=dict(size=10, color=COLORS["subtext"])),
         yaxis=dict(tickvals=ys, ticktext=labels, showgrid=False, zeroline=False,
                    tickfont=dict(size=11, color=COLORS["subtext"]),
@@ -5183,16 +5190,15 @@ def compare_summary(rows: list[dict]):
 # "Plays like" — nearest player-seasons by their measurements
 # ---------------------------------------------------------------------------
 #
-# The same comparison the team comps use, a level down: a player-season is a
-# vector of its centred era percentiles, every domain weighted equally
-# (team_similarity.player_vector). It replaced a vector of the player's tags,
-# which ranked a player's own next season a median 122nd among hitters; the
-# measurements rank it 17th. Attributes (handedness, release geometry) stay
-# out of the vector and are offered as a filter instead.
+# The team comps' comparison, a level down (team_similarity dots-v1): two
+# player-seasons laid side by side on every row as percentiles, scored by how
+# close the dots sit — approach and results, each 0-100, ranked by their sum.
+# It replaced a cosine over centred percentiles (own next season in the top 8:
+# hitters 72% -> 79%, pitchers 58% -> 74%), which itself replaced a vector of
+# tags. Attributes (handedness, slot) stay out and are offered as a filter.
 #
-# Computed on demand, not precomputed: 18,664 player-seasons is 174M pairs
-# stored, but a single query is one vector against ~2,600 same-side
-# candidates, which lands in tens of milliseconds.
+# Computed on demand in the scout_comps SQL function: one profile against
+# ~2,600 same-side candidates per request.
 
 def attribute_options(side: str = "H") -> list[dict]:
     """
@@ -5216,42 +5222,71 @@ def attribute_options(side: str = "H") -> list[dict]:
 
 def player_comps(key: str, limit: int = 8, min_vol: int = 300,
                  same_season_only: bool = False,
-                 require: list[str] | None = None) -> tuple[dict | None, list[tuple[float, dict]]]:
+                 require: list[str] | None = None,
+                 own: bool = False) -> tuple[dict | None, list[tuple[float, dict]]]:
     """
-    Nearest player-seasons to `key`, by their measurements. Returns (target, comps).
+    Nearest player-seasons to `key` (team_similarity dots-v1, player side).
+    Returns (target, [(total, comp), ...]), best total first.
 
-    Other seasons of the SAME player are kept rather than filtered out. They
-    are the metric's own check: if a player's nearest neighbour is not usually
-    himself a year later, the similarity is not measuring anything stable.
-    Judge 2024's closest comp is Judge 2025 at 0.95, and Soto 2024 finds
-    Soto 2023.
+    Each comp carries `approach` and `results` (0-100 each), `vec` (its
+    player_vector, so the dots can be drawn) and `why` (what the two share
+    and where they sit furthest apart). The target carries `vec` too.
 
-    Cosine similarity over the comp vectors runs in the scout_comps SQL
-    function; the vectors are built by team_similarity.player_vector at
-    publish. Each comp carries `why` — the measurements the two share and the
-    one that most separates them (team_similarity.explain_players).
+    The player's own other seasons are left out unless `own`: they are the
+    method's check (Judge 2025's closest comps are Judge 2024 and 2023) but
+    crowd every other player off an eight-row list.
     """
     rows = compare_rows([key])
     if not rows:
         return None, []
     import store
-    comps = store.scout_comps(key, limit, int(min_vol or 0), require, same_season_only)
+    target = rows[0]
+    comps = store.scout_comps(key, limit, int(min_vol or 0), require, same_season_only, own)
     try:
         from team_similarity import explain_players
-        vecs = store.scout_vectors(rows + comps)
+        vecs = store.scout_vectors([target] + comps)
         vkey = lambda r: (r.get("i"), r.get("t"), r.get("s"), r.get("g"))
-        tvec = vecs.get(vkey(rows[0])) or {}
+        target["vec"] = vecs.get(vkey(target)) or {}
         for c in comps:
-            cvec = vecs.get(vkey(c))
-            if tvec and cvec:
-                c["why"] = explain_players(tvec, cvec, rows[0].get("d", "H"))
-    except Exception as exc:          # explanations are a nicety, comps are not
-        log.warning("comp explanations failed: %s", exc)
-    return rows[0], [(c.pop("sim"), c) for c in comps]
+            c["vec"] = vecs.get(vkey(c)) or {}
+            if target["vec"] and c["vec"]:
+                c["why"] = explain_players(target["vec"], c["vec"], target.get("d", "H"))
+    except Exception as exc:          # the dots and explanations are a nicety, comps are not
+        log.warning("comp profiles failed: %s", exc)
+    return target, [(c.pop("sim"), c) for c in comps]
+
+
+def _comp_label(p: dict) -> str:
+    return f"{p.get('n')} {p.get('s')}"
+
+
+def player_comp_view(target: dict, comps: list[dict], picked: str | None):
+    """(summary, dots figure, ranking figure) for one comparison: `target`
+    against the comp whose label is `picked` (the closest when None)."""
+    from team_similarity import player_rows
+    side = target.get("d", "H")
+    labels = [_comp_label(c) for c in comps]
+    i = labels.index(picked) if picked in labels else 0
+    b = comps[i]
+    rows = player_rows(side)
+    da = (target.get("vec") or {}).get("d") or {}
+    db = (b.get("vec") or {}).get("d") or {}
+    za = [da.get(r["key"]) for r in rows]
+    zb = [db.get(r["key"]) for r in rows]
+    ap, rs = b.get("approach") or 0, b.get("results") or 0
+    summary = (f"{_comp_label(target)} vs {labels[i]} ({b.get('t')}): approach {ap:.0f} "
+               f"+ results {rs:.0f} = {ap + rs:.0f} of 200 · {i + 1} of {len(comps)}")
+    ranking = team_comp_ranking(
+        [[lab, round(c.get("approach") or 0), round(c.get("results") or 0)]
+         for lab, c in zip(labels, comps)], labels[i])
+    ranking.update_layout(height=max(260, 30 * len(comps) + 70))
+    dots = team_comp_dots(rows, za, zb, _comp_label(target), labels[i], scale="pct")
+    return summary, dots, ranking
 
 
 def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
-    """Comps as rows, with the tags they share with the target."""
+    """Comps as rows: the two scores, what the players share, and the tags
+    they have in common."""
     if not target:
         return html.Div("Pick a player-season to find comps for.",
                         className="text-secondary small p-3")
@@ -5261,48 +5296,47 @@ def comp_results(target: dict | None, comps: list[tuple[float, dict]]):
 
     cat = scout_catalogue()
     tset = {t[0] for t in target.get("tg", [])}
+    cell = {"padding": "6px 8px", "verticalAlign": "top",
+            "borderBottom": f"1px solid {COLORS['border']}33"}
     rows = []
-    for sim, p in comps:
+    for total, p in comps:
         shared = [t for t in p.get("tg", []) if t[0] in tset
                   and cat.get(t[0], {}).get("kind") != "attribute"]
+        ap, rs = p.get("approach") or 0, p.get("results") or 0
+        why = p.get("why") or {}
         rows.append(html.Tr([
-            html.Td(f"{sim:.3f}", style={
-                "padding": "6px 8px", "fontSize": "0.78rem", "fontWeight": "700",
-                "color": COLORS["text"], "textAlign": "right",
-                "borderBottom": f"1px solid {COLORS['border']}33"}),
+            html.Td([
+                html.Div(f"{total:.0f}", style={"fontWeight": "700", "fontSize": "0.8rem",
+                                                "color": COLORS["text"]}),
+                # The total as the two scores it adds, in the ranking's colours.
+                html.Div([html.Div(style={"width": f"{ap / 2:.0f}%", "background": COMP_APPROACH,
+                                          "height": "5px"}),
+                          html.Div(style={"width": f"{rs / 2:.0f}%", "background": COMP_RESULTS,
+                                          "height": "5px"})],
+                         style={"display": "flex", "width": "64px", "marginTop": "2px",
+                                "background": f"{COLORS['border']}55"},
+                         title=f"approach {ap:.0f} + results {rs:.0f} = {total:.0f} of 200"),
+            ], style={**cell, "textAlign": "right", "width": "76px"}),
             html.Td([html.Div(p["n"], style={"fontWeight": "600"}),
                      html.Div(f"{p['t']} {p['s']} · {p.get('v') or 0:,}",
                               style={"color": COLORS["subtext"], "fontSize": "0.66rem"}),
-                     # What the two share, in the team comps' words; the
-                     # biggest difference on hover.
-                     html.Div("both: " + " · ".join((p.get("why") or {}).get("shared") or []),
-                              title=(f"Most different on {(p.get('why') or {}).get('differ')}"
-                                     if (p.get("why") or {}).get("differ") else None),
+                     html.Div("both: " + " · ".join(why.get("shared") or []),
+                              title=(f"Furthest apart on {why.get('differ')}"
+                                     if why.get("differ") else None),
                               style={"color": COLORS["subtext"], "fontSize": "0.64rem",
                                      "whiteSpace": "normal", "cursor": "help"})
-                     if (p.get("why") or {}).get("shared") else None],
-                    style={"padding": "6px 8px", "fontSize": "0.76rem",
-                           "whiteSpace": "nowrap", "verticalAlign": "top",
-                           "borderBottom": f"1px solid {COLORS['border']}33"}),
+                     if why.get("shared") else None],
+                    style={**cell, "fontSize": "0.76rem", "whiteSpace": "nowrap"}),
             html.Td([_chip(t[0], cat.get(t[0], {}).get("kind"), t[2]) for t in shared],
-                    style={"padding": "6px 8px", "verticalAlign": "top",
-                           "borderBottom": f"1px solid {COLORS['border']}33"}),
+                    style=cell),
         ]))
 
     th = {"color": COLORS["subtext"], "fontSize": "0.66rem", "fontWeight": "600",
           "textTransform": "uppercase", "letterSpacing": "0.06em",
           "padding": "5px 8px", "borderBottom": f"1px solid {COLORS['border']}"}
-    return html.Div([
-        html.Div([html.Span("plays like  ", style={"color": COLORS["subtext"],
-                                                   "fontSize": "0.7rem"}),
-                  html.Span(f"{target['n']} · {target['t']} {target['s']}",
-                            style={"fontWeight": "700", "fontSize": "0.8rem",
-                                   "color": COLORS["text"]})],
-                 className="mb-2"),
-        html.Table([
-            html.Thead(html.Tr([html.Th("sim", style={**th, "textAlign": "right"}),
-                                html.Th("player-season", style={**th, "textAlign": "left"}),
-                                html.Th("tags in common", style={**th, "textAlign": "left"})])),
-            html.Tbody(rows),
-        ], style={"width": "100%", "borderCollapse": "collapse"}),
-    ])
+    return html.Table([
+        html.Thead(html.Tr([html.Th("of 200", style={**th, "textAlign": "right"}),
+                            html.Th("player-season", style={**th, "textAlign": "left"}),
+                            html.Th("tags in common", style={**th, "textAlign": "left"})])),
+        html.Tbody(rows),
+    ], style={"width": "100%", "borderCollapse": "collapse"})

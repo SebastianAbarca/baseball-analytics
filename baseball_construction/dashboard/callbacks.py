@@ -616,20 +616,44 @@ def comp_require_options(side):
 
 @callback(
     Output("comp-results", "children"),
+    Output("comp-store",   "data"),
     Input("comp-player",   "value"),
     Input("comp-min-vol",  "value"),
     Input("comp-require",  "value"),
+    Input("comp-own",      "value"),
 )
-def comp_render(key, min_vol, require):
+def comp_render(key, min_vol, require, own):
     """
     Nearest player-seasons by their measurements — the team comps' method one
-    level down, computed per request rather than stored.
+    level down (dots-v1), computed per request rather than stored. The store
+    keeps the target and comps for the comparison figures.
     """
     if not key:
-        return charts.comp_results(None, [])
+        return charts.comp_results(None, []), None
     target, comps = charts.player_comps(key, min_vol=int(min_vol or 0),
-                                        require=require or None)
-    return charts.comp_results(target, comps)
+                                        require=require or None, own=bool(own))
+    data = {"target": target, "comps": [c for _, c in comps]} if target and comps else None
+    return charts.comp_results(target, comps), data
+
+
+@callback(
+    Output("comp-dots",    "figure"),
+    Output("comp-ranking", "figure"),
+    Output("comp-summary", "children"),
+    Output("comp-figs",    "style"),
+    Input("comp-store",    "data"),
+    Input("comp-ranking",  "clickData"),
+)
+def comp_compare(data, click):
+    """The target against one comp on every row; a new comp list opens on
+    the closest, a bar click picks another."""
+    if not data or not data.get("comps"):
+        empty = go.Figure().update_layout(**charts._DARK_LAYOUT, height=120)
+        return empty, empty, "", {"display": "none"}
+    picked = (click["points"][0]["y"]
+              if ctx.triggered_id == "comp-ranking" and click else None)
+    summary, dots, ranking = charts.player_comp_view(data["target"], data["comps"], picked)
+    return dots, ranking, summary, {"display": "block"}
 
 
 @callback(

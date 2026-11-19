@@ -35,7 +35,6 @@ import argparse
 import hashlib
 import json
 import logging
-import math
 import sys
 import time
 from collections import Counter, defaultdict
@@ -229,7 +228,7 @@ def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dic
               List order is the `ord` every Scout sort breaks ties on.
     """
     from team_portrait import kind_of
-    from team_similarity import player_vector
+    from team_similarity import player_vector, shape_percentiles
 
     GROUPS = (("hitters", "H"), ("starters", "P"), ("bullpen_arms", "P"))
     cat: dict[str, dict] = {}
@@ -237,6 +236,10 @@ def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dic
     pcts: defaultdict = defaultdict(list)
     sides: defaultdict = defaultdict(set)
     players: list[dict] = []
+    # Comp vectors wait for the whole season: pitch shape is ranked among
+    # every arm in it (team_similarity.player_vector).
+    pending: list[tuple[dict, dict, str]] = []
+    arms: defaultdict = defaultdict(list)
 
     for f in sorted(portrait_dir.glob("*_*.json")):
         if seasons and int(f.stem.rsplit("_", 1)[1]) not in seasons:
@@ -278,9 +281,15 @@ def flatten_scout(portrait_dir: Path, seasons: Optional[set[int]] = None) -> dic
                     "tg": tg,
                     "m": {k: round(v, 1) for k, v in (pl.get("metrics_pct") or {}).items()
                           if isinstance(v, (int, float))},
-                    # Comp vector from the measurements (team_similarity).
-                    "cv": player_vector(pl, side),
                 })
+                pending.append((players[-1], pl, side))
+                if side == "P":
+                    arms[season].append(pl)
+
+    shapes = {s: shape_percentiles(pls) for s, pls in arms.items()}
+    for row, pl, side in pending:
+        # Comp vector from the measurements (team_similarity, dots-v1).
+        row["cv"] = player_vector(pl, side, shapes.get(row["s"]) if side == "P" else None)
 
     # Direction. A tag's percentile is the percentile of the METRIC behind it,
     # not of the trait's strength, and for 22 of them low IS the trait:
@@ -358,7 +367,8 @@ def publish_scout(root: Path, client, dry: bool,
             "volume": p["v"], "war": p["w"], "limited": p["l"],
             "position": p["p"], "hand": p["h"], "populations": p["pop"],
             "metrics": p["m"], "tags": [g[0] for g in p["tg"]], "tag_detail": p["tg"],
-            "vec": vec, "vec_norm": math.sqrt(sum(x * x for x in vec.values())),
+            # vec_norm was the cosine's denominator; dots-v1 scores gaps.
+            "vec": vec, "vec_norm": 0.0,
         })
 
     scope = f"season(s) {', '.join(map(str, sorted(seasons)))}" if seasons else "all seasons"
